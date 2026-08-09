@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="az">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot · yolu təqib et</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
+    --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:16px 16px 40px;background:var(--bg);color:var(--ink);
+    font:15px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  .wrap{max-width:660px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+  h1{font-size:17px;margin:0;font-weight:600}
+  a{color:var(--idle)}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none}
+  .dot.ok{background:var(--accent)} .dot.bad{background:var(--stop)}
+  .dot.go{background:var(--warn)}
+  .muted{color:var(--dim);font-size:13px}
+  .lbl{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+
+  #view{width:100%;display:block;border-radius:10px;background:#000;aspect-ratio:4/3}
+  video{display:none}
+
+  button,select,input[type=text],input[type=number]{font:600 14px/1 inherit;color:var(--ink);
+    background:transparent;border:1px solid var(--line);border-radius:10px;padding:11px 14px;cursor:pointer}
+  select,input[type=text],input[type=number]{font-weight:400;width:100%;cursor:text}
+  .btnrow{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .btnrow button{flex:1;min-width:104px}
+  button.on{background:var(--accent);border-color:var(--accent);color:#04220c}
+  button:disabled{opacity:.4;cursor:not-allowed}
+
+  #arm{padding:20px;font-size:17px;border-width:2px}
+  #arm.live{background:var(--accent);border-color:var(--accent);color:#04220c}
+  #kill{padding:20px;font-size:17px;border-width:2px;
+    background:var(--stop);border-color:var(--stop);color:#2b0705}
+
+  .sl{margin-bottom:12px}
+  .sl:last-child{margin-bottom:0}
+  .sl .row{margin-bottom:2px}
+  .sl b{font:600 13px ui-monospace,Menlo,monospace}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:26px;background:transparent;cursor:pointer}
+  input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:3px;background:var(--line)}
+  input[type=range]::-moz-range-track{height:6px;border-radius:3px;background:var(--line)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;
+    border-radius:50%;background:var(--idle);border:2px solid var(--panel);margin-top:-8px}
+  input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;
+    background:var(--idle);border:2px solid var(--panel)}
+
+  .read{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;text-align:center}
+  .read b{display:block;font:600 19px/1.2 ui-monospace,Menlo,monospace;
+    font-variant-numeric:tabular-nums;margin-top:3px}
+  .err{color:var(--stop);font-size:13px;margin-top:8px}
+  .bars{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  .bar{height:20px;border-radius:6px;background:var(--line);position:relative;overflow:hidden}
+  .bar>i{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--accent);
+    transition:width .06s linear}
+  .steer{height:20px;border-radius:6px;background:var(--line);position:relative;
+    margin-top:10px;overflow:hidden}
+  .steer>i{position:absolute;top:0;bottom:0;width:4px;background:var(--idle);
+    left:50%;transition:left .06s linear}
+  .steer:after{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;
+    background:var(--dim);opacity:.6}
+  .warn{border-color:var(--warn);background:color-mix(in srgb,var(--warn) 8%,transparent)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+  code{font:12px ui-monospace,Menlo,monospace;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="row">
+      <h1>Yolu təqib et</h1>
+      <div class="row" style="gap:7px">
+        <span class="dot" id="dot"></span><span class="muted" id="state">qoşulur</span>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="muted"><a href="/">&larr; ana səhifə</a></span>
+      <span class="muted"><a href="/vision">kamera</a> ·
+        <a href="/obstacle">maneə</a> · <a href="/tune">qeyd &rarr;</a></span>
+    </div>
+    <div class="err" id="err" hidden></div>
+  </div>
+
+  <div class="card warn">
+    <div class="lbl" style="color:var(--warn)">Başlamazdan əvvəl</div>
+    <p class="muted" style="margin:8px 0 0">Kamerada yol düzgün tapılanadək
+    <b>/vision</b> səhifəsində tənzimlə, sonra bura qayıt. İlk dəfə
+    <b>təkərləri yerdən qaldır</b>, «düz yolda sürət»i 20 % qoy və bir dövrə
+    izlə. Burada master səviyyə yoxdur: sürgüdə yazan faiz elə pinə gedən
+    faizdir. <b>Boşluq düyməsi</b> hər an dayandırır.</p>
+  </div>
+
+  <div class="card" style="padding:10px">
+    <canvas id="view" width="480" height="360"></canvas>
+    <video id="cam" playsinline muted></video>
+  </div>
+
+  <!-- ── the two buttons that matter ── -->
+  <div class="card">
+    <div class="btnrow" style="margin-top:0">
+      <button id="arm">SÜRMƏYƏ BAŞLA</button>
+      <button id="kill">DAYAN</button>
+    </div>
+    <div class="muted" style="margin-top:10px;text-align:center" id="why">
+      əvvəlcə kameranı başlat
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="read">
+      <div><span class="lbl">Sürət</span><b id="rSpeed">–</b>
+        <span class="muted" id="rSpeedV">–</span></div>
+      <div><span class="lbl">Sapma</span><b id="rErr">–</b></div>
+      <div><span class="lbl">Zolaq</span><b id="rBands">–</b></div>
+      <div><span class="lbl">Məsafə</span><b id="rDist">–</b></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="muted">Qabaqda</span>
+      <span class="muted" id="rSon">sensor yoxdur</span>
+    </div>
+    <div class="bars">
+      <div class="bar"><i id="b25"></i></div>
+      <div class="bar"><i id="b26"></i></div>
+    </div>
+    <div class="row" style="margin-top:4px">
+      <span class="muted">GPIO25 <b id="rP25">0</b> % · <b id="rV25">–</b></span>
+      <span class="muted"><b id="rV26">–</b> · <b id="rP26">0</b> % GPIO26</span>
+    </div>
+    <div class="steer"><i id="steer"></i></div>
+    <div class="row" style="margin-top:10px">
+      <span class="muted" id="rReason">–</span>
+      <span class="muted"><b id="rFps">–</b> fps · <b id="rMode">–</b></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="lbl">Kamera</div>
+    <select id="devs"></select>
+    <div class="btnrow">
+      <button id="start">Başlat</button>
+      <button id="mirror">Güzgü</button>
+      <button id="flip">180°</button>
+    </div>
+    <div class="btnrow">
+      <button id="pick" style="flex:1">Video faylı ilə sına (motorsuz)</button>
+      <input type="file" id="file" accept="image/*,video/*" hidden>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <span class="lbl" style="margin:0">Trek növü</span>
+      <span class="muted" id="lockNote">sürüş boyu kilidlənir</span>
+    </div>
+    <div class="btnrow" style="margin-top:0">
+      <button id="mAuto" class="on">Avto</button>
+      <button id="mDark">Qara yol</button>
+      <button id="mWhite">Ağ yol</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row"><span class="lbl" style="margin:0">Sürət həddi</span>
+      <span class="muted">100 % = <b id="vFull">–</b></span></div>
+    <p class="muted" style="margin:0 0 14px">Bu faizlər <b>tələbdir</b>:
+    0 = dayan, 100 = tam qaz. Aşağıdakı «dönmə həddi»ndən yuxarı hissəyə
+    yayılırlar, ona görə yanındakı volt rəqəmi pinə gedən əsl gərginlikdir.</p>
+
+    <div class="sl">
+      <div class="row"><span class="muted">Dönmə həddi — təkər neçə voltdan
+        dönür</span><b id="vStall">1.50 V</b></div>
+      <input type="range" id="stall" min="0" max="60" step="1" value="22">
+      <p class="muted" style="margin:4px 0 0">Bundan aşağısı «yavaş» deyil,
+      «dayanmış»dır. Ölç: manual səhifədə faizi yavaş-yavaş qaldır, təkər ilk
+      dönən anı yaz.</p>
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Düz yolda sürət</span><b id="vBase">34 %</b></div>
+      <input type="range" id="base" min="5" max="100" step="1" value="34">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Ən aşağı sürət</span><b id="vMin">16 %</b></div>
+      <input type="range" id="min" min="0" max="60" step="1" value="16">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Ən yuxarı sürət (tavan)</span><b id="vMax">100 %</b></div>
+      <input type="range" id="max" min="10" max="100" step="1" value="100">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Döngədə yavaşlama</span><b id="vCurve">0.75</b></div>
+      <input type="range" id="curve" min="0" max="100" step="1" value="75">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Sürətlənmə — % / saniyə</span><b id="vAccel">90</b></div>
+      <input type="range" id="accel" min="20" max="400" step="5" value="90">
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="lbl" style="margin-bottom:12px">Sükan</div>
+    <div class="sl">
+      <div class="row"><span class="muted">Sərtlik (kP)</span><b id="vKp">0.85</b></div>
+      <input type="range" id="kp" min="10" max="250" step="5" value="85">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Qabağa baxış (kD) — saniyə</span><b id="vKd">0.12</b></div>
+      <input type="range" id="kd" min="0" max="60" step="1" value="12">
+    </div>
+    <div class="btnrow" style="margin-top:0">
+      <button id="swap">Təkərləri dəyiş (sol/sağ)</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0">Robot düzəliş əvəzinə yoldan
+    uzaqlaşırsa — bu düymə. Sükan düz yolda yırğalanırsa kP-ni azalt, döngəni
+    gec tutursa kD-ni artır.</p>
+  </div>
+
+  <div class="card">
+    <div class="row"><span class="lbl" style="margin:0">Qabaqdakı maneə</span>
+      <span class="muted" id="sonNote">–</span></div>
+    <div class="btnrow" style="margin-top:10px">
+      <button id="sonOn" class="on">Maneədə dayan</button>
+      <button id="sonOff">Nəzərə alma</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0">Həddləri <a href="/obstacle">maneə
+    səhifəsində</a> tənzimlə — eyni rəqəmlər burada da işləyir. Maneə görünəndə
+    robot tam dayanır (yavaşlamır: divara nə sürətlə dəyməyi seçmək deyil), yol
+    açılandan sonra gecikmə ilə davam edir. Bu müddətdə «yol itdi» sayğacı
+    işləmir, yoxsa robot gözləyə-gözləyə özünü söndürərdi.</p>
+  </div>
+
+  <div class="card">
+    <div class="lbl" style="margin-bottom:12px">Yoldan uzaqlaşanda</div>
+    <div class="sl">
+      <div class="row"><span class="muted">Bu sapmadan sonra çevrilməyə keçir</span>
+        <b id="vHard">0.60</b></div>
+      <input type="range" id="hard" min="30" max="95" step="1" value="60">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Çevrilmə sürəti</span><b id="vCrawl">10 %</b></div>
+      <input type="range" id="crawl" min="0" max="40" step="1" value="10">
+    </div>
+    <p class="muted" style="margin:10px 0 0">Yol kadrın kənarına düşəndə irəli
+    sürmək vəziyyəti yalnız pisləşdirir. Bu həddi keçəndə robot daxili təkəri
+    tam dayandırıb yerində — yolun olduğu tərəfə — sürünərək çevrilir, sapma
+    0.15 azalanadək. Qayıtmaq üçün giriş həddindən aşağı düşmək lazımdır, ona
+    görə həddin üstündə titrəmir.</p>
+  </div>
+
+  <!-- ── the run recorder ── -->
+  <div class="card">
+    <div class="row"><span class="lbl" style="margin:0">Qeyd (log)</span>
+      <span class="muted" id="logState">yazılmır</span></div>
+    <div class="two" style="margin-top:10px">
+      <input type="text" id="note" placeholder="qeyd: «3-cü dövrə, yeni kP»">
+      <button id="rec">Yazmağa başla</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0">Hər kadrın sapması, sürəti və
+    qərarı <code>node/logs/follow-….json</code> faylına yazılır. Sürməyə
+    başlayanda özü açılır, dayananda özü bağlanır.</p>
+
+    <div class="lbl" style="margin-top:16px">Məsafə kalibrasiyası</div>
+    <p class="muted" style="margin:0 0 10px">Təkərdə enkoder yoxdur, ona görə
+    məsafə hesablanır. Bir dəfə ölç: robotu sabit faizlə düz sür, neçə metr
+    getdiyini və neçə saniyə çəkdiyini yaz.</p>
+    <div class="three">
+      <div><span class="lbl">faiz</span><input type="number" id="cPct" value="50" min="1" max="100"></div>
+      <div><span class="lbl">metr</span><input type="number" id="cM" value="0" min="0" step="0.1"></div>
+      <div><span class="lbl">saniyə</span><input type="number" id="cS" value="0" min="0" step="0.1"></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="muted">Hesablanan</span>
+      <b id="vCalib" style="font:600 13px ui-monospace,Menlo,monospace">kalibrasiya yoxdur</b>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="lbl">Bu səhifə nə edir</div>
+    <p class="muted" style="margin:8px 0 0">Kameradan gələn hər kadrı
+    <b>/vision</b> ilə eyni detektordan keçirir (<code>road.js</code>), sapmanı
+    ölçür və <code>pilot.js</code> ilə iki təkərin faizini hesablayır. Dönmə
+    yalnız <b>sürət fərqi</b> ilə olur — istiqamət relayları toxunulmur, ona
+    görə döngədə dayanma pauzası yoxdur.</p>
+    <p class="muted" style="margin:8px 0 0">Faizlər <b>birbaşa</b> pinə gedir —
+    /drive-dakı master səviyyə bu səhifədə tətbiq olunmur. Yəni 100 %
+    <code>--v-max</code>-dır (defolt 3.3 V), 0 % isə boşdur (1.00 V). Bir yol,
+    bir hədd: burada tavan «ən yuxarı sürət» sürgüsüdür.</p>
+    <p class="muted" style="margin:8px 0 0"><b>Ölü zona.</b> Motor 1.5 V-dən
+    aşağı ümumiyyətlə dönmür, yəni 22 %-dən aşağı hər faiz «yavaş» yox,
+    «dayanmış» deməkdir. Köhnə qeydlərdə 59 saniyəlik bir sürüşdə təkər
+    əmrlərinin <b>91 %-i</b> məhz o zonada idi — hərəkət əmri verilirdi, təkər
+    dönmürdü. İndi tələb [hədd, 100] aralığına yayılır; yalnız dəqiq sıfır sıfır
+    qalır, çünki daxili təkəri tam dayandırmaq ən kəskin dönüşdür.</p>
+    <p class="muted" style="margin:8px 0 0">Sürət döngədə özü azalır: kadrın
+    yuxarı yarısındakı sapma böyükdürsə robot <b>döngəyə girməmişdən</b>
+    yavaşlayır. Zəncir qısadırsa — yəni uzağı görmürsə — bir az da yavaşlayır.</p>
+    <p class="muted" style="margin:8px 0 0"><b>Trek növü sürüş boyu
+    dəyişmir.</b> Avto rejim kameranı gəzdirərkən hər kadrda qərar verir, amma
+    «sürməyə başla»-ya basdığın anda hansı rəngdə idisə, sonuna qədər o qalır —
+    yarı dövrədə fikrini dəyişdirə bilən yeganə şeylər kölgə, işıqlı qapı və
+    kiminsə ayağıdır. Ölçmək davam edir (rəqəmlər log-a düşür), sadəcə tətbiq
+    olunmur.</p>
+    <p class="muted" style="margin:8px 0 0">Hər sürüş <b>özü</b> qeyd olunur —
+    başlat düyməsi həm də «yazmağa başla» düyməsidir. Sonra <a href="/tune">qeydi
+    oxu</a> səhifəsinə keçib nə dəyişməli olduğunu görürsən.</p>
+    <p class="muted" style="margin:8px 0 0">Yol itsə, son istiqamətlə
+    <b>0.6 saniyə</b> yavaş davam edir (kəskin döngədə kadr itir), sonra
+    dayanır, daha 1.5 saniyədən sonra ENABLE düşür. Server tərəfdə də ölü adam
+    var: kadr 400 ms gəlməsə faiz sıfırlanır.</p>
+  </div>
+
+</div>
+
+<script src="/road.js"></script>
+<script src="/pilot.js"></script>
+<script src="/sonar.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const view = $('view'), vctx = view.getContext('2d', { willReadFrequently: true });
+const cam = $('cam');
+
+let stream = null, camOn = false, source = null;
+let mirrored = false, flipped = false;
+let frames = 0, fpsAt = performance.now(), fps = 0;
+
+// ── the pilot ───────────────────────────────────────────────────────
+const pcfg = { ...PILOT_DEFAULTS };
+let pst = pilotState(performance.now());
+let armed = false, dist = 0, distAt = 0;
+let last = { p25: 0, p26: 0, speed: 0, steer: 0, reason: '–', lost: true };
+let status = null;                 // the newest server status
+let calib = { pct: 50, metres: 0, seconds: 0, dead: 0 };
+
+// The forward HC-SR04, gating everything the pilot decides. Tuned on
+// /obstacle; this page only obeys it.
+const ocfg = { ...OBSTACLE_DEFAULTS };
+let ost = obstacleState(performance.now());
+let obs = { blocked: false, phase: 'go', cm: null, reason: '', waitLeft: 0 };
+let sonarOn = true;
+
+// ── link ────────────────────────────────────────────────────────────
+let ws = null, wsOpen = false;
+const sendWs = (o) => { if (wsOpen) ws.send(JSON.stringify(o)); };
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/`);
+  ws.onopen = () => { wsOpen = true; };
+  ws.onclose = () => {
+    wsOpen = false;
+    // The server already drops to idle when the socket dies; disarming here is
+    // so the page cannot look like it is still driving.
+    disarm('əlaqə kəsildi');
+    setTimeout(connect, 1000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = ev => {
+    let s; try { s = JSON.parse(ev.data); } catch { return; }
+    if (s.type !== 'status') return;
+    status = s;
+    paintLink(s);
+    if (!armed && s.follow_cfg) applySaved(s.follow_cfg);
+    if (armed && !s.running) disarm('server dayandırdı');
+  };
+}
+
+let sawCfg = false;
+function applySaved(c) {
+  if (sawCfg) return;                    // only on the first status
+  sawCfg = true;
+  if (c.pilot) for (const k of Object.keys(PILOT_DEFAULTS)) {
+    if (k in c.pilot) pcfg[k] = c.pilot[k];
+  }
+  if (c.vision) for (const k of ['roi','bias','sat','minw','bands','side','jump','mode']) {
+    if (k in c.vision) cfg[k] = c.vision[k];
+  }
+  if (c.calib) calib = { ...calib, ...c.calib };
+  if (c.obstacle) for (const k of Object.keys(OBSTACLE_DEFAULTS)) {
+    if (k in c.obstacle) ocfg[k] = c.obstacle[k];
+  }
+  showAll();
+}
+
+const saveCfg = () => sendWs({ cmd: 'follow_cfg', cfg: {
+  pilot: pcfg,
+  vision: { roi: cfg.roi, bias: cfg.bias, sat: cfg.sat, minw: cfg.minw,
+            bands: cfg.bands, side: cfg.side, jump: cfg.jump },
+  calib,
+} });
+
+function paintLink(s) {
+  const ok = s.esp_fresh && !s.serial_error;
+  $('dot').className = 'dot ' + (armed ? 'go' : ok ? 'ok' : 'bad');
+  $('state').textContent = s.serial_error ? 'serial xətası'
+    : !ok ? 'ESP32 əlçatmaz' : armed ? 'SÜRÜR' : 'hazır';
+  $('vFull').textContent = `${(s.vmax ?? 3.3).toFixed(2)} V`;
+  $('logState').textContent = s.log && s.log.active
+    ? `${s.log.file} · ${s.log.rows} sətir` : 'yazılmır';
+  $('rec').textContent = s.log && s.log.active ? 'Yazmağı dayandır' : 'Yazmağa başla';
+}
+
+// ── controls ────────────────────────────────────────────────────────
+// Every slider is an integer; the ones that are really fractions are stored
+// ×100 so the same widget works for 0.85 and for 34 %.
+const S = [
+  ['base',  v => pcfg.base = v,        () => `${pcfg.base} % · ${showV(lift(pcfg.base, pcfg.stall))}`, () => pcfg.base],
+  ['min',   v => pcfg.min = v,         () => `${pcfg.min} % · ${showV(lift(pcfg.min, pcfg.stall))}`,   () => pcfg.min],
+  ['max',   v => pcfg.max = v,         () => `${pcfg.max} % · ${showV(lift(pcfg.max, pcfg.stall))}`,   () => pcfg.max],
+  ['curve', v => pcfg.curve = v / 100, () => pcfg.curve.toFixed(2),       () => pcfg.curve * 100],
+  ['accel', v => pcfg.accel = v,       () => String(pcfg.accel),          () => pcfg.accel],
+  ['kp',    v => pcfg.kP = v / 100,    () => pcfg.kP.toFixed(2),          () => pcfg.kP * 100],
+  ['kd',    v => pcfg.kD = v / 100,    () => pcfg.kD.toFixed(2),          () => pcfg.kD * 100],
+  // The stall point is a voltage in the real world, so it is shown as one — but
+  // stored as a percentage, because pilot.js has no idea what --v-max is.
+  ['stall', v => pcfg.stall = v,       () => showV(pcfg.stall + 0.001),   () => pcfg.stall],
+  ['hard',  v => pcfg.hard = v / 100,  () => pcfg.hard.toFixed(2),        () => pcfg.hard * 100],
+  ['crawl', v => pcfg.crawl = v,       () => `${pcfg.crawl} % · ${showV(lift(pcfg.crawl, pcfg.stall))}`, () => pcfg.crawl],
+];
+const LABEL = { base:'vBase', min:'vMin', max:'vMax', curve:'vCurve',
+                accel:'vAccel', kp:'vKp', kd:'vKd',
+                stall:'vStall', hard:'vHard', crawl:'vCrawl' };
+
+for (const [id, apply, text] of S) {
+  $(id).addEventListener('input', () => {
+    apply(parseFloat($(id).value));
+    // The stall point is the origin every other number is measured from, so
+    // moving it re-labels the lot rather than just its own row.
+    if (id === 'stall') relabel(); else $(LABEL[id]).textContent = text();
+  });
+  $(id).addEventListener('change', saveCfg);
+}
+
+function relabel() {
+  for (const [id, , text] of S) $(LABEL[id]).textContent = text();
+}
+
+function showAll() {
+  for (const [id, , , value] of S) $(id).value = String(Math.round(value()));
+  relabel();
+  $('swap').classList.toggle('on', !!pcfg.swap);
+  paintSonar();
+  $('cPct').value = calib.pct; $('cM').value = calib.metres; $('cS').value = calib.seconds;
+  showCalib();
+  setMode(cfg.mode);
+}
+
+$('swap').addEventListener('click', () => {
+  pcfg.swap = !pcfg.swap;
+  $('swap').classList.toggle('on', pcfg.swap);
+  saveCfg();
+});
+
+for (const id of ['cPct', 'cM', 'cS']) {
+  $(id).addEventListener('change', () => {
+    calib = { ...calib, pct: +$('cPct').value, metres: +$('cM').value,
+              seconds: +$('cS').value };
+    showCalib();
+    saveCfg();
+  });
+}
+
+// 0 % is idle (1.00 V, zero throttle) and 100 % is --v-max, so a percentage is
+// only meaningful next to the ceiling it was taken against. The server tells us
+// both, and until it has, we say nothing rather than guess.
+function volts(pct) {
+  if (!status) return null;
+  const idle = status.idle_v ?? 1.0, top = status.vmax ?? 3.3;
+  return idle + (Math.max(0, Math.min(100, pct)) / 100) * (top - idle);
+}
+const showV = (pct) => { const v = volts(pct); return v == null ? '–' : v.toFixed(2) + ' V'; };
+
+function showCalib() {
+  const at = metresPerSecond(calib.pct, calib);
+  $('vCalib').textContent = at == null ? 'kalibrasiya yoxdur'
+    : `${at.toFixed(2)} m/s @ ${calib.pct} %`;
+}
+
+// Track mode — the buttons are this page's, the state lives in road.js.
+function setMode(m) {
+  $('mAuto').classList.toggle('on',  m === 'auto');
+  $('mDark').classList.toggle('on',  m === 'dark');
+  $('mWhite').classList.toggle('on', m === 'white');
+  roadSetMode(m);
+}
+$('sonOn').addEventListener('click',  () => { sonarOn = true;  paintSonar(); });
+$('sonOff').addEventListener('click', () => { sonarOn = false; paintSonar(); });
+function paintSonar() {
+  $('sonOn').classList.toggle('on', sonarOn);
+  $('sonOff').classList.toggle('on', !sonarOn);
+  $('sonNote').textContent = sonarOn
+    ? `${ocfg.stopCm} sm-dən yaxında dayanır` : 'sensor nəzərə alınmır';
+}
+
+$('mAuto').addEventListener('click',  () => { setMode('auto');  saveCfg(); });
+$('mDark').addEventListener('click',  () => { setMode('dark');  saveCfg(); });
+$('mWhite').addEventListener('click', () => { setMode('white'); saveCfg(); });
+
+$('mirror').addEventListener('click', () => {
+  mirrored = !mirrored; $('mirror').classList.toggle('on', mirrored);
+});
+$('flip').addEventListener('click', () => {
+  flipped = !flipped; $('flip').classList.toggle('on', flipped);
+});
+
+// ── camera ──────────────────────────────────────────────────────────
+function fail(msg) {
+  $('err').hidden = false;
+  $('err').textContent = msg;
+}
+
+async function listDevices() {
+  try {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    const cams = all.filter(d => d.kind === 'videoinput');
+    $('devs').innerHTML = cams.length
+      ? cams.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Kamera ' + (i + 1)}</option>`).join('')
+      : '<option value="">kamera tapılmadı</option>';
+  } catch { /* labels need permission first */ }
+}
+
+async function startCam() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    fail('Bu ünvanda kameraya icazə yoxdur — brauzer yalnız localhost və ya '
+       + 'https üzərində kamera verir. Robotu sürən kompüterdə '
+       + 'http://localhost:8090/follow ünvanını aç.');
+    return;
+  }
+  try {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    const id = $('devs').value;
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: id ? { deviceId: { exact: id } }
+                : { facingMode: { ideal: 'environment' } },
+      audio: false,
+    });
+    cam.srcObject = stream;
+    await cam.play();
+    source = cam; camOn = true;
+    $('err').hidden = true;
+    $('start').textContent = 'Kameranı dayandır';
+    listDevices();
+  } catch (e) {
+    fail('Kamera açılmadı: ' + e.message);
+  }
+}
+
+$('start').addEventListener('click', () => {
+  if (camOn) {
+    disarm('kamera dayandı');
+    camOn = false; source = null;
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    $('start').textContent = 'Başlat';
+  } else startCam();
+});
+$('devs').addEventListener('change', () => { if (camOn) startCam(); });
+
+$('pick').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', () => {
+  const f = $('file').files[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  if (f.type.startsWith('video')) {
+    cam.srcObject = null; cam.src = url; cam.loop = true; cam.play(); source = cam;
+  } else {
+    const img = new Image(); img.onload = () => { source = img; }; img.src = url;
+  }
+  camOn = true;
+  $('err').hidden = true;
+});
+
+// ── arm / disarm ────────────────────────────────────────────────────
+// Arming is deliberately a two-condition thing: a camera that is actually
+// delivering frames, and a live link. Anything else and the button says why
+// rather than arming into a robot that will immediately time out.
+function arm() {
+  if (armed) return;
+  if (!ready(source)) { $('why').textContent = 'kamera işləmir'; return; }
+  if (!wsOpen) { $('why').textContent = 'serverlə əlaqə yoxdur'; return; }
+  pst = pilotState(performance.now());
+  ost = obstacleState(performance.now());
+  dist = 0; distAt = performance.now();
+  armed = true;
+  // Whatever the detector has decided by now is what this run is. A track does
+  // not change type halfway round, so from here on a shadow or a bright
+  // doorway cannot talk it into the other reading.
+  roadLockAuto(true);
+  $('arm').classList.add('live');
+  $('arm').textContent = 'SÜRÜR — dayandırmaq üçün bas';
+  sendWs({ cmd: 'start' });
+  // Every run is recorded, always, and always as its own file. The lap worth
+  // having is the one that went wrong, and that is never the lap you remembered
+  // to press record for.
+  startLog();
+}
+
+function disarm(why) {
+  if (!armed) { $('why').textContent = why || 'hazır'; return; }
+  armed = false;
+  pst = pilotState(performance.now());
+  roadLockAuto(false);              // free to re-decide while you point it around
+  $('arm').classList.remove('live');
+  $('arm').textContent = 'SÜRMƏYƏ BAŞLA';
+  $('why').textContent = why || 'dayandı';
+  sendWs({ cmd: 'stop' });
+  flushRows(true);
+  sendWs({ cmd: 'log_stop' });
+}
+
+$('arm').addEventListener('click', () => armed ? disarm('əl ilə dayandırıldı') : arm());
+$('kill').addEventListener('click', () => disarm('DAYAN düyməsi'));
+
+// Space is the panic key, and it must work with the focus anywhere on the page.
+addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' && e.key !== 'Escape') return;
+  // Typing a note must not stop the robot; a slider having focus must not
+  // stop it from stopping. So the exemption is for text fields only.
+  const el = document.activeElement;
+  const typing = el && el.tagName === 'INPUT'
+    && ['text', 'number', 'search'].includes(el.type);
+  if (typing && e.key !== 'Escape') return;
+  e.preventDefault();
+  disarm('boşluq düyməsi');
+});
+// A hidden tab gets its rAF throttled to ~1 Hz, which is not a rate you can
+// steer at. Leaving is stopping.
+addEventListener('blur', () => disarm('pəncərə fokusu itdi'));
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) disarm('səhifə arxa plana keçdi');
+});
+
+// ── recording ───────────────────────────────────────────────────────
+let rows = [], rowAt = 0, sentAt = 0;
+
+function startLog() {
+  sendWs({ cmd: 'log_start', meta: {
+    note: $('note').value,
+    pilot: { ...pcfg },
+    vision: { roi: cfg.roi, bias: cfg.bias, sat: cfg.sat, minw: cfg.minw,
+              bands: cfg.bands, side: cfg.side, jump: cfg.jump, mode: cfg.mode },
+    calib,
+  } });
+  rows = [];
+}
+
+$('rec').addEventListener('click', () => {
+  if (status && status.log && status.log.active) {
+    flushRows(true);
+    sendWs({ cmd: 'log_stop' });
+  } else startLog();
+});
+
+function flushRows(force) {
+  const now = performance.now();
+  if (!rows.length) return;
+  if (!force && now - sentAt < 500) return;
+  sentAt = now;
+  sendWs({ cmd: 'log', rows });
+  rows = [];
+}
+
+// ── loop ────────────────────────────────────────────────────────────
+function ready(src) {
+  if (!src) return false;
+  return src.tagName === 'IMG' ? src.complete : src.readyState >= 2;
+}
+
+let sentCmdAt = 0, t0 = performance.now();
+
+function loop() {
+  requestAnimationFrame(loop);
+  if (!camOn || !ready(source)) return;
+
+  vctx.save();
+  vctx.translate(mirrored ? W : 0, flipped ? H : 0);
+  vctx.scale(mirrored ? -1 : 1, flipped ? -1 : 1);
+  vctx.drawImage(source, 0, 0, W, H);
+  vctx.restore();
+
+  const now = performance.now();
+  const res = detect(vctx.getImageData(0, 0, W, H).data);
+  const e = roadError(res);
+  // Not armed still runs the pilot, so the steer arrow is live while you tune —
+  // but with the speed budget forced to zero, so nothing accumulates and the
+  // readout cannot show a speed the robot is not being given.
+  let out = pilotStep(pst, { ...e, want: cfg.bands },
+                      armed ? pcfg : { ...pcfg, base: 0, min: 0 }, now);
+
+  // The obstacle sensor has the last word. It runs whether or not it is
+  // enabled, so the readout is honest either way, but it only takes the wheels
+  // when it is switched on — and when it does, it takes them completely: a
+  // "slow down for the wall" would be a decision about how hard to hit it.
+  const fwd = status && status.esp && status.esp.son ? status.esp.son.fwd_cm : undefined;
+  obs = obstacleStep(ost, fwd === undefined ? null : fwd, ocfg, now);
+  if (sonarOn && obs.blocked) {
+    out = { ...out, p25: 0, p26: 0, speed: 0, reason: obs.reason, blockedBySonar: true };
+    // Losing the road while stopped in front of something is not the road being
+    // lost — it is a wall filling the frame. Not resetting here would have the
+    // pilot give up and drop ENABLE while it waits for a person to walk past.
+    pst.lostAt = 0;
+    pst.speed = 0;
+  }
+  last = out;
+
+  // The pilot asked to give up: stop rather than sit at 0 % with a live driver.
+  if (armed && out.stop) disarm(out.reason);
+
+  if (armed) {
+    // 20 Hz is the board's watchdog rate. Sending every rendered frame would
+    // be 60 Hz of pointless traffic; sending less would trip the dead-man.
+    if (now - sentCmdAt >= 50) {
+      sentCmdAt = now;
+      sendWs({ cmd: 'follow', p25: out.p25, p26: out.p26, reason: out.reason });
+    }
+    // Distance is integrated from what we commanded, which on this page is
+    // also what went out — nothing scales it on the way.
+    const mps = metresPerSecond((out.p25 + out.p26) / 2, calib);
+    if (mps != null) dist += mps * Math.min(0.25, (now - distAt) / 1000);
+    distAt = now;
+
+    if (now - rowAt >= 100) {                 // 10 Hz is plenty for a lap
+      rowAt = now;
+      const esp = (status && status.esp) || {};
+      const son = esp.son || {};
+      rows.push({
+        t: Math.round(now - t0),
+        err: e.near == null ? null : +e.near.toFixed(3),
+        far: e.far == null ? null : +e.far.toFixed(3),
+        bands: e.bands, mode: res.mode, thr: res.thr,
+        speed: out.speed, steer: out.steer,
+        p25: out.p25, p26: out.p26,
+        out25: status ? status.out[0] : null,
+        out26: status ? status.out[1] : null,
+        v25: esp.vL ?? null, v26: esp.vR ?? null,
+        lost: out.lost, recover: out.recover, fps, dist: +dist.toFixed(2),
+        fwd_cm: son.fwd_cm ?? null, blocked: !!out.blockedBySonar,
+        reason: out.reason,
+      });
+      flushRows(false);
+    }
+  } else {
+    distAt = now;
+  }
+
+  drawOverlay(res, e);
+  paintReadout(res, e, out);
+
+  frames++;
+  if (now - fpsAt >= 500) {
+    fps = Math.round(frames * 1000 / (now - fpsAt));
+    frames = 0; fpsAt = now;
+  }
+}
+
+function drawOverlay(res, e) {
+  const half = W / 2;
+  vctx.save();
+  vctx.fillStyle = 'rgba(0,0,0,.35)';
+  vctx.fillRect(0, 0, W, res.y0);
+  vctx.strokeStyle = 'rgba(255,255,255,.45)';
+  vctx.setLineDash([5, 5]);
+  vctx.beginPath(); vctx.moveTo(half, res.y0); vctx.lineTo(half, H); vctx.stroke();
+  vctx.setLineDash([]);
+
+  if (res.pts.length >= 2) {
+    vctx.strokeStyle = armed ? '#3fb950' : '#58a6ff';
+    vctx.lineWidth = 3;
+    vctx.beginPath();
+    res.pts.forEach((p, i) => i ? vctx.lineTo(p.x, p.y) : vctx.moveTo(p.x, p.y));
+    vctx.stroke();
+  }
+  for (const p of res.pts) {
+    vctx.fillStyle = 'rgba(63,185,80,.22)';
+    vctx.fillRect(p.x - p.w / 2, p.y - 3, p.w, 6);
+  }
+  // Where the pilot is steering, as opposed to where the road is: the gap
+  // between the two arrows is the whole of what kP and kD do.
+  if (e.near != null) {
+    vctx.strokeStyle = '#ffa657'; vctx.lineWidth = 4;
+    vctx.beginPath(); vctx.moveTo(half, H - 8);
+    vctx.lineTo(half + e.near * half, H - 8); vctx.stroke();
+  }
+  vctx.strokeStyle = '#f85149'; vctx.lineWidth = 4;
+  vctx.beginPath(); vctx.moveTo(half, H - 20);
+  vctx.lineTo(half + last.steer * half, H - 20); vctx.stroke();
+  vctx.restore();
+}
+
+function paintReadout(res, e, out) {
+  $('rSpeed').textContent = Math.round(out.speed) + ' %';
+  $('rSpeedV').textContent = showV(lift(out.speed, pcfg.stall));
+  $('rErr').textContent = e.near == null ? '–'
+    : (e.near >= 0 ? '+' : '') + e.near.toFixed(2);
+  $('rBands').textContent = e.bands + '/' + cfg.bands;
+  $('rDist').textContent = metresPerSecond(calib.pct, calib) == null
+    ? '–' : dist.toFixed(1) + ' m';
+  $('rP25').textContent = out.p25.toFixed(0);
+  $('rP26').textContent = out.p26.toFixed(0);
+  $('rV25').textContent = showV(out.p25);
+  $('rV26').textContent = showV(out.p26);
+  $('b25').style.width = Math.min(100, out.p25) + '%';
+  $('b26').style.width = Math.min(100, out.p26) + '%';
+  $('steer').style.left = (50 + out.steer * 48) + '%';
+  $('rFps').textContent = fps;
+  $('rMode').textContent = res.mode === 'dark' ? 'qara yol' : 'ağ yol';
+  $('lockNote').textContent = cfg.mode !== 'auto' ? 'əl ilə seçilib'
+    : armed ? `kilidli: ${res.mode === 'dark' ? 'qara yol' : 'ağ yol'}`
+    : 'sürüş boyu kilidlənir';
+  $('rReason').textContent = armed ? out.reason
+    : (status && status.reason) || 'dayanıb';
+  $('rReason').style.color = (out.recover || out.blockedBySonar) ? 'var(--stop)' : '';
+  $('rSon').textContent = !sonarOn ? 'sönülü'
+    : obs.cm == null ? 'əks-səda yox'
+    : obs.phase === 'go' ? `açıq · ${obs.cm} sm`
+    : obs.phase === 'stop' ? `MANEƏ ${obs.cm} sm`
+    : `gözləyir ${(obs.waitLeft / 1000).toFixed(1)} s`;
+  $('rSon').style.color = sonarOn && obs.blocked ? 'var(--stop)' : '';
+  if (!armed) $('why').textContent = camOn
+    ? (wsOpen ? 'hazır — sürməyə başla' : 'serverlə əlaqə yoxdur')
+    : 'əvvəlcə kameranı başlat';
+}
+
+showAll();
+paintSonar();
+listDevices();
+connect();
+loop();
+</script>
+</body>
+</html>

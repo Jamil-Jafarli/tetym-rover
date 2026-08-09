@@ -1,0 +1,25 @@
+{
+  "name": "esp32-dac-bench",
+  "version": "1.0.0",
+  "description": "Manual two-channel throttle DAC bench for the ESP32 (GPIO25 / GPIO26) over WebSocket",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "fake": "node server.js --fake",
+    "list": "node server.js --list",
+    "test": "node test/test_bench.mjs && node test/test_pilot.mjs && node test/test_analyse.mjs && node test/test_sonar.mjs && node test/test_vision.mjs",
+    "test:bench": "node test/test_bench.mjs",
+    "test:pilot": "node test/test_pilot.mjs",
+    "test:analyse": "node test/test_analyse.mjs",
+    "test:sonar": "node test/test_sonar.mjs",
+    "test:vision": "node test/test_vision.mjs"
+  },
+  "dependencies": {
+    "serialport": "^12.0.0",
+    "ws": "^8.21.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

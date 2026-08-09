@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="az">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot · qeydi oxu</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
+    --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:16px 16px 40px;background:var(--bg);color:var(--ink);
+    font:15px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  .wrap{max-width:660px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+  h1{font-size:17px;margin:0;font-weight:600}
+  h2{font-size:14px;margin:0 0 8px;font-weight:600}
+  a{color:var(--idle)}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .muted{color:var(--dim);font-size:13px}
+  .lbl{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+  code{font:12px ui-monospace,Menlo,monospace;color:var(--dim)}
+
+  button,select,input[type=number]{font:600 14px/1 inherit;color:var(--ink);
+    background:transparent;border:1px solid var(--line);border-radius:10px;
+    padding:11px 14px;cursor:pointer}
+  select,input[type=number]{font-weight:400;width:100%;cursor:text}
+  .btnrow{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  .btnrow button{flex:1;min-width:120px}
+  button.go{background:var(--accent);border-color:var(--accent);color:#04220c}
+  button:disabled{opacity:.4;cursor:not-allowed}
+
+  #drop{border:2px dashed var(--line);border-radius:12px;padding:22px;text-align:center;
+    color:var(--dim);font-size:13px;cursor:pointer}
+  #drop.hot{border-color:var(--idle);color:var(--ink)}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;text-align:center}
+  .grid b{display:block;font:600 18px/1.2 ui-monospace,Menlo,monospace;
+    font-variant-numeric:tabular-nums;margin-top:3px}
+
+  .f{border-left:3px solid var(--line);padding:2px 0 2px 12px;margin-bottom:14px}
+  .f:last-child{margin-bottom:0}
+  .f.warn{border-color:var(--warn)}
+  .f.info{border-color:var(--accent)}
+  .f p{margin:4px 0 0;color:var(--dim);font-size:13px}
+  .fix{display:inline-block;margin-top:8px;font:600 12px ui-monospace,Menlo,monospace;
+    background:color-mix(in srgb,var(--idle) 14%,transparent);
+    border:1px solid var(--line);border-radius:8px;padding:5px 9px}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);font-weight:600;font-size:11px;letter-spacing:.6px;text-transform:uppercase}
+  td.n{text-align:right;font:13px ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+  .tag{font-size:11px;padding:2px 7px;border-radius:20px;border:1px solid var(--line)}
+  .tag.l{color:var(--idle)} .tag.r{color:var(--warn)} .tag.x{color:var(--stop)}
+  svg{display:block;width:100%;height:auto;border-radius:10px;background:#0a0d12}
+  @media (prefers-color-scheme: light){ svg{background:#f7f9fc} }
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .ok{color:var(--accent)} .bad{color:var(--stop)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="row">
+      <h1>Qeydi oxu</h1>
+      <span class="muted" id="state">fayl gözlənilir</span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="muted"><a href="/">&larr; ana səhifə</a></span>
+      <span class="muted"><a href="/follow">sürməyə qayıt &rarr;</a></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="lbl">Serverdəki sürüşlər</div>
+    <select id="runs"><option value="">yüklənir…</option></select>
+    <div class="btnrow">
+      <button id="load">Seçiləni aç</button>
+      <button id="refresh">Siyahını yenilə</button>
+    </div>
+    <div class="lbl" style="margin-top:16px">Ya da faylı bura at</div>
+    <div id="drop">JSON faylını buraya sürüşdür — ya da klikləyib seç
+      <input type="file" id="file" accept="application/json,.json" hidden>
+    </div>
+  </div>
+
+  <div id="out" hidden>
+
+    <div class="card">
+      <div class="row"><h2 id="rTitle">—</h2><span class="muted" id="rWhen"></span></div>
+      <div class="muted" id="rNote" style="margin-bottom:12px"></div>
+      <div class="grid">
+        <div><span class="lbl">Müddət</span><b id="mDur">–</b></div>
+        <div><span class="lbl">Orta sürət</span><b id="mSpeed">–</b></div>
+        <div><span class="lbl">Ən pis sapma</span><b id="mWorst">–</b></div>
+        <div><span class="lbl">Yırğalanma</span><b id="mWob">–</b></div>
+        <div><span class="lbl">Sükan dirənməsi</span><b id="mSat">–</b></div>
+        <div><span class="lbl">Yol itkisi</span><b id="mLost">–</b></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Sapma və sürət</h2>
+      <div id="chart"></div>
+      <p class="muted" style="margin:8px 0 0">Yuxarı: sapma — orta xətt yolun
+      mərkəzidir. Aşağı: sürət. Qırmızı sahələr yolun itdiyi yerlərdir.</p>
+    </div>
+
+    <div class="card">
+      <h2>Nə dəyişməli</h2>
+      <div id="findings"></div>
+      <div id="applyBox" hidden>
+        <div class="btnrow">
+          <button id="apply" class="go">Bu rəqəmləri tətbiq et</button>
+        </div>
+        <p class="muted" style="margin:8px 0 0" id="applyNote"></p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Məsafə kalibrasiyası</h2>
+      <p class="muted" style="margin:0 0 10px">Bu dövrənin <b>həqiqi</b>
+      uzunluğunu lentlə ölç və bura yaz. Qalanını qeyddəki sürət profilindən
+      özüm hesablayıram — enkoder olmadan alına biləcək yeganə düzgün üsul budur.</p>
+      <div class="two">
+        <div><span class="lbl">dövrənin uzunluğu, metr</span>
+          <input type="number" id="realM" min="0" step="0.1" placeholder="məs. 12"></div>
+        <div><span class="lbl">nəticə</span>
+          <div class="muted" id="calibOut" style="padding:11px 0">—</div></div>
+      </div>
+      <div class="btnrow">
+        <button id="applyCalib" disabled>Kalibrasiyanı yadda saxla</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Hərəkətlər</h2>
+      <table><thead><tr>
+        <th>nə</th><th>başladı</th><th>müddət</th><th>sürət</th><th>ən kəskin</th><th>məsafə</th>
+      </tr></thead><tbody id="segs"></tbody></table>
+    </div>
+
+  </div>
+</div>
+
+<script src="/pilot.js"></script>
+<script src="/analyse.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let run = null, result = null;
+
+// ── link, only for saving what you decide ───────────────────────────
+let ws = null, wsOpen = false;
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/`);
+  ws.onopen = () => { wsOpen = true; };
+  ws.onclose = () => { wsOpen = false; setTimeout(connect, 2000); };
+  ws.onerror = () => ws.close();
+  ws.onmessage = () => {};        // this page does not drive anything
+}
+const sendWs = (o) => { if (wsOpen) ws.send(JSON.stringify(o)); };
+
+// ── getting a run in ────────────────────────────────────────────────
+async function listRuns() {
+  try {
+    const r = await fetch('/logs');
+    const { files } = await r.json();
+    $('runs').innerHTML = files.length
+      ? files.map(f => `<option value="${f}">${f}</option>`).join('')
+      : '<option value="">hələ heç bir sürüş yoxdur</option>';
+    $('load').disabled = !files.length;
+  } catch {
+    $('runs').innerHTML = '<option value="">server əlçatmaz</option>';
+    $('load').disabled = true;
+  }
+}
+
+async function loadNamed(name) {
+  if (!name) return;
+  try {
+    const r = await fetch('/logs/' + encodeURIComponent(name));
+    if (!r.ok) throw new Error(r.status);
+    show(await r.json(), name);
+  } catch (e) {
+    fail('Fayl açılmadı: ' + e.message);
+  }
+}
+
+function readFile(f) {
+  const fr = new FileReader();
+  fr.onload = () => {
+    try { show(JSON.parse(fr.result), f.name); }
+    catch { fail('Bu JSON deyil — fayl oxunmadı.'); }
+  };
+  fr.readAsText(f);
+}
+
+$('refresh').addEventListener('click', listRuns);
+$('load').addEventListener('click', () => loadNamed($('runs').value));
+$('runs').addEventListener('change', () => loadNamed($('runs').value));
+$('drop').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', () => { if ($('file').files[0]) readFile($('file').files[0]); });
+for (const ev of ['dragenter', 'dragover']) {
+  $('drop').addEventListener(ev, (e) => { e.preventDefault(); $('drop').classList.add('hot'); });
+}
+for (const ev of ['dragleave', 'drop']) {
+  $('drop').addEventListener(ev, (e) => { e.preventDefault(); $('drop').classList.remove('hot'); });
+}
+$('drop').addEventListener('drop', (e) => {
+  const f = e.dataTransfer?.files?.[0];
+  if (f) readFile(f);
+});
+
+function fail(msg) {
+  $('state').textContent = msg;
+  $('state').className = 'muted bad';
+  $('out').hidden = true;
+}
+
+// ── the report ──────────────────────────────────────────────────────
+function show(data, name) {
+  const r = analyse(data, parseFloat($('realM').value));
+  if (!r.ok) { fail(r.error); return; }
+  run = data; result = r;
+  $('state').textContent = name;
+  $('state').className = 'muted';
+  $('out').hidden = false;
+
+  const m = r.metrics;
+  $('rTitle').textContent = name;
+  $('rWhen').textContent = r.started ? new Date(r.started).toLocaleString() : '';
+  $('rNote').textContent = r.note ? `«${r.note}»` : '';
+  $('mDur').textContent = m.duration_s + ' s';
+  $('mSpeed').textContent = m.avg_speed + ' %';
+  $('mWorst').textContent = m.worst_err;
+  $('mWob').textContent = m.wobble + '/s';
+  $('mSat').textContent = Math.round(m.sat_frac * 100) + ' %';
+  $('mLost').textContent = m.lost_events === 0 ? 'yox'
+    : `${m.lost_events} × ${m.lost_s} s`;
+
+  drawChart(data.rows);
+  drawFindings(r);
+  drawSegments(r.segments);
+  showCalib(r.calib);
+}
+
+// A plot rather than a table, because "it wobbled for the first ten seconds and
+// then settled" is a shape, not a number.
+function drawChart(rows) {
+  const W = 660, H = 220, pad = 6;
+  const half = (H - pad * 3) / 2;
+  const t0 = Number(rows[0].t) || 0;
+  const t1 = Number(rows[rows.length - 1].t) || 1;
+  const span = Math.max(1, t1 - t0);
+  const x = (r) => pad + ((Number(r.t) || 0) - t0) / span * (W - pad * 2);
+  const yErr = (v) => pad + half / 2 - Math.max(-1, Math.min(1, v)) * (half / 2);
+  const yV = (v) => pad * 2 + half + half - Math.max(0, Math.min(100, v)) / 100 * half;
+
+  const line = (fy, key) => rows.map((r, i) => {
+    const v = r[key];
+    if (v == null) return null;
+    return `${i ? 'L' : 'M'}${x(r).toFixed(1)},${fy(Number(v)).toFixed(1)}`;
+  }).filter(Boolean).join(' ');
+
+  // Lost stretches as bands, so a dropout is visible rather than inferred.
+  const bands = [];
+  let from = null;
+  for (const r of rows) {
+    if (r.lost && from === null) from = r;
+    else if (!r.lost && from !== null) { bands.push([from, r]); from = null; }
+  }
+  if (from !== null) bands.push([from, rows[rows.length - 1]]);
+
+  $('chart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    ${bands.map(([a, b]) => `<rect x="${x(a).toFixed(1)}" y="${pad}"
+        width="${Math.max(1, x(b) - x(a)).toFixed(1)}" height="${H - pad * 2}"
+        fill="#f85149" opacity="0.16"/>`).join('')}
+    <line x1="${pad}" y1="${pad + half / 2}" x2="${W - pad}" y2="${pad + half / 2}"
+          stroke="#8b949e" stroke-dasharray="4 4" opacity=".6"/>
+    <path d="${line(yErr, 'err')}" fill="none" stroke="#58a6ff" stroke-width="1.6"/>
+    <path d="${line(yErr, 'far')}" fill="none" stroke="#8b949e" stroke-width="1"
+          opacity=".8"/>
+    <path d="${line(yV, 'speed')}" fill="none" stroke="#3fb950" stroke-width="1.6"/>
+    <text x="${pad + 2}" y="${pad + 11}" fill="#8b949e" font-size="10">sapma +1</text>
+    <text x="${pad + 2}" y="${pad * 2 + half + 11}" fill="#8b949e" font-size="10">sürət 100 %</text>
+  </svg>`;
+}
+
+function drawFindings(r) {
+  $('findings').innerHTML = r.findings.map(f => `
+    <div class="f ${f.level}">
+      <b>${f.title}</b>
+      <p>${f.detail}</p>
+      ${f.fix ? `<span class="fix">${Object.entries(f.fix)
+        .map(([k, v]) => `${k}: ${fmtFrom(r.pilot, k)} → ${v}`).join(', ')}</span>` : ''}
+    </div>`).join('');
+
+  const keys = Object.keys(r.suggest);
+  $('applyBox').hidden = keys.length === 0;
+  if (keys.length) {
+    $('applyNote').textContent = 'Bir dəfəyə bir-iki rəqəm dəyiş, sonra yenə '
+      + 'bir dövrə sür — hansı dəyişikliyin nə etdiyini ancaq belə bilmək olar.';
+  }
+}
+
+const fmtFrom = (pilot, k) => (pilot && pilot[k] != null ? pilot[k] : '?');
+
+$('apply').addEventListener('click', () => {
+  if (!result) return;
+  sendWs({ cmd: 'follow_cfg', cfg: { pilot: { ...(result.pilot || {}), ...result.suggest } } });
+  $('apply').textContent = 'Saxlanıldı — /follow-da qüvvədədir';
+  $('apply').disabled = true;
+});
+
+function drawSegments(segs) {
+  const cls = { 'sol döngə': 'l', 'sağ döngə': 'r', 'itki': 'x', 'düz': '' };
+  $('segs').innerHTML = segs.map(s => `<tr>
+    <td><span class="tag ${cls[s.kind] || ''}">${s.kind}</span></td>
+    <td class="n">${(s.t / 1000).toFixed(1)} s</td>
+    <td class="n">${s.dur_s} s</td>
+    <td class="n">${s.avg_speed} %</td>
+    <td class="n">${s.kind === 'düz' ? '—' : s.peak_steer}</td>
+    <td class="n">${s.dist_m == null ? '—' : s.dist_m + ' m'}</td>
+  </tr>`).join('');
+}
+
+function showCalib(c) {
+  if (!c) {
+    $('calibOut').textContent = '—';
+    $('applyCalib').disabled = true;
+    return;
+  }
+  $('calibOut').innerHTML = `<b>${c.mps_at_100} m/s</b> @ 100 %<br>`
+    + `<code>${c.pct} % · ${c.metres} m · ${c.seconds} s</code>`;
+  $('applyCalib').disabled = false;
+}
+
+$('realM').addEventListener('input', () => {
+  if (!run) return;
+  result = analyse(run, parseFloat($('realM').value));
+  showCalib(result.calib);
+});
+
+$('applyCalib').addEventListener('click', () => {
+  if (!result || !result.calib) return;
+  const { pct, metres, seconds, dead } = result.calib;
+  sendWs({ cmd: 'follow_cfg', cfg: { calib: { pct, metres, seconds, dead } } });
+  $('applyCalib').textContent = 'Saxlanıldı';
+  $('applyCalib').disabled = true;
+});
+
+connect();
+listRuns();
+</script>
+</body>
+</html>

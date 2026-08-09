@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual · ESP32 DAC</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
+    --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:16px;background:var(--bg);color:var(--ink);
+    font:15px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  .wrap{max-width:560px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+  h1{font-size:17px;margin:0;font-weight:600}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none}
+  .dot.ok{background:var(--accent)} .dot.bad{background:var(--stop)}
+  .muted{color:var(--dim);font-size:13px}
+  .lbl{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  input[type=number]{
+    width:100%;font:600 30px/1.1 ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-variant-numeric:tabular-nums;text-align:center;padding:12px 6px;
+    color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;
+  }
+  input[type=number]:focus{outline:none;border-color:var(--idle)}
+  input[type=range]{width:100%;margin-top:10px;accent-color:var(--idle)}
+  button{font:600 15px/1 inherit;color:var(--ink);background:transparent;
+    border:1px solid var(--line);border-radius:10px;padding:14px 18px;cursor:pointer}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .seg{display:flex;gap:8px}
+  .seg button{flex:1;padding:10px}
+  .seg button.on{background:var(--idle);border-color:var(--idle);color:#04182e}
+  #start{width:100%;padding:22px;font-size:18px;letter-spacing:1px;margin-top:4px}
+  #start.on{background:var(--accent);border-color:var(--accent);color:#04220c}
+  #stopb{width:100%;padding:20px;font-size:18px;letter-spacing:1px;
+    background:var(--stop);border-color:var(--stop);color:#fff}
+  .out{display:grid;grid-template-columns:1fr 1fr;gap:12px;text-align:center}
+  .big{font:600 34px/1.1 ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+  .unit{font-size:16px;color:var(--dim);font-weight:400}
+  .diag{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;
+    font:12px/1 ui-monospace,monospace;color:var(--dim);margin-top:12px}
+  .diag b{color:var(--ink);font-weight:600}
+  .err{color:var(--stop);font-size:13px;margin-top:8px}
+  .pin{font:11px/1 ui-monospace,monospace;color:var(--dim);margin-top:6px;text-align:center}
+  .levelbar{height:14px;border-radius:7px;background:var(--line);overflow:hidden;margin-top:10px}
+  .levelbar>i{display:block;height:100%;width:100%;background:var(--idle);transition:width .08s linear}
+  .levelbar.max>i{background:var(--stop)}
+  #lvlNum{width:86px;font:600 22px ui-monospace,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="row">
+      <h1>ESP32 DAC Bench</h1>
+      <div class="row" style="gap:7px">
+        <span class="dot" id="dot"></span><span class="muted" id="linktxt">connecting</span>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="muted" id="reason">stopped</span>
+      <span class="muted" id="transport"></span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <span class="muted"><a href="/" style="color:var(--idle)">&larr; ana səhifə</a></span>
+      <span class="muted"><a href="/drive" style="color:var(--idle)">klaviatura ilə sür &rarr;</a></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div>
+        <div class="lbl">GPIO25 · DAC1</div>
+        <input type="number" id="inL" min="0" max="100" step="1" value="0">
+        <input type="range" id="rgL" min="0" max="100" step="1" value="0">
+        <div class="pin" id="hintL">0 % &middot; 1.00 V</div>
+      </div>
+      <div>
+        <div class="lbl">GPIO26 · DAC2</div>
+        <input type="number" id="inR" min="0" max="100" step="1" value="0">
+        <input type="range" id="rgR" min="0" max="100" step="1" value="0">
+        <div class="pin" id="hintR">0 % &middot; 1.00 V</div>
+      </div>
+    </div>
+
+    <div style="margin-top:16px">
+      <div class="row">
+        <div class="lbl" style="margin:0">Master level — scales both channels</div>
+        <div class="row" style="gap:8px">
+          <input type="number" id="lvlNum" min="0" max="100" step="1" value="100">
+          <span style="font-size:16px;color:var(--dim)">%</span>
+        </div>
+      </div>
+      <input type="range" id="lvlRange" min="0" max="100" step="1" value="100">
+      <div class="levelbar" id="lvlBar"><i id="lvlFill"></i></div>
+    </div>
+
+    <button id="start" style="margin-top:16px">START</button>
+    <div class="pin" style="margin-top:10px">
+      START also drives the digital ENABLE pin <b id="enPin">GPIO23</b> to 1
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="lbl">ESP32 actual (read back from the board)</div>
+    <div class="out">
+      <div><div class="big"><span id="pL">0</span><span class="unit">%</span></div>
+           <div class="muted"><b id="vL">1.00</b> V &middot; GPIO25</div></div>
+      <div><div class="big"><span id="pR">0</span><span class="unit">%</span></div>
+           <div class="muted"><b id="vR">1.00</b> V &middot; GPIO26</div></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <span class="muted">ENABLE pin</span>
+      <span class="row" style="gap:8px">
+        <span class="dot" id="endot"></span>
+        <b id="enval" style="font:600 15px ui-monospace,monospace">0</b>
+      </span>
+    </div>
+    <div class="diag" style="margin-top:12px">
+      <span>sending <b id="outv">0 / 0 %</b></span>
+      <span>pkt <b id="pkt">0</b></span>
+      <span>bad <b id="bad">0</b></span>
+      <span>rssi <b id="rssi">–</b></span>
+    </div>
+    <div class="err" id="err" hidden></div>
+  </div>
+
+  <button id="stopb">STOP · IDLE</button>
+  <div class="muted" style="text-align:center">
+    Close this tab and both DACs drop to idle and ENABLE to 0 immediately
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let VMAX = 3.3, IDLE_V = 1.0, running = false, ws = null;
+let level = 100, editingLevel = false;
+
+// Everything the user touches is percent: 0 % is idle (zero throttle) and
+// 100 % is the ceiling the server was started with. The master level scales
+// both channels on top of that, so the volts shown are what you will get.
+const scaled = p => (p * level) / 100;
+const voltsFor = p => IDLE_V + (scaled(p) / 100) * (VMAX - IDLE_V);
+
+function readField(id) {
+  let v = Math.round(parseFloat($(id).value));
+  if (!isFinite(v)) v = 0;
+  return Math.max(0, Math.min(100, v));
+}
+
+function paintHints() {
+  $('hintL').textContent = `${readField('inL')} % \u00b7 ${voltsFor(readField('inL')).toFixed(2)} V`;
+  $('hintR').textContent = `${readField('inR')} % \u00b7 ${voltsFor(readField('inR')).toFixed(2)} V`;
+}
+
+function syncPair(numId, rngId, from) {
+  const v = readField(from === 'num' ? numId : rngId);
+  $(numId).value = v;
+  $(rngId).value = v;
+  paintHints();
+  send({cmd: 'set', p25: readField('inL'), p26: readField('inR')});
+}
+
+function send(obj) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+}
+
+$('inL').addEventListener('input', () => syncPair('inL','rgL','num'));
+$('inR').addEventListener('input', () => syncPair('inR','rgR','num'));
+$('rgL').addEventListener('input', () => syncPair('inL','rgL','rng'));
+$('rgR').addEventListener('input', () => syncPair('inR','rgR','rng'));
+
+// ── master level ───────────────────────────────────────────────────
+function paintLevel() {
+  if (document.activeElement !== $('lvlNum')) $('lvlNum').value = level;
+  if (document.activeElement !== $('lvlRange')) $('lvlRange').value = level;
+  $('lvlFill').style.width = level + '%';
+  $('lvlBar').classList.toggle('max', level >= 100);
+  paintHints();
+}
+
+function setLevel(v, push = true) {
+  level = Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
+  paintLevel();
+  if (push) send({cmd: 'level', level});
+}
+
+$('lvlNum').addEventListener('focus', () => { editingLevel = true; });
+$('lvlNum').addEventListener('blur', () => { editingLevel = false; });
+$('lvlNum').addEventListener('input', () => {
+  const v = parseFloat($('lvlNum').value);
+  if (isFinite(v)) setLevel(v);            // mid-typing blanks are ignored
+});
+$('lvlRange').addEventListener('input', () => setLevel($('lvlRange').value));
+
+$('start').addEventListener('click', () => {
+  if (running) { send({cmd: 'stop'}); return; }
+  send({cmd: 'start', p25: readField('inL'), p26: readField('inR')});
+});
+$('stopb').addEventListener('click', () => send({cmd: 'idle'}));
+
+// ── websocket
+function connect() {
+  // Page and WebSocket share one port, so this works over any host or tunnel.
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/`);
+  ws.onopen = () => {
+    $('dot').className = 'dot ok';
+    $('linktxt').textContent = 'connected';
+    syncPair('inL','rgL','num');
+  };
+  ws.onclose = () => {
+    $('dot').className = 'dot bad';
+    $('linktxt').textContent = 'disconnected — output is idle';
+    running = false; paint();
+    setTimeout(connect, 1000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = ev => {
+    let s; try { s = JSON.parse(ev.data); } catch (e) { return; }
+    if (s.type !== 'status') return;
+    if (s.vmax) { VMAX = s.vmax; }
+    if (s.idle_v != null) { IDLE_V = s.idle_v; }
+    if (typeof s.level === 'number' && !editingLevel && s.level !== level) {
+      setLevel(s.level, false);
+    }
+    $('transport').textContent = s.transport || '';
+
+    running = s.running;
+    $('reason').textContent = s.reason || '';
+    $('outv').textContent = `${s.out[0]} / ${s.out[1]} %`;
+
+    const e = s.esp || {};
+    $('pL').textContent = e.pL != null ? Math.round(e.pL) : '–';
+    $('pR').textContent = e.pR != null ? Math.round(e.pR) : '–';
+    $('vL').textContent = (e.vL ?? IDLE_V).toFixed(2);
+    $('vR').textContent = (e.vR ?? IDLE_V).toFixed(2);
+    $('pkt').textContent = e.pkt ?? '–';
+    $('bad').textContent = e.bad ?? '–';
+    $('rssi').textContent = e.rssi != null ? e.rssi : '–';
+    if (e.en_pin != null) $('enPin').textContent = 'GPIO' + e.en_pin;
+
+    // Show what the board reports, falling back to what we are commanding.
+    const en = e.en != null ? e.en : s.enable;
+    $('enval').textContent = en ? '1' : '0';
+    $('endot').className = 'dot ' + (en ? 'ok' : '');
+
+    $('err').hidden = !s.serial_error;
+    $('err').textContent = s.serial_error || '';
+    if (!s.esp_fresh) $('linktxt').textContent = 'no ESP32 telemetry';
+    else if (ws.readyState === 1) $('linktxt').textContent = 'ESP32 linked';
+    paint();
+  };
+}
+
+function paint() {
+  $('start').classList.toggle('on', running);
+  $('start').textContent = running ? 'RUNNING — tap to stop' : 'START';
+}
+
+paintHints();
+paintLevel();
+paint();
+connect();
+</script>
+</body>
+</html>

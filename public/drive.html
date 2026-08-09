@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keyboard Drive</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
+    --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:16px;background:var(--bg);color:var(--ink);
+    font:15px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-user-select:none;user-select:none;touch-action:manipulation}
+  .wrap{max-width:620px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+  h1{font-size:17px;margin:0;font-weight:600}
+  a{color:var(--idle)}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none}
+  .dot.ok{background:var(--accent)} .dot.bad{background:var(--stop)}
+  .muted{color:var(--dim);font-size:13px}
+  .lbl{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+
+  /* ── key pad ─────────────────────────────────────────────── */
+  .pad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;justify-items:center}
+  .key{
+    width:100%;height:74px;border:1px solid var(--line);border-radius:12px;
+    background:var(--bg);display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:3px;cursor:pointer;transition:none;
+  }
+  .key b{font:600 22px/1 ui-monospace,Menlo,monospace}
+  .key span{font-size:11px;color:var(--dim)}
+  .key.on{background:var(--accent);border-color:var(--accent);color:#04220c}
+  .key.on span{color:#04220c;opacity:.75}
+  .key.wide{grid-column:1 / -1;height:56px}
+
+  /* ── readout ─────────────────────────────────────────────── */
+  .out{display:grid;grid-template-columns:1fr 1fr;gap:12px;text-align:center}
+  .big{font:600 34px/1.1 ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+  .unit{font-size:16px;color:var(--dim);font-weight:400}
+  .bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:8px}
+  .bar>i{display:block;height:100%;width:0;background:var(--accent);transition:width .08s linear}
+  .diag{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;
+    font:12px/1 ui-monospace,monospace;color:var(--dim);margin-top:12px}
+  .diag b{color:var(--ink);font-weight:600}
+
+  /* ── preset table ────────────────────────────────────────── */
+  table{width:100%;border-collapse:collapse}
+  th{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);
+     font-weight:500;text-align:right;padding:0 0 8px}
+  th:first-child{text-align:left}
+  td{padding:5px 0;border-top:1px solid var(--line)}
+  td:first-child{font:600 13px ui-monospace,monospace}
+  td.n{text-align:right}
+  tr.on td:first-child{color:var(--accent)}
+  input[type=number]{
+    width:74px;font:600 16px ui-monospace,Menlo,monospace;text-align:center;
+    padding:7px 4px;color:var(--ink);background:var(--bg);
+    border:1px solid var(--line);border-radius:8px;
+  }
+  input[type=number]:focus{outline:none;border-color:var(--idle)}
+  input[type=checkbox].rev{width:20px;height:20px;accent-color:var(--warn);cursor:pointer}
+  .volts{font:12px ui-monospace,monospace;color:var(--dim);width:52px;display:inline-block;text-align:left}
+
+  button{font:600 15px/1 inherit;color:var(--ink);background:transparent;
+    border:1px solid var(--line);border-radius:10px;padding:13px 18px;cursor:pointer}
+  #arm{width:100%;padding:20px;font-size:17px;letter-spacing:1px}
+  #arm.on{background:var(--warn);border-color:var(--warn);color:#1c1300}
+  #stopb{width:100%;padding:20px;font-size:18px;letter-spacing:1px;
+    background:var(--stop);border-color:var(--stop);color:#fff}
+  .small{padding:9px 14px;font-size:13px}
+
+  /* ── master level ────────────────────────────────────────── */
+  .levelbar{height:16px;border-radius:8px;background:var(--line);overflow:hidden;margin-top:12px;position:relative}
+  .levelbar>i{display:block;height:100%;width:100%;background:var(--idle);transition:width .08s linear}
+  .levelbar.hot>i{background:var(--warn)}
+  .levelbar.max>i{background:var(--stop)}
+  #lvlRange{-webkit-appearance:none;appearance:none;width:100%;height:44px;background:transparent;cursor:grab;margin-top:4px}
+  #lvlRange::-webkit-slider-runnable-track{height:10px;border-radius:5px;background:var(--line)}
+  #lvlRange::-moz-range-track{height:10px;border-radius:5px;background:var(--line)}
+  #lvlRange::-webkit-slider-thumb{-webkit-appearance:none;width:40px;height:40px;border-radius:50%;
+    background:var(--idle);border:3px solid var(--panel);margin-top:-15px}
+  #lvlRange::-moz-range-thumb{width:36px;height:36px;border-radius:50%;background:var(--idle);border:3px solid var(--panel)}
+  #lvlNum{width:92px;font:600 26px ui-monospace,Menlo,monospace}
+  .chips{display:flex;gap:8px;margin-top:10px}
+  .chips button{flex:1;padding:9px 0;font-size:13px}
+  .err{color:var(--stop);font-size:13px;margin-top:8px}
+  .dirtag{padding:3px 10px;border-radius:6px;font:600 12px ui-monospace,monospace;
+    letter-spacing:.6px;background:var(--line);color:var(--ink)}
+  .dirtag.fwd{background:var(--idle);color:#04182e}
+  .dirtag.rev{background:var(--warn);color:#1c1300}
+  .dirtag.wait{background:var(--stop);color:#fff}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="row">
+      <h1>Keyboard Drive</h1>
+      <div class="row" style="gap:7px">
+        <span class="dot" id="dot"></span><span class="muted" id="linktxt">connecting</span>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="muted" id="reason">stopped</span>
+      <span class="muted"><a href="/">&larr; ana səhifə</a> &nbsp; <a href="/manual">manual</a></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <button id="arm">ARM</button>
+    <div class="muted" style="text-align:center;margin:12px 0 14px" id="hint">
+      Arm first, then hold W / A / D &middot; S = reverse
+    </div>
+    <div class="pad">
+      <div></div>
+      <div class="key" data-k="w"><b>W</b><span>forward</span></div>
+      <div></div>
+      <div class="key" data-k="a"><b>A</b><span>pivot left</span></div>
+      <div class="key" data-k="s"><b>S</b><span>back</span></div>
+      <div class="key" data-k="d"><b>D</b><span>pivot right</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div class="lbl" style="margin:0">Master level — scales everything</div>
+      <div class="row" style="gap:8px">
+        <input type="number" id="lvlNum" min="0" max="100" step="1" value="100">
+        <span class="unit" style="font-size:18px;color:var(--dim)">%</span>
+      </div>
+    </div>
+    <input type="range" id="lvlRange" min="0" max="100" step="1" value="100">
+    <div class="levelbar" id="lvlBar"><i id="lvlFill"></i></div>
+    <div class="chips">
+      <button data-lvl="25">25</button>
+      <button data-lvl="50">50</button>
+      <button data-lvl="75">75</button>
+      <button data-lvl="100">100</button>
+    </div>
+    <div class="muted" style="margin-top:10px" id="lvlHint"></div>
+  </div>
+
+  <div class="card">
+    <div class="lbl">ESP32 actual</div>
+    <div class="out">
+      <div>
+        <div class="big"><span id="pL">0</span><span class="unit">%</span></div>
+        <div class="muted"><b id="vL">1.00</b> V &middot; GPIO25</div>
+        <div class="bar"><i id="barL"></i></div>
+      </div>
+      <div>
+        <div class="big"><span id="pR">0</span><span class="unit">%</span></div>
+        <div class="muted"><b id="vR">1.00</b> V &middot; GPIO26</div>
+        <div class="bar"><i id="barR"></i></div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <span class="muted">Direction <b id="revPin">GPIO19 / GPIO18</b></span>
+      <span id="dirTag" class="dirtag fwd">FORWARD</span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="muted">ENABLE pin <b id="enPin">GPIO23</b></span>
+      <span class="row" style="gap:8px">
+        <span class="dot" id="endot"></span>
+        <b id="enval" style="font:600 15px ui-monospace,monospace">0</b>
+      </span>
+    </div>
+    <div class="diag">
+      <span>held <b id="held">–</b></span>
+      <span>sending <b id="outv">0 / 0 %</b></span>
+      <span>pkt <b id="pkt">0</b></span>
+      <span>rssi <b id="rssi">–</b></span>
+    </div>
+    <div class="err" id="err" hidden></div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <div class="lbl" style="margin:0">Values per key — edit freely</div>
+      <button class="small" id="reset">Reset defaults</button>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Key</th><th>GPIO25 %</th><th style="width:13%">geri</th>
+            <th>GPIO26 %</th><th style="width:13%">geri</th></tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="muted" style="margin-top:12px">
+      Saved on the server in <code>presets.json</code>, applied immediately —
+      you can retune mid-drive. Holding W and A together uses the
+      <code>wa</code> row, not W and A mixed. If a turn goes the wrong way,
+      swap that row's two numbers.
+      <br><br>The <b>geri</b> boxes are the direction relays, one per wheel.
+      One ticked = the robot pivots on the spot; both ticked = it backs up.
+      Any change to them makes the robot stop for about a second first —
+      crossing phase wires while a wheel turns destroys the controller.
+      If a pivot spins the wrong way, move the tick to the other wheel.
+    </div>
+  </div>
+
+  <button id="stopb">STOP · IDLE</button>
+  <div class="muted" style="text-align:center">
+    Releasing every key coasts to 0 %. STOP, closing the tab, or switching away
+    also drops ENABLE to 0.
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const ROWS = [
+  ['w',  'W · forward'],
+  ['a',  'A · pivot left'],
+  ['d',  'D · pivot right'],
+  ['wa', 'W+A · fwd-left'],
+  ['wd', 'W+D · fwd-right'],
+  ['s',  'S · back'],
+];
+// Each row is {p: [GPIO25 %, GPIO26 %], r: [GPIO25 rev, GPIO26 rev]}.
+// Reversing one wheel pivots the robot; reversing both backs it up.
+const DEFAULTS = {
+  w:  {p:[55,55], r:[false,false]},
+  a:  {p:[35,35], r:[true, false]},
+  d:  {p:[35,35], r:[false,true ]},
+  wa: {p:[60,30], r:[false,false]},
+  wd: {p:[30,60], r:[false,false]},
+  s:  {p:[35,35], r:[true, true ]},
+};
+const clone = o => JSON.parse(JSON.stringify(o));
+
+let VMAX = 3.3, IDLE_V = 1.0;
+let ws = null, armed = false, running = false;
+let presets = clone(DEFAULTS);
+let level = 100;
+const held = new Set();
+let pump = null, editing = false;
+
+// Everything the presets say is scaled by the master level before it goes out,
+// so the volts shown next to each field are the ones you will actually get.
+const scaled = p => (p * level) / 100;
+const voltsFor = p => IDLE_V + (scaled(p) / 100) * (VMAX - IDLE_V);
+const send = o => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+
+// ── preset table ───────────────────────────────────────────────────
+function buildTable() {
+  $('tbody').innerHTML = ROWS.map(([k, label]) => `
+    <tr id="row-${k}">
+      <td>${label}</td>
+      <td class="n"><input type="number" id="p-${k}-0" min="0" max="100" step="1">
+        <span class="volts" id="v-${k}-0"></span></td>
+      <td class="n"><input type="checkbox" id="r-${k}-0" class="rev"></td>
+      <td class="n"><input type="number" id="p-${k}-1" min="0" max="100" step="1">
+        <span class="volts" id="v-${k}-1"></span></td>
+      <td class="n"><input type="checkbox" id="r-${k}-1" class="rev"></td>
+    </tr>`).join('');
+
+  for (const [k] of ROWS) {
+    for (const i of [0, 1]) {
+      const el = $(`p-${k}-${i}`);
+      el.addEventListener('focus', () => { editing = true; });
+      el.addEventListener('blur', () => { editing = false; });
+      el.addEventListener('input', () => {
+        let v = Math.round(parseFloat(el.value));
+        if (!isFinite(v)) return;                 // mid-typing, leave it alone
+        presets[k].p[i] = Math.max(0, Math.min(100, v));
+        paintVolts();
+        send({cmd: 'presets', presets: {[k]: presets[k]}});
+      });
+
+      const cb = $(`r-${k}-${i}`);
+      cb.addEventListener('change', () => {
+        presets[k].r[i] = cb.checked;
+        send({cmd: 'presets', presets: {[k]: presets[k]}});
+      });
+    }
+  }
+}
+
+function paintPresets() {
+  for (const [k] of ROWS) {
+    for (const i of [0, 1]) {
+      const el = $(`p-${k}-${i}`);
+      if (document.activeElement !== el) el.value = presets[k].p[i];
+      const cb = $(`r-${k}-${i}`);
+      if (document.activeElement !== cb) cb.checked = !!presets[k].r[i];
+    }
+  }
+  paintVolts();
+}
+
+function paintVolts() {
+  for (const [k] of ROWS) {
+    for (const i of [0, 1]) {
+      $(`v-${k}-${i}`).textContent = voltsFor(presets[k].p[i]).toFixed(2) + ' V';
+    }
+  }
+}
+
+// ── master level ───────────────────────────────────────────────────
+function paintLevel() {
+  if (document.activeElement !== $('lvlNum')) $('lvlNum').value = level;
+  if (document.activeElement !== $('lvlRange')) $('lvlRange').value = level;
+  $('lvlFill').style.width = level + '%';
+  const bar = $('lvlBar');
+  bar.classList.toggle('hot', level > 60 && level < 100);
+  bar.classList.toggle('max', level >= 100);
+  const fwd = scaled(presets.w.p[0]);
+  $('lvlHint').textContent =
+    `W forward now gives ${Math.round(fwd)} % \u00b7 ${voltsFor(presets.w.p[0]).toFixed(2)} V`
+    + (level === 0 ? ' — nothing will move at 0 %' : '');
+  paintVolts();
+}
+
+function setLevel(v, push = true) {
+  level = Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
+  paintLevel();
+  if (push) send({cmd: 'level', level});
+}
+
+$('lvlNum').addEventListener('focus', () => { editing = true; });
+$('lvlNum').addEventListener('blur', () => { editing = false; });
+$('lvlNum').addEventListener('input', () => {
+  const v = parseFloat($('lvlNum').value);
+  if (isFinite(v)) setLevel(v);            // mid-typing blanks are ignored
+});
+$('lvlRange').addEventListener('input', () => setLevel($('lvlRange').value));
+for (const b of document.querySelectorAll('.chips button')) {
+  b.addEventListener('click', () => setLevel(b.dataset.lvl));
+}
+
+$('reset').addEventListener('click', () => {
+  presets = clone(DEFAULTS);
+  paintPresets();
+  paintLevel();
+  send({cmd: 'presets', presets});
+});
+
+// ── keys ───────────────────────────────────────────────────────────
+function pushKeys() { send({cmd: 'keys', keys: [...held]}); }
+
+function paintKeys() {
+  for (const el of document.querySelectorAll('.key')) {
+    el.classList.toggle('on', held.has(el.dataset.k));
+  }
+  $('held').textContent = held.size ? [...held].join('+').toUpperCase() : '–';
+}
+
+function down(k) {
+  if (!armed || held.has(k)) return;
+  held.add(k); paintKeys(); pushKeys();
+}
+function up(k) {
+  if (!held.delete(k)) return;
+  paintKeys(); pushKeys();
+}
+function releaseAll() {
+  if (!held.size) return;
+  held.clear(); paintKeys(); pushKeys();
+}
+
+addEventListener('keydown', e => {
+  if (editing || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if ('wasd'.includes(k)) { e.preventDefault(); down(k); }
+});
+addEventListener('keyup', e => {
+  const k = e.key.toLowerCase();
+  if ('wasd'.includes(k)) { e.preventDefault(); up(k); }
+});
+
+// Anything that could hide a keyup from us releases everything instead.
+addEventListener('blur', releaseAll);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+addEventListener('pagehide', () => send({cmd: 'idle'}));
+
+// Touch / mouse on the pad, for phones.
+for (const el of document.querySelectorAll('.key')) {
+  const k = el.dataset.k;
+  el.addEventListener('pointerdown', e => { e.preventDefault(); down(k); });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+    el.addEventListener(ev, () => up(k));
+  }
+}
+
+// ── arm / stop ─────────────────────────────────────────────────────
+function setArmed(on) {
+  armed = on;
+  releaseAll();
+  send(on ? {cmd: 'start'} : {cmd: 'stop'});
+  paint();
+}
+$('arm').addEventListener('click', () => setArmed(!armed));
+$('stopb').addEventListener('click', () => { armed = false; releaseAll(); send({cmd: 'idle'}); paint(); });
+
+function paint() {
+  $('arm').classList.toggle('on', armed);
+  $('arm').textContent = armed ? 'ARMED — tap to disarm' : 'ARM';
+  $('hint').textContent = armed ? 'Hold W / A / D — S reverses — release to coast'
+                                : 'Arm first, then hold W / A / D';
+}
+
+// ── websocket ──────────────────────────────────────────────────────
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/`);
+
+  ws.onopen = () => {
+    $('dot').className = 'dot ok';
+    $('linktxt').textContent = 'connected';
+    // Report key state at 20 Hz: that is the dead-man. Stop reporting and the
+    // server coasts to 0 % within 400 ms.
+    clearInterval(pump);
+    pump = setInterval(() => { if (armed) pushKeys(); }, 50);
+  };
+
+  ws.onclose = () => {
+    $('dot').className = 'dot bad';
+    $('linktxt').textContent = 'disconnected — output is idle';
+    clearInterval(pump); pump = null;
+    armed = false; held.clear(); paintKeys(); paint();
+    setTimeout(connect, 1000);
+  };
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = ev => {
+    let s; try { s = JSON.parse(ev.data); } catch (e) { return; }
+    if (s.type !== 'status') return;
+    if (s.vmax) VMAX = s.vmax;
+    if (s.idle_v != null) IDLE_V = s.idle_v;
+    if (s.presets && !editing) { presets = s.presets; paintPresets(); }
+    if (typeof s.level === 'number' && !editing && s.level !== level) {
+      setLevel(s.level, false);
+    }
+
+    running = s.running;
+    if (armed !== running) { armed = running; paint(); }
+
+    $('reason').textContent = s.reason || '';
+    $('outv').textContent = `${s.out[0]} / ${s.out[1]} %`;
+
+    const e = s.esp || {};
+    const pl = e.pL != null ? Math.round(e.pL) : 0;
+    const pr = e.pR != null ? Math.round(e.pR) : 0;
+    $('pL').textContent = e.pL != null ? pl : '–';
+    $('pR').textContent = e.pR != null ? pr : '–';
+    $('vL').textContent = (e.vL ?? IDLE_V).toFixed(2);
+    $('vR').textContent = (e.vR ?? IDLE_V).toFixed(2);
+    $('barL').style.width = pl + '%';
+    $('barR').style.width = pr + '%';
+    $('pkt').textContent = e.pkt ?? '–';
+    $('rssi').textContent = e.rssi != null ? e.rssi : '–';
+    if (e.en_pin != null) $('enPin').textContent = 'GPIO' + e.en_pin;
+
+    const en = e.en != null ? e.en : s.enable;
+    $('enval').textContent = en ? '1' : '0';
+    $('endot').className = 'dot ' + (en ? 'ok' : '');
+
+    // Direction: while settling, the wheels are held at zero on purpose.
+    if (Array.isArray(e.rev_pin)) {
+      $('revPin').textContent = 'GPIO' + e.rev_pin[0] + ' / GPIO' + e.rev_pin[1];
+    }
+    const settling = s.dir_settling || e.rev_wait;
+    // Prefer what the board reports; fall back to what we are commanding.
+    const d = Array.isArray(e.rev) ? e.rev : (s.dir || [false, false]);
+    const moving = d[0] || d[1];
+    const tag = $('dirTag');
+    tag.className = 'dirtag ' + (settling ? 'wait' : (moving ? 'rev' : 'fwd'));
+    tag.textContent = settling ? 'STOPPING…'
+      : (!d[0] && !d[1]) ? 'FORWARD'
+      : (d[0] && d[1]) ? 'BACK'
+      : (d[0] ? 'PIVOT · 25 rev' : 'PIVOT · 26 rev');
+
+    // Highlight whichever preset row the server actually resolved.
+    for (const [k] of ROWS) {
+      $(`row-${k}`).classList.toggle('on', s.combo === k);
+    }
+
+    $('err').hidden = !s.serial_error;
+    $('err').textContent = s.serial_error || '';
+    if (!s.esp_fresh) $('linktxt').textContent = 'no ESP32 telemetry';
+    else if (ws.readyState === 1) $('linktxt').textContent = 'ESP32 linked';
+  };
+}
+
+buildTable();
+paintPresets();
+paintLevel();
+paintKeys();
+paint();
+connect();
+</script>
+</body>
+</html>
