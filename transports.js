@@ -8,6 +8,7 @@
 //   await open()
 //   send(v25, v26, en, dir)  dir is [rev25, rev26]; called at 20 Hz
 //   scan(spin)          spin the sonar servo, -100..100. Wifi only.
+//   pin(gpio, value)    put 0-255 on a spare pin, for /pins. Wifi only.
 //   readback()          what the board says it actually did, or null
 //   get fresh()         have we heard from the board recently
 //   get error()         human-readable problem, or null
@@ -96,12 +97,25 @@ export class WsTransport {
     }
   }
 
+  /** Put a raw 0-255 on one of the spare pins. The board decides which exist. */
+  pin(gpio, value) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    try {
+      this.ws.send(JSON.stringify({
+        cmd: 'pin', gpio: Math.round(Number(gpio)), val: Math.round(Number(value) || 0),
+      }));
+    } catch (err) {
+      this._error = String(err.message || err);
+    }
+  }
+
   readback() {
     const s = this._status;
     if (!s) return null;
     return {
       vL: s.v25, vR: s.v26,
       son: s.son || null,
+      pins: s.pins || null,
       en: s.en === true, en_pin: s.en_pin,
       rev: Array.isArray(s.rev) ? [s.rev[0] === true, s.rev[1] === true] : null,
       rev_pin: s.rev_pin, rev_wait: s.rev_wait === true, dir: s.dir,
@@ -158,8 +172,9 @@ export class SerialTransport {
 
   // The USB firmware has neither an enable line nor direction relays, so `en`
   // and `dir` are accepted and ignored here. Use the wifi board (ws_dac.ino).
-  /** The USB board has no sonar and no servo — say so rather than pretend. */
+  /** The USB board has no sonar, no servo and no spare-pin support. */
   scan() { /* not available over the serial firmware */ }
+  pin() { /* likewise */ }
 
   send(v25, v26, _en = false, _dir = [false, false]) {
     try {

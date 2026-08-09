@@ -17,6 +17,7 @@
  *     /tune    drop a run log in, get numbers back out
  *     /sonar   spin the HC-SR04 and map the room
  *     /obstacle  the forward HC-SR04: stop, wait, carry on
+ *     /pins    every spare pin, 0-255 by hand
  *
  * Two ways to reach the board:
  *
@@ -255,6 +256,7 @@ async function main() {
     '/tune':   'tune.html',    // read a run back and say what to change
     '/sonar':  'sonar.html',   // the spinning HC-SR04, as a map
     '/obstacle': 'obstacle.html',  // the forward HC-SR04, as a stop
+    '/pins':   'pins.html',    // the spare pins, by hand
   };
 
   // The two pages that see the road share their code rather than each keeping
@@ -381,6 +383,9 @@ async function main() {
         case 'scan':
           bench.setScan(msg.spin);
           break;
+        case 'pin':
+          bench.setPin(msg.gpio, msg.val);
+          break;
         case 'follow_cfg':
           followCfg = saveFollowCfg({ ...followCfg, ...(msg.cfg || {}) });
           break;
@@ -437,6 +442,7 @@ async function main() {
     console.log(`  read a run back:${base}/tune`);
     console.log(`  360° sonar map: ${base}/sonar`);
     console.log(`  obstacle stop:  ${base}/obstacle`);
+    console.log(`  spare pins:     ${base}/pins`);
 
     // "0.0.0.0" is not something anyone can type into a phone, so print what
     // they can. Every interface, every address, ready to copy.

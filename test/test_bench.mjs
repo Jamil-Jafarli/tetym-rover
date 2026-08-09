@@ -422,7 +422,8 @@ async function driveChecks() {
                                    ['/follow', 'Yolu təqib et'],
                                    ['/tune', 'Qeydi oxu'],
                                    ['/sonar', '360° xəritə'],
-                                   ['/obstacle', 'Maneədə dayan']]) {
+                                   ['/obstacle', 'Maneədə dayan'],
+                                   ['/pins', 'Boş pinlər']]) {
       const r = await fetch(`http://127.0.0.1:${port}${route}`);
       const t = await r.text();
       check(`GET ${route} serves its page`, r.status === 200 && t.includes(needle),
@@ -930,6 +931,79 @@ async function sonarChecks() {
   }
 }
 
+// ── 6d. the spare pins ───────────────────────────────────────────────
+// A page that can drive arbitrary GPIOs needs two things to be true: it can
+// only reach the ones the board says are safe, and nothing is left energised
+// when everybody goes home.
+async function pinChecks() {
+  console.log('\n6d. spare pins: 0-255 by hand');
+  const sim = new Esp32WsSim({ port: 8190, vMax: 3.3 });
+  await sim.ready;
+  try {
+    const ws = new WebSocket(sim.url);
+    await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });
+    const seen = [];
+    ws.on('message', (raw) => seen.push(JSON.parse(raw.toString())));
+    const last = () => seen[seen.length - 1];
+    const send = async (o) => { ws.send(JSON.stringify(o)); await sleep(80); };
+
+    await send({ cmd: 'ping' });
+    check('the board says which pins are free', last().pins
+      && Object.keys(last().pins).length > 0, Object.keys(last().pins || {}).join(','));
+    check('the drive pins are not among them',
+      !('25' in last().pins) && !('26' in last().pins) && !('23' in last().pins),
+      Object.keys(last().pins).join(','));
+    check('the sonar and relay pins are not either',
+      !['13', '14', '18', '19', '27', '32', '33'].some((p) => p in last().pins));
+    check('they all start at zero',
+      Object.values(last().pins).every((v) => v === 0));
+
+    await send({ cmd: 'pin', gpio: 4, val: 200 });
+    check('a raw value lands on the pin the page asked for',
+      last().pins['4'] === 200, `${last().pins['4']}`);
+    check('...and only on that one',
+      Object.entries(last().pins).every(([p, v]) => p === '4' || v === 0));
+
+    await send({ cmd: 'pin', gpio: 4, val: 999 });
+    check('out of range is clamped, not rejected', last().pins['4'] === 255,
+      `${last().pins['4']}`);
+    await send({ cmd: 'pin', gpio: 4, val: -5 });
+    check('...at both ends', last().pins['4'] === 0, `${last().pins['4']}`);
+
+    // The whole safety story: a pin the board did not offer is refused, and
+    // refusing is counted as a bad packet rather than quietly ignored.
+    const badBefore = sim.bad;
+    await send({ cmd: 'pin', gpio: 6, val: 255 });      // flash chip
+    await send({ cmd: 'pin', gpio: 12, val: 255 });     // strapping
+    await send({ cmd: 'pin', gpio: 34, val: 255 });     // input only
+    await send({ cmd: 'pin', gpio: 25, val: 255 });     // the drive DAC
+    check('pins that would break something are refused',
+      sim.bad === badBefore + 4, `${sim.bad - badBefore} of 4 rejected`);
+    check('...and refusing one changes nothing else',
+      Object.values(last().pins).every((v) => v === 0));
+
+    // Nothing may be left energised.
+    await send({ cmd: 'pin', gpio: 5, val: 180 });
+    await send({ cmd: 'pin', gpio: 16, val: 90 });
+    check('two pins can be up at once',
+      last().pins['5'] === 180 && last().pins['16'] === 90);
+    await send({ cmd: 'stop' });
+    check('STOP clears every spare pin',
+      Object.values(last().pins).every((v) => v === 0),
+      JSON.stringify(last().pins));
+
+    await send({ cmd: 'pin', gpio: 17, val: 255 });
+    check('a pin is up again before the disconnect', last().pins['17'] === 255);
+    ws.close();
+    await sleep(200);
+    check('the last browser leaving clears them too',
+      Object.values(sim.testPins).every((v) => v === 0),
+      JSON.stringify(sim.testPins));
+  } finally {
+    await sim.close();
+  }
+}
+
 // ── 6c. reachable from the network ───────────────────────────────────
 // Every other test binds to 127.0.0.1 on purpose, so this is the one place the
 // default is exercised: no --host, which means every interface, which is what
@@ -1007,6 +1081,7 @@ await serverChecks();
 await driveChecks();
 await followChecks();
 await sonarChecks();
+await pinChecks();
 await networkChecks();
 summaryChecks();
 console.log('\n' + (pass ? 'ALL CHECKS PASSED' : 'SOME CHECKS FAILED') + '\n');

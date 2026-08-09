@@ -213,6 +213,19 @@ export class Bench {
     return this.scanSpin;
   }
 
+  /**
+   * Put a raw 0-255 on a spare pin.
+   *
+   * Not part of the drive path and not watchdogged: a bench value you set by
+   * hand should stay where you put it while you go and measure it. The board
+   * clears them on stop, on idle, and when the last browser leaves.
+   */
+  setPin(gpio, value) {
+    const v = Math.max(0, Math.min(255, Math.round(Number(value) || 0)));
+    if (typeof this.tx.pin === 'function') this.tx.pin(gpio, v);
+    return v;
+  }
+
   start() { this.running = true; }
   stop() { this.running = false; }
 

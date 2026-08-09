@@ -928,7 +928,7 @@ constant comes out the same whether the lap was driven fast or slow.
 | `presets.json` | key table + master level, written when you edit them (git-ignored) |
 | `follow.json` | follow sliders + distance calibration (git-ignored) |
 | `logs/` | one JSON file per run (git-ignored) |
-| `test/test_bench.mjs` | server + firmware + follow + sonar suite, 196 checks |
+| `test/test_bench.mjs` | server + firmware + follow + sonar suite, 192 checks |
 | `test/test_pilot.mjs` | the control law, 60 checks, no browser |
 | `test/test_analyse.mjs` | the log analysis, 54 checks, no browser |
 | `test/test_sonar.mjs` | the sonar logic, 54 checks, no browser |

@@ -30,6 +30,12 @@ export const PIN_TRIG_FWD = 14, PIN_ECHO_FWD = 32;
 // still bouncing around the room when the next one goes out.
 export const PING_PERIOD_MS = 50;
 
+// The spare pins, for /pins. Everything the robot does not already use, minus
+// the ones that do something permanent: 0 and 12 are strapping pins, 1/3 are
+// the console, 6-11 are the flash chip and 34-39 have no output driver.
+// Only 25 and 26 are real DACs; these are all PWM, and the page says so.
+export const TEST_PINS = [4, 5, 16, 17, 21, 22, 2, 15];
+
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 export const dacFor = (v, vMax = 3.3) =>
   Math.max(0, Math.min(255, Math.round(clamp(v, V_MIN, vMax) / V_REF * 255)));
@@ -69,6 +75,9 @@ export class Esp32WsSim {
     this.scanSince = 0;              // ms since the spin started, at that reading
     this.lastPingMs = 0;
 
+    // Whatever has been put on a spare pin by hand, 0-255.
+    this.testPins = Object.fromEntries(TEST_PINS.map((p) => [p, 0]));
+
     this.host = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
     this.port = port;
     this.wss = new WebSocketServer({ port, host });
@@ -95,7 +104,10 @@ export class Esp32WsSim {
     ws.on('message', (raw) => this._onMessage(ws, raw.toString()));
     ws.on('close', () => {
       this.clients = Math.max(0, this.clients - 1);
-      if (this.clients === 0) this._forceIdle();
+      // Nobody watching: the drive pins go to idle and the bench pins go to
+      // zero. A value left on a pin by a browser that has gone away is a thing
+      // nobody is responsible for any more.
+      if (this.clients === 0) { this._forceIdle(); this._clearTestPins(); }
     });
     ws.on('error', () => ws.close());
   }
@@ -107,6 +119,7 @@ export class Esp32WsSim {
 
     if (cmd === 'stop' || cmd === 'idle') {
       this._forceIdle();
+      this._clearTestPins();
       this.lastPacketMs = Date.now();
       this.atIdle = false;             // a deliberate idle still counts as alive
       this.good++;
@@ -114,6 +127,17 @@ export class Esp32WsSim {
       return;
     }
     if (cmd === 'ping') { ws.send(this._statusJson()); return; }
+    // One pin, one raw value. Refusing an unknown pin rather than writing to it
+    // is the whole safety story: half the GPIOs on this chip do something
+    // permanent if you drive them.
+    if (cmd === 'pin') {
+      const gpio = Number(doc.gpio);
+      const val = Math.max(0, Math.min(255, Math.round(Number(doc.val) || 0)));
+      if (TEST_PINS.includes(gpio)) { this.testPins[gpio] = val; this.good++; }
+      else this.bad++;
+      ws.send(this._statusJson());
+      return;
+    }
     // The scan servo is its own command: it has nothing to do with the drive
     // watchdog, and a board that is scanning must not look like one that is
     // being told to move.
@@ -178,6 +202,11 @@ export class Esp32WsSim {
     if (this.spin !== 0) this.spinMs += Date.now() - this.spinAt;   // bank it
     this.spin = want;
     this.spinAt = Date.now();
+  }
+
+  /** Everything back to 0 — on stop, on idle, and when the last client goes. */
+  _clearTestPins() {
+    for (const p of TEST_PINS) this.testPins[p] = 0;
   }
 
   /** Milliseconds of actual rotation since the scan began. */
@@ -262,6 +291,7 @@ export class Esp32WsSim {
       dac25: dacFor(this.current25, this.vMax), dac26: dacFor(this.current26, this.vMax),
       en: this.enableOut, en_pin: PIN_ENABLE,
       rev: [...this.revOut], rev_pin: [PIN_REV_25, PIN_REV_26],
+      pins: { ...this.testPins },
       son: {
         fwd_cm: this.fwdCm == null ? null : r2(this.fwdCm),
         scan_cm: this.scanCm == null ? null : r2(this.scanCm),
