@@ -114,6 +114,10 @@ export class WsTransport {
     if (!s) return null;
     return {
       vL: s.v25, vR: s.v26,
+      // The board's own DAC codes. Volts are derived and rounded twice on the
+      // way here; the code is the number the pin was actually handed, which is
+      // the only way to prove a gear landed where it was set.
+      dacL: s.dac25, dacR: s.dac26,
       son: s.son || null,
       pins: s.pins || null,
       en: s.en === true, en_pin: s.en_pin,

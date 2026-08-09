@@ -217,11 +217,57 @@ of two other numbers. Longest match wins.
 Edits are saved server-side to `presets.json`, so they survive a reload and a
 restart. **Reset defaults** puts the table back. Delete the file to start over.
 
+### The two fixed speeds
+
+Above the level is a two-button strip: **NORMAL** and **SÜRƏT**. They are not
+percentages of anything — each one is a pair of **DAC codes**, the number the
+pin is physically handed:
+
+| | GPIO25 | GPIO26 | |
+|---|---|---|---|
+| **NORMAL** | 124 | 126 | 1.60 / 1.63 V — a crawl, just clear of the dead band |
+| **SÜRƏT** | 241 | 241 | 3.12 / 3.12 V — near the top |
+
+`dac = V / 3.3 × 255`, and 3.3 V is the chip's own reference, so a code means
+the same voltage whatever `--v-max` is. The four numbers are editable under
+the buttons, saved to `presets.json`, and each shows its volts.
+
+**Exclusive**: there is one gear, so tapping the second releases the first, and
+tapping the lit one releases it outright. The status carries `gear`, which is
+either one name or `null` — it cannot say both.
+
+The slow gear carries two different numbers and the fast one does not, and that
+is the whole reason a gear is a pair rather than a single number: two motors
+off the same reel differ by a few percent, a few percent matters near the dead
+band, and it disappears at full throttle.
+
+Three things a gear deliberately ignores, all for the same reason — a code
+multiplied by something else is a different code:
+
+- **the master level below it**, including at 0 %. The level card says so
+  while a gear is engaged rather than leaving you to find out.
+- **the wheel trim** (`stall`, `gain`). This is a raw page; the codes already
+  carry whatever difference the two motors have.
+- **the key table.** Pressing W / A / S / D releases the gear — a hand on the
+  keyboard always wins, exactly as it does over `/follow`.
+
+Arming is still separate: selecting a gear lights the button and moves nothing
+until **ARM**. And because a gear has no keyup behind it, the page re-sends it
+at 20 Hz — the same 400 ms dead-man as the keys, so a wedged tab coasts to 0 %
+instead of leaving the robot at 3.12 V.
+
+If a code is above what `--v-max` can deliver — `--v-max 1.8` cannot produce
+241 — the page says which gear and what will actually go out. It does not
+silently run slower than the number on its own button.
+
+The `dac` figure in the readout is the board's own code for what it put on the
+pins, so "241 means 241" is something you can see rather than infer.
+
 ### Master level
 
 Above the readout is a **master level**: a percentage with a slider, a number
 box, quick 25/50/75/100 chips and a progress bar. Everything on its way out is
-multiplied by it, on both pages.
+multiplied by it, on both pages — except a gear, above.
 
 ```
 what goes to the pin  =  preset %  ×  level %  ×  --v-max
@@ -751,6 +797,8 @@ is the board's own. Just keep something sending at ~20 Hz.
 {"cmd": "keys",    "keys": ["w", "a"]}          // held keys; send at ~20 Hz
 {"cmd": "presets", "presets": {"a": {"p": [35,35], "r": [true,false]}}}  // partial
 {"cmd": "level",   "level": 40}                 // master limit, 0-100 %
+{"cmd": "gear",    "gear": "fast"}              // "normal" | "fast" | null; ~20 Hz
+{"cmd": "gears",   "gears": {"normal": [124,126]}}   // the codes; partial
 
 // follow page
 {"cmd": "follow",     "p25": 30, "p26": 24, "reason": "döngə"}  // ~20 Hz
@@ -766,8 +814,8 @@ lap you just drove instead of a file dialog: `GET /logs` lists them and
 `follow-<word>.json` rather than joined into a path — this server has no
 authentication and sits on a shared wifi.
 
-`follow` is held to the same dead-man as `keys`: 400 ms of silence and the
-throttle is zero, `reason` becomes `kadr gəlmir`, and ENABLE stays up so a
+`follow` and `gear` are held to the same dead-man as `keys`: 400 ms of silence
+and the throttle is zero, `reason` becomes `kadr gəlmir`, and ENABLE stays up so a
 dropped frame does not cost a relay cycle. Sending `keys` or `set` takes the
 robot off the pilot immediately — a hand on the keyboard always wins.
 
@@ -780,12 +828,17 @@ Status comes back at 10 Hz, plus one immediately after each command carrying
   "running": true, "reason": "running", "enable": true,
   "transport": "ws://192.168.1.42:81/",
   "level": 100,               // master limit
+  "gear":  null,              // "normal" | "fast" | null — one or none, never both
+  "gears": {"normal": [124,126], "fast": [241,241]},   // the codes behind them
+  "gear_clamped": false,      // true when the engaged gear is above --v-max
   "set":   [60, 25],          // percent you typed, before the level
   "out":   [60, 25],          // percent actually streaming, after the level
   "out_v": [1.96, 1.4],       // ... in volts
+  "out_dac": [151, 108],      // ... and as DAC codes, the way the firmware rounds
   "esp": {                    // read back from the board
     "vL": 1.96, "vR": 1.4,    // what the pins are at
     "pL": 60,   "pR": 25,     // the same, as percent
+    "dacL": 151, "dacR": 108,  // ...and as the board's own DAC codes
     "en": true, "en_pin": 23, // the digital enable pin
     "rev": [false,false], "rev_pin": [19,18],         // direction relays
     "rev_wait": false, "dir": "forward",
@@ -796,9 +849,9 @@ Status comes back at 10 Hz, plus one immediately after each command carrying
 ```
 
 `reason` says why the output is what it is: `running`, `key w`,
-`follow: döngə`, `BACK`, `PIVOT A`, `back…` (settling), `no keys held`,
-`kadr gəlmir`, `level 0 %`, `stopped`, `no browser connected`,
-`esp32 unreachable`. The drive page also
+`gear normal`, `gear fast`, `follow: döngə`, `BACK`, `PIVOT A`, `back…`
+(settling), `no keys held`, `no gear report`, `kadr gəlmir`, `level 0 %`,
+`stopped`, `no browser connected`, `esp32 unreachable`. The drive page also
 gets back `keys`, `combo` (the row that matched) and the full `presets` table.
 
 **This server ⇄ ESP32** — `ws://<esp-ip>:81/`, the board's own protocol. The
@@ -893,9 +946,11 @@ tab, pull the wifi, kill this process, or unplug the board — every one of thos
 ends inert.
 
 The drive and follow pages add a fifth: **a report in the last 400 ms**. For
-`/drive` that is the held-key set, for `/follow` it is the frame the pilot just
-acted on. Both coast to 0 % without waiting to be told, which is what covers a
-wedged tab, a lost focus, and a camera that stops delivering frames.
+`/drive` that is the held-key set, or the engaged gear — a gear has no keyup
+behind it, so the page has to keep saying it means it — and for `/follow` it is
+the frame the pilot just acted on. All of them coast to 0 % without waiting to
+be told, which is what covers a wedged tab, a lost focus, and a camera that
+stops delivering frames.
 
 Every value is clamped to `[0, 100] %` here and to `[V_MIN, V_MAX]` again on
 the board. Nothing can command below idle: 1.0 V is what the controller reads
@@ -941,7 +996,7 @@ loads, and fails if any name is declared twice. It takes a second and needs no
 browser. It also verifies its own detector against known-good and known-bad
 input first, because a check that cannot fail is not a check.
 
-**212 checks** for the control path, no hardware. It runs `esp32ws_sim.js` — a behavioural mirror of
+**249 checks** for the control path, no hardware. It runs `esp32ws_sim.js` — a behavioural mirror of
 `ws_dac.ino`, including the watchdog, the idle-when-no-clients rule and the direction
 interlock — as a
 real WebSocket server, then drives the real `server.js` against it over a real
@@ -1013,13 +1068,13 @@ constant comes out the same whether the lap was driven fast or slow.
 | `public/pins.html` | every spare GPIO, 0-255 by hand |
 | `public/drive.html` | keyboard drive page, self-contained |
 | `follow_log.js` | writes `logs/follow-*.json` and its summary |
-| `presets.json` | key table + master level, written when you edit them (git-ignored) |
+| `presets.json` | key table + master level + the two fixed speeds, written when you edit them (git-ignored) |
 | `follow.json` | follow sliders + distance calibration (git-ignored) |
 | `logs/` | one JSON file per run (git-ignored) |
 | `public/wheels.js` | the shared wheel trim + the ⓘ text, used by every page |
 | `public/setup.html` | the numbered checklist: measure, type, saved everywhere |
 | `test/test_globals.mjs` | no duplicate top-level names on any page, 24 checks |
-| `test/test_bench.mjs` | server + firmware + follow + sonar suite, 212 checks |
+| `test/test_bench.mjs` | server + firmware + gears + follow + sonar suite, 249 checks |
 | `test/test_pilot.mjs` | the control law and the speed loop, 85 checks, no browser |
 | `test/test_wheels.mjs` | the shared trim, 55 checks — incl. /manual vs /follow agreement |
 | `test/test_analyse.mjs` | the log analysis, 54 checks, no browser |

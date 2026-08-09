@@ -382,6 +382,22 @@ async function main() {
           bench.setLevel(msg.level);
           console.log(`level ${bench.level} %`);
           break;
+        // The two fixed speeds. `gear` arrives at 20 Hz while one is engaged —
+        // that is its dead-man — so only a change is worth a line of log.
+        case 'gear': {
+          const before = bench.gear;
+          bench.setGear(msg.gear);
+          if (bench.gear !== before) {
+            console.log(bench.gear
+              ? `gear ${bench.gear}: dac ${bench.gears[bench.gear].join(' / ')}`
+              : 'gear released');
+          }
+          break;
+        }
+        case 'gears':
+          bench.setGears(msg.gears);
+          console.log('gears updated:', JSON.stringify(bench.gears));
+          break;
         case 'start':
           if ('p25' in msg || 'p26' in msg) bench.setValues(msg.p25, msg.p26);
           bench.start();

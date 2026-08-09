@@ -46,6 +46,27 @@ export const DEFAULT_PRESETS = {
 // without retyping the table.
 export const DEFAULT_LEVEL = 100;
 
+/**
+ * The two fixed speeds, as [GPIO25, GPIO26] DAC codes.
+ *
+ * A gear is not a percentage of anything: it is the number the pin is handed.
+ * `dac = round(V / 3.3 * 255)`, so 124 is 1.60 V — a crawl just clear of the
+ * dead band — and 241 is 3.12 V, near the top. Stored in the unit they were
+ * measured in; percent and volts are derived from them and never the reverse,
+ * because a round trip through percent is where a code stops being the code.
+ *
+ * The slow gear carries two different numbers and the fast one does not: two
+ * motors off the same reel differ by a few percent, and a few percent matters
+ * near the dead band and disappears at full throttle. That difference is the
+ * reason a gear is a pair rather than a single number.
+ */
+export const DEFAULT_GEARS = {
+  normal: [124, 126],
+  fast:   [241, 241],
+};
+
+export const GEAR_NAMES = Object.keys(DEFAULT_GEARS);
+
 // Longest match wins, so "wa" beats "w" when both keys are down.
 const COMBO_ORDER = ['wa', 'wd', 'w', 'a', 'd', 's'];
 
@@ -100,6 +121,14 @@ export class Bench {
     this.combo = null;
     this.lastKeysAt = 0;
 
+    // The two fixed speeds. The codes are a setting and persist; which one is
+    // engaged is not, and starts at none — a robot that comes up already in a
+    // gear is a robot that moves the moment somebody presses START for an
+    // unrelated reason.
+    this.gears = saved.gears;
+    this.gear = null;              // 'normal' | 'fast' | null
+    this.lastGearAt = 0;
+
     // Follow page state: the browser's vision loop steering the robot.
     this.autoMode = false;
     this.lastAutoAt = 0;
@@ -133,6 +162,7 @@ export class Bench {
     const pct = (x) => Math.max(0, Math.min(100, Number(x) || 0));
     this.keyMode = false;              // typing a value takes over from the keys
     this.autoMode = false;
+    this.gear = null;                  // ...and out of gear
     this.keys = [];
     this.combo = null;
     this.requestDirection([false, false]);   // the manual page is forward-only
@@ -144,6 +174,7 @@ export class Bench {
   setKeys(keys) {
     this.keyMode = true;
     this.autoMode = false;             // a hand on the keyboard wins
+    this.gear = null;                  // ...over a gear too
     this.keys = (keys || []).map((k) => String(k).toLowerCase())
       .filter((k) => 'wasd'.includes(k));
     const [a, b, dir, combo] = resolveKeys(this.keys, this.presets);
@@ -166,6 +197,7 @@ export class Bench {
     const pct = (x) => Math.max(0, Math.min(100, Number(x) || 0));
     this.autoMode = true;
     this.keyMode = false;
+    this.gear = null;
     this.keys = [];
     this.combo = null;
     this.autoReason = typeof reason === 'string' ? reason.slice(0, 40) : '';
@@ -187,7 +219,7 @@ export class Bench {
       if (Array.isArray(v) && v.length >= 2) row.p = [pct100(v[0]), pct100(v[1])];
       this.presets[k] = row;
     }
-    saveState(this.presets, this.level);
+    saveState(this.presets, this.level, this.gears);
     // Apply straight away if a key is currently held.
     if (this.keyMode) this.setKeys(this.keys);
     return this.presets;
@@ -196,8 +228,68 @@ export class Bench {
   /** Master throttle limit, 0-100 %. Scales everything on its way out. */
   setLevel(level) {
     this.level = pct100(level);
-    saveState(this.presets, this.level);
+    saveState(this.presets, this.level, this.gears);
     return this.level;
+  }
+
+  // ── the two fixed speeds ──────────────────────────────────────────
+  /**
+   * DAC code -> the percentage that produces it.
+   *
+   * Everything downstream of here speaks percent, so this is where a code
+   * becomes one. The conversion goes through volts against the chip's 3.3 V
+   * reference, then against `--v-max`: a ceiling below the code's own voltage
+   * clamps here, and `gear_clamped` says so, rather than the robot quietly
+   * running slower than the number written on the button.
+   */
+  dacPct(dac) {
+    return esp.voltsToPct(esp.dacToVolts(dac), this.vMax);
+  }
+
+  /**
+   * Engage one of the two speeds — or release with `null`.
+   *
+   * Exclusive by construction: there is one `gear`, so selecting the second
+   * releases the first. It takes over from the keys and from the pilot exactly
+   * as typing a percentage does, and each of those takes it back — one thing
+   * decides the throttle at a time, and which one is in the status.
+   *
+   * The page re-sends it at 20 Hz while it is engaged, so a gear is held to
+   * the same 400 ms dead-man as the keys. A gear has no keyup to wait for: it
+   * would otherwise be the one throttle on the robot that outlives the tab
+   * that asked for it.
+   */
+  setGear(name) {
+    const g = name === null || name === undefined || name === '' ? null : String(name);
+    if (g !== null && !(g in DEFAULT_GEARS)) return this.gear;   // unknown: ignored
+    this.keyMode = false;
+    this.autoMode = false;
+    this.keys = [];
+    this.combo = null;
+    this.gear = g;
+    this.lastGearAt = Date.now();
+    this.requestDirection([false, false]);   // a gear is forward only
+    this.p25 = g === null ? 0 : this.dacPct(this.gears[g][0]);
+    this.p26 = g === null ? 0 : this.dacPct(this.gears[g][1]);
+    return this.gear;
+  }
+
+  /** Edit the two speeds, as DAC codes. Persisted next to the key table. */
+  setGears(patch) {
+    for (const [k, v] of Object.entries(patch || {})) {
+      if (!(k in DEFAULT_GEARS) || !Array.isArray(v) || v.length < 2) continue;
+      this.gears[k] = [dac255(v[0]), dac255(v[1])];
+    }
+    saveState(this.presets, this.level, this.gears);
+    if (this.gear) this.setGear(this.gear);   // whatever is engaged follows the edit
+    return this.gears;
+  }
+
+  /** True when the engaged gear asks for more volts than --v-max can give. */
+  get gearClamped() {
+    if (!this.gear) return false;
+    const ceiling = esp.dacFor(this.vMax);
+    return this.gears[this.gear].some((d) => d > ceiling);
   }
 
   /**
@@ -234,6 +326,7 @@ export class Bench {
     this.p25 = this.p26 = 0;
     this.keyMode = false;
     this.autoMode = false;
+    this.gear = null;
     this.keys = [];
     this.combo = null;
     this.requestDirection([false, false]);
@@ -289,8 +382,15 @@ export class Bench {
    * multiplying that by a second number means the slider you tuned and the
    * volts on the pin are two different things. One limit per path — `max` on
    * /follow, the master level on /drive.
+   *
+   * A gear is exempt for the same reason, and more bluntly: it is written as a
+   * DAC code, and a code multiplied by a master level is a different code. The
+   * page says so next to the level, because this is the one place on /drive
+   * where that slider does not bite.
    */
-  scaled(p) { return this.autoMode ? p : (p * this.level) / 100; }
+  scaled(p) {
+    return (this.autoMode || this.gear) ? p : (p * this.level) / 100;
+  }
 
   /** @returns {[number, number, boolean, string]} pct25, pct26, enable, reason */
   resolve() {
@@ -309,16 +409,25 @@ export class Bench {
     if (this.autoMode && Date.now() - this.lastAutoAt > KEYS_STALE_MS) {
       return [0, 0, true, 'kadr gəlmir'];
     }
+    // And for a gear. It is a held throttle with no keyup behind it, so the
+    // only thing standing between a wedged tab and a robot at 3.12 V is the
+    // page still saying, twenty times a second, that it means it.
+    if (this.gear && Date.now() - this.lastGearAt > KEYS_STALE_MS) {
+      return [0, 0, true, 'no gear report'];
+    }
     // A direction change is pending: hold everything at zero so the wheels
     // stop and the board's interlock can release. Crossing phase wires under
     // load destroys the controller's output stage.
     if (this.dirSettling) {
       return [0, 0, true, `${Bench.dirName(this.dirWant).toLowerCase()}…`];
     }
-    if (this.level === 0 && !this.autoMode) return [0, 0, true, 'level 0 %'];
+    if (this.level === 0 && !this.autoMode && !this.gear) {
+      return [0, 0, true, 'level 0 %'];
+    }
     const moving = Bench.dirName(this.dirWant);
     const label = moving === 'FORWARD'
       ? (this.autoMode ? `follow: ${this.autoReason || 'gedir'}`
+        : this.gear ? `gear ${this.gear}`
         : this.combo ? `key ${this.combo}` : 'running')
       : moving;
     return [this.scaled(this.p25), this.scaled(this.p26), true, label];
@@ -347,6 +456,9 @@ export class Bench {
       scan_spin: this.scanSpin,
       presets: this.presets,
       level: this.level,
+      gear: this.gear,                         // which fixed speed is engaged
+      gears: this.gears,                       // ...and the codes behind both
+      gear_clamped: this.gearClamped,
       dir_want: this.dirWant,
       dir: this.dir,
       dir_settling: this.dirSettling,
@@ -355,8 +467,15 @@ export class Bench {
       out: [r1(outA), r1(outB)],               // percent actually streaming
       out_v: [r2(esp.pctToVolts(outA, this.vMax)),
               r2(esp.pctToVolts(outB, this.vMax))],
+      // The codes those volts become, worked out the way the firmware does it.
+      // Percent is a convenience; this is the number the pin is handed, and a
+      // gear is set in it, so the page can show that what was asked for is
+      // what went out.
+      out_dac: [esp.dacFor(esp.pctToVolts(outA, this.vMax)),
+                esp.dacFor(esp.pctToVolts(outB, this.vMax))],
       idle_v: esp.V_IDLE,
       vmax: r2(this.vMax),
+      vref: esp.V_REF,
       esp: {
         ...board,
         // What the board says it did, expressed the same way the UI shows it.
@@ -372,6 +491,7 @@ export class Bench {
 const r1 = (v) => Math.round(v * 10) / 10;
 const r2 = (v) => Math.round(v * 100) / 100;
 const pct100 = (v) => Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
+const dac255 = (v) => Math.max(0, Math.min(255, Math.round(Number(v) || 0)));
 
 function normaliseRow(raw, fallback) {
   // Accept both the current {p,r} shape and the older bare [%, %] array.
@@ -389,6 +509,16 @@ function normaliseRow(raw, fallback) {
   return { p: [...fallback.p], r: [...fallback.r] };
 }
 
+function normaliseGears(raw) {
+  const gears = {};
+  for (const k of Object.keys(DEFAULT_GEARS)) gears[k] = [...DEFAULT_GEARS[k]];
+  for (const k of Object.keys(DEFAULT_GEARS)) {
+    const v = raw && raw[k];
+    if (Array.isArray(v) && v.length >= 2) gears[k] = [dac255(v[0]), dac255(v[1])];
+  }
+  return gears;
+}
+
 function loadSaved() {
   const presets = {};
   for (const k of Object.keys(DEFAULT_PRESETS)) {
@@ -400,17 +530,17 @@ function loadSaved() {
       if (k in raw) presets[k] = normaliseRow(raw[k], DEFAULT_PRESETS[k]);
     }
     const level = typeof raw._level === 'number' ? pct100(raw._level) : DEFAULT_LEVEL;
-    return { presets, level };
+    return { presets, level, gears: normaliseGears(raw._gears) };
   } catch {
     // Missing or corrupt: fall back rather than refusing to start.
-    return { presets, level: DEFAULT_LEVEL };
+    return { presets, level: DEFAULT_LEVEL, gears: normaliseGears(null) };
   }
 }
 
-function saveState(presets, level) {
+function saveState(presets, level, gears) {
   try {
     fs.writeFileSync(PRESETS_FILE,
-      JSON.stringify({ ...presets, _level: level }, null, 2));
+      JSON.stringify({ ...presets, _level: level, _gears: gears }, null, 2));
   } catch (err) {
     console.warn('could not save presets:', err.message);
   }

@@ -74,6 +74,19 @@ export function dacFor(v) {
   return Math.max(0, Math.min(255, Math.round(clamp(v) / V_REF * 255)));
 }
 
+/**
+ * DAC code -> volts. The inverse of dacFor.
+ *
+ * Full scale is the chip's reference (VDD), never --v-max: a code is what the
+ * pin is physically given, and lowering the ceiling cannot make the same code
+ * mean a different voltage — it can only stop you asking for it. So the clamp
+ * against the ceiling belongs to whoever is doing the asking, not here.
+ */
+export function dacToVolts(dac) {
+  const d = Math.max(0, Math.min(255, Math.round(Number(dac) || 0)));
+  return (d / 255) * V_REF;
+}
+
 // "v=2.00 dac=155 rx=282 pkt=47 bad=0 vL=2.00 vR=1.60 dacL=155 dacR=124"
 const REPORT_RE = /v=([\d.]+)\s+dac=(\d+)\s+rx=(\d+)\s+pkt=(\d+)\s+bad=(\d+)/;
 const REPORT2_RE = /vL=([\d.]+)\s+vR=([\d.]+)\s+dacL=(\d+)\s+dacR=(\d+)/;

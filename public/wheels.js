@@ -260,6 +260,19 @@ const INFO = {
     'Bu xətadan sonra irəli getmək vəziyyəti pisləşdirir.',
     'Robot yerində fırlanıb yola çevrilir.',
     'Çox tez-tez işə düşürsə base-i azalt.'],
+  gear: ['İki sabit sürət',
+    'NORMAL və SÜRƏT — eyni anda yalnız biri. Seçilən sürət pinlərə birbaşa '
+    + 'öz DAC rəqəmini verir.',
+    'İşlət: ARM, sonra sürəti seç. W/A/S/D basmaq sürəti söndürür — əl həmişə '
+    + 'üstündür.',
+    'Xam çıxış: dönmə həddi, güc düzəlişi və master level buna TƏTBİQ OLUNMUR '
+    + '— yazdığın rəqəm pinə gedən rəqəmdir.'],
+  gearDac: ['Sürətin DAC rəqəmi',
+    'Pinin aldığı 0-255 rəqəmi: dac = V / 3.3 × 255. 124 ≈ 1.60 V, 241 ≈ 3.12 V.',
+    'Ölç: /manual-da faizi qaldır, təkərin getdiyi sürəti bəyənəndə yanındakı '
+    + 'DAC rəqəmini bura yaz.',
+    '77-dən aşağısı boş yerədir — 1.00 V idle-dır, ondan aşağı heç vaxt '
+    + 'çıxmır. İki pinin rəqəmi 2-3 fərqlənə bilər: motorlar eyni deyil.'],
   vmax: ['100 % nə deməkdir',
     'Serverin --v-max dəyəri. 100 % = bu gərginlik.',
     'ESP32 üçün 3.3 V.',

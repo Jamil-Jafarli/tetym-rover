@@ -75,6 +75,18 @@
     background:var(--stop);border-color:var(--stop);color:#fff}
   .small{padding:9px 14px;font-size:13px}
 
+  /* ── the two fixed speeds ────────────────────────────────── */
+  .seg{display:flex;gap:10px}
+  .seg .gear{flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;
+    padding:14px 8px;line-height:1}
+  .seg .gear b{font:600 15px/1 inherit;letter-spacing:1.4px}
+  .seg .gear span{font:11px/1.3 ui-monospace,monospace;color:var(--dim);text-align:center}
+  .seg .gear.on{background:var(--idle);border-color:var(--idle);color:#04182e}
+  .seg .gear.on span{color:#04182e;opacity:.8}
+  .seg #g-fast.on{background:var(--stop);border-color:var(--stop);color:#fff}
+  .seg #g-fast.on span{color:#fff;opacity:.85}
+  .gwarn{color:var(--warn);font-size:13px;margin-top:10px}
+
   /* ── master level ────────────────────────────────────────── */
   .levelbar{height:16px;border-radius:8px;background:var(--line);overflow:hidden;margin-top:12px;position:relative}
   .levelbar>i{display:block;height:100%;width:100%;background:var(--idle);transition:width .08s linear}
@@ -129,6 +141,38 @@
   </div>
 
   <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <div class="lbl" style="margin:0" id="gearLbl">Sabit sürət — biri, ya da o biri</div>
+      <span class="muted" id="gearState">seçilməyib</span>
+    </div>
+    <div class="seg">
+      <button class="gear" id="g-normal" data-g="normal">
+        <b>NORMAL</b><span id="gs-normal">–</span>
+      </button>
+      <button class="gear" id="g-fast" data-g="fast">
+        <b>SÜRƏT</b><span id="gs-fast">–</span>
+      </button>
+    </div>
+    <div class="gwarn" id="gearWarn" hidden></div>
+    <table style="margin-top:14px">
+      <thead>
+        <tr><th>Sürət</th><th>GPIO25 dac</th><th>GPIO26 dac</th></tr>
+      </thead>
+      <tbody id="gbody"></tbody>
+    </table>
+    <div class="muted" style="margin-top:12px">
+      A gear is the DAC code itself, not a percentage of anything:
+      <code>dac = V / 3.3 &times; 255</code>, so 124 is 1.60 V and 241 is 3.12 V.
+      The wheel trim and the master level below are <b>not</b> applied to it —
+      what you type here is what the pin gets.
+      <br><br>Only one at a time. Tap the lit one again to release it, and
+      pressing W / A / S / D releases it too — a hand on the keyboard always
+      wins. A gear has no keyup behind it, so the page keeps saying it means
+      it at 20 Hz; stop reporting and it coasts to 0 % like everything else.
+    </div>
+  </div>
+
+  <div class="card">
     <div class="row">
       <div class="lbl" style="margin:0">Master level — scales everything</div>
       <div class="row" style="gap:8px">
@@ -175,6 +219,7 @@
     <div class="diag">
       <span>held <b id="held">–</b></span>
       <span>sending <b id="outv">0 / 0 %</b></span>
+      <span>dac <b id="dacv">– / –</b></span>
       <span>pkt <b id="pkt">0</b></span>
       <span>rssi <b id="rssi">–</b></span>
     </div>
@@ -236,10 +281,18 @@ const DEFAULTS = {
 };
 const clone = o => JSON.parse(JSON.stringify(o));
 
-let VMAX = 3.3, IDLE_V = 1.0;
+// The two fixed speeds, as [GPIO25, GPIO26] DAC codes. The server owns them —
+// these are only what to draw before the first status arrives.
+const GEARS = [['normal', 'NORMAL'], ['fast', 'SÜRƏT']];
+const GEAR_DEFAULTS = { normal: [124, 126], fast: [241, 241] };
+
+let VMAX = 3.3, IDLE_V = 1.0, VREF = 3.3;
 let ws = null, armed = false, running = false;
 let presets = clone(DEFAULTS);
 let level = 100;
+let gears = clone(GEAR_DEFAULTS);
+let gear = null;            // which one is engaged, or null
+let gearAt = 0;             // when we last changed it locally
 const held = new Set();
 let pump = null, editing = false;
 
@@ -304,6 +357,79 @@ function paintVolts() {
   }
 }
 
+// ── the two fixed speeds ───────────────────────────────────────────
+// A gear is written in DAC codes because that is what the pin is handed.
+// Volts are shown next to every one of them so the number is never abstract:
+// the board's DAC runs off its 3.3 V rail, whatever --v-max is set to.
+const dacVolts = d => (Math.max(0, Math.min(255, d)) / 255) * VREF;
+const dacCeiling = () => Math.round((VMAX / VREF) * 255);
+
+function buildGears() {
+  $('gbody').innerHTML = GEARS.map(([g, label]) => `
+    <tr id="grow-${g}">
+      <td>${label}</td>
+      <td class="n"><input type="number" id="gd-${g}-0" min="0" max="255" step="1">
+        <span class="volts" id="gv-${g}-0"></span></td>
+      <td class="n"><input type="number" id="gd-${g}-1" min="0" max="255" step="1">
+        <span class="volts" id="gv-${g}-1"></span></td>
+    </tr>`).join('');
+
+  for (const [g] of GEARS) {
+    for (const i of [0, 1]) {
+      const el = $(`gd-${g}-${i}`);
+      el.addEventListener('focus', () => { editing = true; });
+      el.addEventListener('blur', () => { editing = false; });
+      el.addEventListener('input', () => {
+        const v = Math.round(parseFloat(el.value));
+        if (!isFinite(v)) return;                 // mid-typing, leave it alone
+        gears[g][i] = Math.max(0, Math.min(255, v));
+        paintGears();
+        send({cmd: 'gears', gears: {[g]: gears[g]}});
+      });
+    }
+    $(`g-${g}`).addEventListener('click', () => selectGear(g));
+  }
+}
+
+// Exclusive: selecting one releases the other, and tapping the lit one
+// releases it outright. The server enforces the same thing — it holds a single
+// gear — so a status frame can never show both.
+function selectGear(g) {
+  gear = gear === g ? null : g;
+  gearAt = Date.now();
+  paintGears();
+  paintLevel();          // the level hint changes meaning with the gear
+  send({cmd: 'gear', gear});
+}
+
+function paintGears() {
+  const ceiling = dacCeiling();
+  let over = null;
+  for (const [g, label] of GEARS) {
+    const [a, b] = gears[g];
+    for (const i of [0, 1]) {
+      const el = $(`gd-${g}-${i}`);
+      if (document.activeElement !== el) el.value = gears[g][i];
+      $(`gv-${g}-${i}`).textContent = dacVolts(gears[g][i]).toFixed(2) + ' V';
+    }
+    $(`gs-${g}`).textContent =
+      `dac ${a} / ${b} · ${dacVolts(a).toFixed(2)} / ${dacVolts(b).toFixed(2)} V`;
+    $(`g-${g}`).classList.toggle('on', gear === g);
+    $(`grow-${g}`).classList.toggle('on', gear === g);
+    if (gear === g && (a > ceiling || b > ceiling)) over = label;
+  }
+  $('gearState').textContent = !gear ? 'seçilməyib'
+    : armed ? `${gear} — gedir` : `${gear} — ARM gözləyir`;
+  // A ceiling below the code cannot be met, and a robot running slower than
+  // the number on its own button is the kind of wrong you chase for an hour.
+  $('gearWarn').hidden = !over;
+  if (over) {
+    $('gearWarn').textContent =
+      `${over} tavandan yuxarıdır: --v-max ${VMAX.toFixed(2)} V = dac ${ceiling}. `
+      + `Pinə ${ceiling} gedəcək, yazdığın rəqəm yox.`;
+  }
+}
+
 // ── master level ───────────────────────────────────────────────────
 function paintLevel() {
   if (document.activeElement !== $('lvlNum')) $('lvlNum').value = level;
@@ -313,9 +439,14 @@ function paintLevel() {
   bar.classList.toggle('hot', level > 60 && level < 100);
   bar.classList.toggle('max', level >= 100);
   const fwd = scaled(presets.w.p[0]);
-  $('lvlHint').textContent =
-    `W forward now gives ${Math.round(fwd)} % \u00b7 ${voltsFor(presets.w.p[0]).toFixed(2)} V`
-    + (level === 0 ? ' — nothing will move at 0 %' : '');
+  // While a gear is engaged this slider does nothing, and saying so here is
+  // the difference between a safe walk-up and a false sense of one.
+  $('lvlHint').textContent = gear
+    ? `${gear} sürəti seçilib — master level ona TƏTBİQ OLUNMUR: `
+      + `dac ${gears[gear][0]} / ${gears[gear][1]} olduğu kimi gedir`
+    : `W forward now gives ${Math.round(fwd)} % \u00b7 `
+      + `${voltsFor(presets.w.p[0]).toFixed(2)} V`
+      + (level === 0 ? ' — nothing will move at 0 %' : '');
   paintVolts();
 }
 
@@ -355,6 +486,10 @@ function paintKeys() {
 
 function down(k) {
   if (!armed || held.has(k)) return;
+  // A hand on the keyboard wins, here as on the server: the key report that
+  // follows drops the gear anyway, so releasing it locally first only stops
+  // the pump from arguing about it for one frame.
+  if (gear) { gear = null; gearAt = Date.now(); paintGears(); paintLevel(); }
   held.add(k); paintKeys(); pushKeys();
 }
 function up(k) {
@@ -405,6 +540,7 @@ function paint() {
   $('arm').textContent = armed ? 'ARMED — tap to disarm' : 'ARM';
   $('hint').textContent = armed ? 'Hold W / A / D — S reverses — release to coast'
                                 : 'Arm first, then hold W / A / D';
+  paintGears();     // "ARM gözləyir" is only true until it is not
 }
 
 // ── websocket ──────────────────────────────────────────────────────
@@ -415,10 +551,14 @@ function connect() {
   ws.onopen = () => {
     $('dot').className = 'dot ok';
     $('linktxt').textContent = 'connected';
-    // Report key state at 20 Hz: that is the dead-man. Stop reporting and the
-    // server coasts to 0 % within 400 ms.
+    // Report at 20 Hz: that is the dead-man. Stop reporting and the server
+    // coasts to 0 % within 400 ms — whichever of the two is driving, because
+    // a gear is held to the same rule as a held key.
     clearInterval(pump);
-    pump = setInterval(() => { if (armed) pushKeys(); }, 50);
+    pump = setInterval(() => {
+      if (!armed) return;
+      if (gear) send({cmd: 'gear', gear}); else pushKeys();
+    }, 50);
   };
 
   ws.onclose = () => {
@@ -436,9 +576,20 @@ function connect() {
     if (WT) WT.fromStatus(s);
     if (s.vmax) VMAX = s.vmax;
     if (s.idle_v != null) IDLE_V = s.idle_v;
+    if (s.vref) VREF = s.vref;
     if (s.presets && !editing) { presets = s.presets; paintPresets(); }
     if (typeof s.level === 'number' && !editing && s.level !== level) {
       setLevel(s.level, false);
+    }
+    if (s.gears && !editing) { gears = s.gears; paintGears(); }
+    // The server is the authority on which gear is engaged — it is what drops
+    // one when a key arrives. But a status frame already in flight when the
+    // button was tapped would undo the tap, so a local change is left alone
+    // for long enough that the echo of it is the one that lands.
+    if (Date.now() - gearAt > 400 && (s.gear || null) !== gear) {
+      gear = s.gear || null;
+      paintGears();
+      paintLevel();
     }
 
     running = s.running;
@@ -456,6 +607,10 @@ function connect() {
     $('vR').textContent = (e.vR ?? IDLE_V).toFixed(2);
     $('barL').style.width = pl + '%';
     $('barR').style.width = pr + '%';
+    // The board's own codes when it reports them, otherwise the ones we sent.
+    // In a gear these are the number on the button, and that is the point.
+    const dac = e.dacL != null ? [e.dacL, e.dacR] : (s.out_dac || null);
+    $('dacv').textContent = dac ? `${dac[0]} / ${dac[1]}` : '– / –';
     $('pkt').textContent = e.pkt ?? '–';
     $('rssi').textContent = e.rssi != null ? e.rssi : '–';
     if (e.en_pin != null) $('enPin').textContent = 'GPIO' + e.en_pin;
@@ -492,7 +647,9 @@ function connect() {
 }
 
 buildTable();
+buildGears();
 paintPresets();
+paintGears();
 paintLevel();
 paintKeys();
 paint();
@@ -503,6 +660,12 @@ connect();
 // numbers below are not applied here, which is deliberate on the pages
 // where the threshold is measured.
 const WT = wheelsMount({ strip: true, mode: 'raw' });
+
+// The ⓘ for the gears comes from the same table as every other explanation,
+// so what the buttons do and what the tooltip says cannot drift apart.
+$('gearLbl').insertAdjacentHTML('beforeend', infoHtml('gear'));
+$('gbody').closest('table').querySelector('th:nth-child(2)')
+  .insertAdjacentHTML('beforeend', infoHtml('gearDac'));
 </script>
 </body>
 </html>

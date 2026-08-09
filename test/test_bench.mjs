@@ -16,7 +16,7 @@ import WebSocket from 'ws';
 import fs from 'node:fs';
 
 import * as esp from '../esp.js';
-import { resolveKeys, DEFAULT_PRESETS } from '../bench.js';
+import { resolveKeys, DEFAULT_PRESETS, DEFAULT_GEARS } from '../bench.js';
 import { summarise } from '../follow_log.js';
 import { Esp32 } from '../esp32sim.js';
 import { Esp32WsSim, dacFor } from '../esp32ws_sim.js';
@@ -654,6 +654,270 @@ async function driveChecks() {
 }
 
 
+// ── 5b. the two fixed speeds ─────────────────────────────────────────
+/**
+ * A gear is set in DAC codes, so the only check worth making is whether that
+ * exact code came out the other end of browser -> server -> wifi -> pin.
+ *
+ * Run at --v-max 3.3, the board's own ceiling. Everything else in this file
+ * uses 2.6 to prove the percent scaling; here a lower ceiling would clamp the
+ * fast gear and the test would be measuring the clamp instead of the gear.
+ * The clamp gets its own check at the end, where it is the subject.
+ */
+async function gearChecks() {
+  console.log('\n5b. two fixed speeds: the dac code you set is the code on the pin');
+  const port = HTTP_PORT + 2;
+  const srv = spawn(process.execPath,
+    [path.join(HERE, '..', 'server.js'), '--fake', '--esp', 'sim',
+      '--http', String(port), '--host', '127.0.0.1', '--v-max', '3.3'],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+
+  let log = '';
+  srv.stdout.on('data', (d) => { log += d.toString(); });
+  srv.stderr.on('data', (d) => { log += d.toString(); });
+
+  try {
+    check('the two defaults are the measured codes',
+      JSON.stringify(DEFAULT_GEARS.normal) === '[124,126]'
+      && JSON.stringify(DEFAULT_GEARS.fast) === '[241,241]',
+      JSON.stringify(DEFAULT_GEARS));
+    check('the slow gear differs per pin and the fast one does not',
+      DEFAULT_GEARS.normal[0] !== DEFAULT_GEARS.normal[1]
+      && DEFAULT_GEARS.fast[0] === DEFAULT_GEARS.fast[1]);
+    check('dacToVolts inverts the firmware rounding',
+      esp.dacFor(esp.dacToVolts(124)) === 124
+      && esp.dacFor(esp.dacToVolts(241)) === 241);
+    check('a code below idle cannot be asked for',
+      esp.dacFor(esp.pctToVolts(esp.voltsToPct(esp.dacToVolts(30), 3.3), 3.3)) === 77,
+      'dac 30 is 0.39 V; the floor is 1.00 V');
+
+    for (let i = 0; i < 80 && !log.includes('ESP32 DAC bench'); i++) await sleep(100);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/`);
+    await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });
+    const inbox = [];
+    ws.on('message', (raw) => inbox.push(JSON.parse(raw.toString())));
+
+    const waitAck = async (ack, timeout = 2000) => {
+      const t0 = Date.now();
+      while (Date.now() - t0 < timeout) {
+        const i = inbox.findIndex((m) => m.type === 'status' && m.ack === ack);
+        if (i >= 0) return inbox.splice(i, 1)[0];
+        await sleep(20);
+      }
+      throw new Error(`no ack for "${ack}"`);
+    };
+    // 1.00 -> 3.12 V at the board's 6 V/s slew is ~350 ms, so wait past it.
+    const settled = async () => { inbox.length = 0; await sleep(700);
+      return inbox[inbox.length - 1]; };
+
+    // presets.json survives between runs, so start from a known table rather
+    // than from whatever the last run left behind.
+    ws.send(JSON.stringify({ cmd: 'gears', gears: DEFAULT_GEARS }));
+    await waitAck('gears');
+
+    // The page re-sends the engaged gear at 20 Hz — that is its dead-man.
+    let engaged = null;
+    const pump = setInterval(() => {
+      if (engaged) ws.send(JSON.stringify({ cmd: 'gear', gear: engaged }));
+    }, 50);
+
+    ws.send(JSON.stringify({ cmd: 'gear', gear: 'normal' }));
+    let s = await waitAck('gear');
+    check('selecting a gear is echoed back', s.gear === 'normal', `${s.gear}`);
+    engaged = 'normal';
+    s = await settled();
+    check('a gear alone drives nothing — START still has to happen',
+      s.esp.vL === 1.0 && s.esp.vR === 1.0, `${s.esp.vL} V`);
+
+    ws.send(JSON.stringify({ cmd: 'start' }));
+    await waitAck('start');
+    s = await settled();
+    check('NORMAL puts dac 124 on GPIO25 and 126 on GPIO26',
+      s.esp.dacL === 124 && s.esp.dacR === 126, `${s.esp.dacL} / ${s.esp.dacR}`);
+    check('...which is 1.60 / 1.63 V on the wire',
+      Math.abs(s.esp.vL - 1.60) < 0.02 && Math.abs(s.esp.vR - 1.63) < 0.02,
+      `${s.esp.vL} / ${s.esp.vR} V`);
+    check('the server predicts the same codes it got back',
+      JSON.stringify(s.out_dac) === '[124,126]', JSON.stringify(s.out_dac));
+    check('reason names the gear', s.reason === 'gear normal', s.reason);
+    check('a gear is forward only',
+      JSON.stringify(s.dir_want) === '[false,false]', JSON.stringify(s.dir_want));
+
+    engaged = 'fast';
+    ws.send(JSON.stringify({ cmd: 'gear', gear: 'fast' }));
+    await waitAck('gear');
+    s = await settled();
+    check('SÜRƏT puts dac 241 on both pins',
+      s.esp.dacL === 241 && s.esp.dacR === 241, `${s.esp.dacL} / ${s.esp.dacR}`);
+    check('...which is 3.12 V on both',
+      Math.abs(s.esp.vL - 3.12) < 0.02 && Math.abs(s.esp.vR - 3.12) < 0.02,
+      `${s.esp.vL} / ${s.esp.vR} V`);
+    check('the two are exclusive — one gear is engaged, never both',
+      s.gear === 'fast', `${s.gear}`);
+    check('reason follows', s.reason === 'gear fast', s.reason);
+
+    // The master level is the one thing on /drive a gear ignores, because a
+    // code multiplied by a level is a different code.
+    ws.send(JSON.stringify({ cmd: 'level', level: 25 }));
+    await waitAck('level');
+    s = await settled();
+    check('the master level does not scale a gear',
+      s.esp.dacL === 241 && s.level === 25, `dac ${s.esp.dacL} at level ${s.level}`);
+    ws.send(JSON.stringify({ cmd: 'level', level: 0 }));
+    await waitAck('level');
+    s = await settled();
+    check('not even at level 0 — the slider is simply not in this path',
+      s.esp.dacL === 241 && s.reason === 'gear fast',
+      `dac ${s.esp.dacL}, reason ${s.reason}`);
+    ws.send(JSON.stringify({ cmd: 'level', level: 100 }));
+    await waitAck('level');
+
+    // A hand on the keyboard wins, exactly as it does over the pilot.
+    engaged = null;
+    ws.send(JSON.stringify({ cmd: 'presets', presets: { w: { p: [50, 50] } } }));
+    await waitAck('presets');
+    const keyPump = setInterval(
+      () => ws.send(JSON.stringify({ cmd: 'keys', keys: ['w'] })), 50);
+    s = await settled();
+    check('a held key drops the gear', s.gear === null, `${s.gear}`);
+    check('and the preset is what drives',
+      s.reason === 'key w' && Math.abs(s.esp.vL - esp.pctToVolts(50, 3.3)) < 0.03,
+      `${s.reason} ${s.esp.vL} V`);
+    clearInterval(keyPump);
+
+    // ...and the gear takes it back.
+    engaged = 'normal';
+    ws.send(JSON.stringify({ cmd: 'gear', gear: 'normal' }));
+    await waitAck('gear');
+    s = await settled();
+    check('selecting a gear takes the robot off the keys',
+      s.gear === 'normal' && s.esp.dacL === 124, `${s.gear} dac ${s.esp.dacL}`);
+
+    // Editing the codes while one is engaged applies at once.
+    ws.send(JSON.stringify({ cmd: 'gears', gears: { normal: [150, 152] } }));
+    await waitAck('gears');
+    s = await settled();
+    check('editing the engaged gear takes effect immediately',
+      s.esp.dacL === 150 && s.esp.dacR === 152, `${s.esp.dacL} / ${s.esp.dacR}`);
+    check('the other gear is untouched',
+      JSON.stringify(s.gears.fast) === '[241,241]', JSON.stringify(s.gears.fast));
+
+    ws.send(JSON.stringify({ cmd: 'gears', gears: { normal: [900, -40] } }));
+    await waitAck('gears');
+    s = await settled();
+    check('out-of-range codes clamp to 0-255',
+      JSON.stringify(s.gears.normal) === '[255,0]', JSON.stringify(s.gears.normal));
+    check('dac 0 is still the idle floor on the pin, never 0 V',
+      s.esp.vR === 1.0, `${s.esp.vR} V`);
+
+    const saved = JSON.parse(fs.readFileSync(path.join(HERE, '..', 'presets.json'), 'utf8'));
+    check('the codes are persisted next to the key table',
+      JSON.stringify(saved._gears.normal) === '[255,0]',
+      JSON.stringify(saved._gears));
+
+    ws.send(JSON.stringify({ cmd: 'gears', gears: DEFAULT_GEARS }));
+    await waitAck('gears');
+
+    // The dead-man. A gear has no keyup behind it, so this is the only thing
+    // between a wedged tab and a robot that keeps going.
+    s = await settled();
+    check('driving before the dead-man test', s.esp.dacL === 124, `${s.esp.dacL}`);
+    clearInterval(pump);
+    engaged = null;
+    await sleep(900);
+    s = inbox[inbox.length - 1];
+    check('the page goes quiet -> the gear coasts to 0 %',
+      s.esp.vL === 1.0 && s.esp.vR === 1.0, `${s.esp.vL} V`);
+    check('reason says why', s.reason === 'no gear report', s.reason);
+    check('the driver stays enabled — a dropped frame is not a relay cycle',
+      s.esp.en === true);
+    check('and the gear is still selected, waiting to be meant again',
+      s.gear === 'normal', `${s.gear}`);
+
+    // With the pump stopped, an ack is unambiguously the answer to what was
+    // just sent rather than the tail of twenty frames a second saying 'normal'.
+    inbox.length = 0;
+    ws.send(JSON.stringify({ cmd: 'gear', gear: null }));
+    s = await waitAck('gear');
+    check('null releases it', s.gear === null, `${s.gear}`);
+
+    inbox.length = 0;
+    ws.send(JSON.stringify({ cmd: 'gear', gear: 'nitro' }));
+    s = await waitAck('gear');
+    check('an unknown gear is ignored, not engaged', s.gear === null, `${s.gear}`);
+
+    inbox.length = 0;
+    ws.send(JSON.stringify({ cmd: 'gear', gear: 'fast' }));
+    await waitAck('gear');
+    ws.send(JSON.stringify({ cmd: 'idle' }));
+    s = await waitAck('idle');
+    check('IDLE clears the gear as well as the values', s.gear === null, `${s.gear}`);
+    s = await settled();
+    check('nothing is left driving after IDLE',
+      s.esp.vL === 1.0 && s.esp.en === false, `${s.esp.vL} V`);
+
+    // presets.json outlives this process, so put back everything this section
+    // moved. A suite that leaves the robot retuned fails the NEXT run, in a
+    // different section, for a reason that is nowhere near the change.
+    ws.send(JSON.stringify({ cmd: 'presets', presets: DEFAULT_PRESETS }));
+    await waitAck('presets');
+    ws.send(JSON.stringify({ cmd: 'gears', gears: DEFAULT_GEARS }));
+    await waitAck('gears');
+    ws.send(JSON.stringify({ cmd: 'level', level: 100 }));
+    await waitAck('level');
+
+    ws.close();
+    await sleep(150);
+  } finally {
+    srv.kill('SIGINT');
+    await sleep(400);
+    srv.kill('SIGKILL');
+  }
+
+  // The ceiling, as its own subject: --v-max below the gear's own voltage
+  // cannot be met, and the robot must say so rather than quietly run slow.
+  console.log('\n5c. a gear above --v-max');
+  const port2 = HTTP_PORT + 3;
+  const srv2 = spawn(process.execPath,
+    [path.join(HERE, '..', 'server.js'), '--fake', '--esp', 'sim',
+      '--http', String(port2), '--host', '127.0.0.1', '--v-max', '1.8'],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+  let log2 = '';
+  srv2.stdout.on('data', (d) => { log2 += d.toString(); });
+  srv2.stderr.on('data', (d) => { log2 += d.toString(); });
+  try {
+    for (let i = 0; i < 80 && !log2.includes('ESP32 DAC bench'); i++) await sleep(100);
+    const ws = new WebSocket(`ws://127.0.0.1:${port2}/`);
+    await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });
+    const inbox = [];
+    ws.on('message', (raw) => inbox.push(JSON.parse(raw.toString())));
+    ws.send(JSON.stringify({ cmd: 'gears', gears: DEFAULT_GEARS }));
+    await sleep(120);
+    let engaged = 'fast';
+    const pump = setInterval(
+      () => ws.send(JSON.stringify({ cmd: 'gear', gear: engaged })), 50);
+    ws.send(JSON.stringify({ cmd: 'start' }));
+    inbox.length = 0;
+    await sleep(700);
+    const s = inbox[inbox.length - 1];
+    check('a gear above the ceiling says it is clamped', s.gear_clamped === true);
+    check('and lands on the ceiling instead of the code',
+      s.esp.dacL === esp.dacFor(1.8), `${s.esp.dacL}, ceiling ${esp.dacFor(1.8)}`);
+    engaged = 'normal';
+    ws.send(JSON.stringify({ cmd: 'gear', gear: 'normal' }));
+    await sleep(500);
+    clearInterval(pump);
+    const s2 = inbox[inbox.length - 1];
+    check('a gear under the ceiling is not flagged', s2.gear_clamped === false);
+    ws.close();
+    await sleep(150);
+  } finally {
+    srv2.kill('SIGINT');
+    await sleep(400);
+    srv2.kill('SIGKILL');
+  }
+}
+
 // ── 6. the follow page: vision drives the motors ─────────────────────
 // The page itself is checked in test_vision / test_pilot; what is checked here
 // is the part that can actually run a robot into a wall — the command path and
@@ -1085,6 +1349,7 @@ serialProtocolChecks();
 keyChecks();
 await serverChecks();
 await driveChecks();
+await gearChecks();
 await followChecks();
 await sonarChecks();
 await pinChecks();
