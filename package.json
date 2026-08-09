@@ -8,12 +8,15 @@
     "start": "node server.js",
     "fake": "node server.js --fake",
     "list": "node server.js --list",
-    "test": "node test/test_bench.mjs && node test/test_pilot.mjs && node test/test_analyse.mjs && node test/test_sonar.mjs && node test/test_vision.mjs",
+    "test": "node test/test_globals.mjs && node test/test_bench.mjs && node test/test_pilot.mjs && node test/test_wheels.mjs && node test/test_analyse.mjs && node test/test_sonar.mjs && node test/test_vision.mjs && node test/test_pages.mjs",
     "test:bench": "node test/test_bench.mjs",
     "test:pilot": "node test/test_pilot.mjs",
     "test:analyse": "node test/test_analyse.mjs",
     "test:sonar": "node test/test_sonar.mjs",
-    "test:vision": "node test/test_vision.mjs"
+    "test:vision": "node test/test_vision.mjs",
+    "test:globals": "node test/test_globals.mjs",
+    "test:wheels": "node test/test_wheels.mjs",
+    "test:pages": "node test/test_pages.mjs"
   },
   "dependencies": {
     "serialport": "^12.0.0",

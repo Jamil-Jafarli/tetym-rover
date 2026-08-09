@@ -205,6 +205,34 @@
   </div>
 
   <div class="card">
+    <div class="lbl" style="margin-bottom:4px">Təkər balansı</div>
+    <p class="muted" style="margin:0 0 12px">İki motor heç vaxt eyni motor
+    deyil. Hər təkərin öz dönmə həddi və öz gücü var — eyni gərginlikdə biri
+    daha sürətli gedirsə, robot düz getmir. Bunlar <b>ölçüləndən sonra</b>
+    doldurulur: <a href="/manual">manual səhifəsində</a> hər təkəri ayrıca
+    qaldır, ilk döndüyü faizi yaz.</p>
+    <div class="sl">
+      <div class="row"><span class="muted">GPIO25 — dönmə həddi</span><b id="vS25">ümumi</b></div>
+      <input type="range" id="stall25" min="0" max="60" step="1" value="0">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">GPIO26 — dönmə həddi</span><b id="vS26">ümumi</b></div>
+      <input type="range" id="stall26" min="0" max="60" step="1" value="0">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">GPIO25 — güc düzəlişi</span><b id="vG25">1.00</b></div>
+      <input type="range" id="gain25" min="50" max="150" step="1" value="100">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">GPIO26 — güc düzəlişi</span><b id="vG26">1.00</b></div>
+      <input type="range" id="gain26" min="50" max="150" step="1" value="100">
+    </div>
+    <p class="muted" style="margin:10px 0 0">Hədd sürgüsü <b>0</b>-dırsa, yuxarıdakı
+    ümumi hədd işlənir. Güc düzəlişini axırda işlət: əvvəlcə həddləri düzəlt,
+    yalnız sonra hələ də fərq varsa sürətli təkəri azalt.</p>
+  </div>
+
+  <div class="card">
     <div class="lbl" style="margin-bottom:12px">Sükan</div>
     <div class="sl">
       <div class="row"><span class="muted">Sərtlik (kP)</span><b id="vKp">0.85</b></div>
@@ -321,6 +349,7 @@
 <script src="/road.js"></script>
 <script src="/pilot.js"></script>
 <script src="/sonar.js"></script>
+<script src="/wheels.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const view = $('view'), vctx = view.getContext('2d', { willReadFrequently: true });
@@ -364,6 +393,7 @@ function connect() {
   ws.onmessage = ev => {
     let s; try { s = JSON.parse(ev.data); } catch { return; }
     if (s.type !== 'status') return;
+    if (WT) WT.fromStatus(s);
     status = s;
     paintLink(s);
     if (!armed && s.follow_cfg) applySaved(s.follow_cfg);
@@ -422,10 +452,18 @@ const S = [
   ['stall', v => pcfg.stall = v,       () => showV(pcfg.stall + 0.001),   () => pcfg.stall],
   ['hard',  v => pcfg.hard = v / 100,  () => pcfg.hard.toFixed(2),        () => pcfg.hard * 100],
   ['crawl', v => pcfg.crawl = v,       () => `${pcfg.crawl} % · ${showV(lift(pcfg.crawl, pcfg.stall))}`, () => pcfg.crawl],
+  // 0 on these sliders means "no override" — the shared threshold is used.
+  ['stall25', v => pcfg.stall25 = (v || null), () => wheelStall(pcfg.stall25), () => pcfg.stall25 || 0],
+  ['stall26', v => pcfg.stall26 = (v || null), () => wheelStall(pcfg.stall26), () => pcfg.stall26 || 0],
+  ['gain25', v => pcfg.gain25 = v / 100, () => pcfg.gain25.toFixed(2), () => pcfg.gain25 * 100],
+  ['gain26', v => pcfg.gain26 = v / 100, () => pcfg.gain26.toFixed(2), () => pcfg.gain26 * 100],
 ];
+
+const wheelStall = (v) => (v ? `${v} % · ${showV(v + 0.001)}` : 'ümumi');
 const LABEL = { base:'vBase', min:'vMin', max:'vMax', curve:'vCurve',
                 accel:'vAccel', kp:'vKp', kd:'vKd',
-                stall:'vStall', hard:'vHard', crawl:'vCrawl' };
+                stall:'vStall', hard:'vHard', crawl:'vCrawl',
+                stall25:'vS25', stall26:'vS26', gain25:'vG25', gain26:'vG26' };
 
 for (const [id, apply, text] of S) {
   $(id).addEventListener('input', () => {
@@ -831,6 +869,17 @@ paintSonar();
 listDevices();
 connect();
 loop();
+
+// The wheel trim, shown the same way on every page — see public/wheels.js.
+// `mode` is a promise to the reader about THIS page: 'raw' means the
+// numbers below are not applied here, which is deliberate on the pages
+// where the threshold is measured.
+const WT = wheelsMount({ strip: false, mode: 'applied' });
+wheelsAnnotate({
+  base: 'base', kp: 'kP', kd: 'kD', curve: 'curve', hard: 'hard',
+  stall: 'stall', stall25: 'stall25', stall26: 'stall26',
+  gain25: 'gain25', gain26: 'gain26', swap: 'swap',
+});
 </script>
 </body>
 </html>

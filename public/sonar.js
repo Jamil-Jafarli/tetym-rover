@@ -1,5 +1,5 @@
 /**
- * The two HC-SR04s: the one looking forward, and the one going round.
+ * The two HC-SR04s: the one looking forward, and the one going sround.
  *
  * Pure, like pilot.js — no DOM, no clock of its own. /obstacle and /sonar draw
  * it, /follow gates its throttle with it, test/test_sonar.mjs runs it in node.
@@ -16,8 +16,8 @@
  *     not "something at this angle".
  */
 
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
-const round = (v, n = 1) => Math.round(v * 10 ** n) / 10 ** n;
+const sclamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const sround = (v, n = 1) => Math.round(v * 10 ** n) / 10 ** n;
 
 // Outside this the sensor is not measuring, it is guessing. Below the floor an
 // HC-SR04 cannot resolve at all; above the ceiling the echo is usually lost
@@ -104,11 +104,11 @@ function obstacleStep(st, cm, cfg, now) {
   return {
     blocked: st.phase !== 'go',
     phase: st.phase,
-    cm: round(v),
+    cm: sround(v),
     waitLeft: Math.round(waitLeft),
-    reason: st.phase === 'stop' ? `maneə ${round(v)} sm — dayanıb`
+    reason: st.phase === 'stop' ? `maneə ${sround(v)} sm — dayanıb`
       : st.phase === 'wait' ? `yol açıldı — ${(waitLeft / 1000).toFixed(1)} s gözləyir`
-      : `açıq · ${round(v)} sm`,
+      : `açıq · ${sround(v)} sm`,
   };
 }
 
@@ -142,7 +142,7 @@ function scanAngle(sinceMs, periodMs, offsetDeg = 0) {
  * halfway between; the nearest is at least a thing that was really there.
  */
 function scanMap(samples, binDeg = 6) {
-  const step = clamp(Number(binDeg) || 6, 1, 45);
+  const step = sclamp(Number(binDeg) || 6, 1, 45);
   const n = Math.ceil(360 / step);
   const bins = new Array(n).fill(null);
   let hits = 0;
@@ -154,7 +154,7 @@ function scanMap(samples, binDeg = 6) {
     const i = Math.floor((((a % 360) + 360) % 360) / step) % n;
     hits++;
     if (bins[i] === null || cm < bins[i].cm) {
-      bins[i] = { ang: i * step + step / 2, cm: round(cm), at: s.at ?? null };
+      bins[i] = { ang: i * step + step / 2, cm: sround(cm), at: s.at ?? null };
     }
   }
 
@@ -164,7 +164,7 @@ function scanMap(samples, binDeg = 6) {
     bins,
     points: seen,
     hits,
-    covered: round(seen.length / n, 3),   // how much of the circle has any answer
+    covered: sround(seen.length / n, 3),   // how much of the circle has any answer
     nearest,
   };
 }

@@ -25,8 +25,8 @@
  * node against synthetic runs.
  */
 
-const round = (v, n = 2) => Math.round(v * 10 ** n) / 10 ** n;
-const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+const around = (v, n = 2) => Math.round(v * 10 ** n) / 10 ** n;
+const aclamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 // Below this, the road ahead counts as straight — the wobble test only means
 // anything where the robot was not being asked to turn.
@@ -89,10 +89,10 @@ function segments(rows) {
   return merged.map((s) => ({
     kind: s.kind,
     t: s.t,
-    dur_s: round((s.end - s.t) / 1000),
-    avg_speed: round(s.sumSpeed / s.n, 1),
-    peak_steer: round(s.peak),
-    dist_m: s.dist == null || s.dist0 == null ? null : round(s.dist - s.dist0),
+    dur_s: around((s.end - s.t) / 1000),
+    avg_speed: around(s.sumSpeed / s.n, 1),
+    peak_steer: around(s.peak),
+    dist_m: s.dist == null || s.dist0 == null ? null : around(s.dist - s.dist0),
   }));
 }
 
@@ -171,26 +171,26 @@ function metrics(rows, stall = 0) {
   const straightSecs = straightRows * dt;
   return {
     rows: rows.length,
-    duration_s: round(dur),
-    dt_s: round(dt, 3),
-    avg_speed: round(sumSpeed / Math.max(1, rows.length), 1),
-    peak_speed: round(peakSpeed, 1),
-    avg_abs_err: round(absErr / Math.max(1, rows.length)),
-    worst_err: round(worst),
-    straight_s: round(straightSecs),
-    bend_s: round(bendRows * dt),
+    duration_s: around(dur),
+    dt_s: around(dt, 3),
+    avg_speed: around(sumSpeed / Math.max(1, rows.length), 1),
+    peak_speed: around(peakSpeed, 1),
+    avg_abs_err: around(absErr / Math.max(1, rows.length)),
+    worst_err: around(worst),
+    straight_s: around(straightSecs),
+    bend_s: around(bendRows * dt),
     // crossings per second of straight-line driving
-    wobble: round(straightSecs > 0.5 ? flips / straightSecs : 0),
-    sat_frac: round(sat / Math.max(1, rows.length)),
+    wobble: around(straightSecs > 0.5 ? flips / straightSecs : 0),
+    sat_frac: around(sat / Math.max(1, rows.length)),
     lost_frames: lostRows,
     lost_events: lostRuns,
-    lost_s: round(lostRows * dt),
-    bend_entry_err: round(lateN ? lateSum / lateN : 0),
+    lost_s: around(lostRows * dt),
+    bend_entry_err: around(lateN ? lateSum / lateN : 0),
     stall,
-    dead_frac: round(wheelN ? deadWheel / wheelN : 0),
-    dead_both_frac: round(rows.length ? deadBoth / rows.length : 0),
+    dead_frac: around(wheelN ? deadWheel / wheelN : 0),
+    dead_both_frac: around(rows.length ? deadBoth / rows.length : 0),
     recover_events: recoverRuns,
-    recover_s: round(recoverRows * dt),
+    recover_s: around(recoverRows * dt),
   };
 }
 
@@ -222,12 +222,12 @@ function calibrate(rows, realMetres, stall = 0) {
   const seconds = ((Number(rows[rows.length - 1].t) || 0) - (Number(rows[0].t) || 0)) / 1000;
   const pct = pctSeconds / seconds;                  // mean throttle over the run
   return {
-    pct: round(pct, 1),
-    metres: round(m, 2),
-    seconds: round(seconds, 2),
-    dead: round(stall, 1),
+    pct: around(pct, 1),
+    metres: around(m, 2),
+    seconds: around(seconds, 2),
+    dead: around(stall, 1),
     // What it works out to, for the person reading it.
-    mps_at_100: round((m / seconds) * (100 / pct), 2),
+    mps_at_100: around((m / seconds) * (100 / pct), 2),
   };
 }
 
@@ -249,7 +249,7 @@ function findings(m, pilot) {
       `Kadrların ${Math.round(m.dead_both_frac * 100)} %-ində HƏR İKİ təkər `
       + `dönmə həddinin (${m.stall} % ≈ 1.5 V) altında idi. Bu, yavaş getmək `
       + `deyil — dayanmaqdır. «Düz yolda sürət»i qaldır.`,
-      { base: Math.round(clamp(Math.max(p.base * 1.5, 15), 5, 100)) });
+      { base: Math.round(aclamp(Math.max(p.base * 1.5, 15), 5, 100)) });
   } else if (m.dead_frac >= 0.25) {
     add('warn', 'Daxili təkər ölü zonada qalır',
       `Təkər əmrlərinin ${Math.round(m.dead_frac * 100)} %-i 0 ilə ${m.stall} % `
@@ -272,12 +272,12 @@ function findings(m, pilot) {
     add('warn', 'Düz yolda yırğalanır',
       `Saniyədə ${m.wobble} dəfə mərkəzi kəsir. Bu, sükanın həddindən artıq `
       + `sərt olmasıdır — robot düzəlişi düzəldir.`,
-      { kP: round(clamp(p.kP * 0.75, 0.1, 2.5)) });
+      { kP: around(aclamp(p.kP * 0.75, 0.1, 2.5)) });
   } else if (m.wobble <= 0.4 && m.avg_abs_err > 0.25) {
     add('warn', 'Yavaş düzəlir',
       `Yırğalanma yoxdur (${m.wobble}/s), amma orta sapma ${m.avg_abs_err} — `
       + `yəni yoldan kənarda gedir və özünü tələsmədən mərkəzə çəkir.`,
-      { kP: round(clamp(p.kP * 1.25, 0.1, 2.5)) });
+      { kP: around(aclamp(p.kP * 1.25, 0.1, 2.5)) });
   } else {
     add('info', 'Düz yolda sabitdir',
       `Saniyədə ${m.wobble} kəsişmə, orta sapma ${m.avg_abs_err}. kP yerindədir.`);
@@ -289,17 +289,17 @@ function findings(m, pilot) {
       `Kadrların ${Math.round(m.sat_frac * 100)} %-ində daxili təkər tam dayanıb `
       + `(sükan ±1). Sürət fərqi ilə bu döngədən kəskin dönmək mümkün deyil — `
       + `döngəyə daha yavaş girmək lazımdır.`,
-      { curve: round(clamp(p.curve + 0.1, 0, 1)) });
+      { curve: around(aclamp(p.curve + 0.1, 0, 1)) });
   }
 
   // 3. Losing the road → too fast into the bends.
   if (m.lost_events > 0) {
     const perMin = m.duration_s > 0 ? (m.lost_events / m.duration_s) * 60 : 0;
     add(m.lost_events >= 3 ? 'warn' : 'info', 'Yolu itirir',
-      `${m.lost_events} dəfə, cəmi ${m.lost_s} s (dəqiqədə ${round(perMin, 1)}). `
+      `${m.lost_events} dəfə, cəmi ${m.lost_s} s (dəqiqədə ${around(perMin, 1)}). `
       + `Kəskin döngədə zəncir qırılır — düz yoldakı sürəti azaltmaq və ya `
       + `döngədə daha çox yavaşlamaq kömək edir.`,
-      m.lost_events >= 3 ? { base: Math.round(clamp(p.base * 0.85, 5, 100)) } : null);
+      m.lost_events >= 3 ? { base: Math.round(aclamp(p.base * 0.85, 5, 100)) } : null);
   }
 
   // 4. Late corners → kD.
@@ -307,7 +307,7 @@ function findings(m, pilot) {
     add('warn', 'Döngəyə gec reaksiya',
       `Döngəyə girərkən orta sapma ${m.bend_entry_err} — yol qabaqda artıq `
       + `dönmüşdü, robot isə hələ düz gedirdi.`,
-      { kD: round(clamp(p.kD + 0.05, 0, 0.6)) });
+      { kD: around(aclamp(p.kD + 0.05, 0, 0.6)) });
   }
 
   // 4b. How much of the lap was spent recovering rather than following?
@@ -317,7 +317,7 @@ function findings(m, pilot) {
       + `(sapma ${p.hard}-ı keçdi). Bir-iki dəfə normaldır; çox olarsa döngəyə `
       + `girmə sürəti hələ də yüksəkdir.`,
       m.recover_s > m.duration_s * 0.25
-        ? { base: Math.round(clamp(p.base * 0.8, 5, 100)) } : null);
+        ? { base: Math.round(aclamp(p.base * 0.8, 5, 100)) } : null);
   }
 
   // 5. Nothing troubled it → there is speed left.
@@ -327,7 +327,7 @@ function findings(m, pilot) {
     add('info', 'Sürət ehtiyatı var',
       `Ən pis sapma ${m.worst_err}, heç yol itməyib, sükan heç dirənməyib. `
       + `Düz yoldakı sürəti bir pillə qaldırmaq olar.`,
-      { base: Math.round(clamp(p.base * 1.15, 5, 100)) });
+      { base: Math.round(aclamp(p.base * 1.15, 5, 100)) });
   }
 
   return out;

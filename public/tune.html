@@ -151,6 +151,7 @@
 
 <script src="/pilot.js"></script>
 <script src="/analyse.js"></script>
+<script src="/wheels.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 let run = null, result = null;
@@ -358,6 +359,13 @@ $('applyCalib').addEventListener('click', () => {
 
 connect();
 listRuns();
+
+// The wheel trim, shown the same way on every page — see public/wheels.js.
+// `mode` is a promise to the reader about THIS page: 'raw' means the
+// numbers below are not applied here, which is deliberate on the pages
+// where the threshold is measured.
+const WT = wheelsMount({ strip: true, mode: 'applied' });
+wheelsFetch().then((c) => WT && WT.paint(c));
 </script>
 </body>
 </html>

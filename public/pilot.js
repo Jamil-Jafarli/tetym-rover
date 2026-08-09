@@ -46,6 +46,15 @@ const PILOT_DEFAULTS = {
   // below it is electrically "stopped", so the demand is mapped onto
   // [stall, 100] and only an exact zero stays at zero.
   stall:  22,
+  // Per wheel, because two motors are never the same motor. `null` means "use
+  // `stall` above"; a number overrides it for that pin. `gain` is the last
+  // trim: if one wheel is still faster at the same volts, take it down.
+  //
+  // These exist because the shared number cannot be right for both. Two
+  // controllers off the same reel differ by a few percent, and near the
+  // threshold a few percent is the difference between turning and not.
+  stall25: null, stall26: null,
+  gain25:  1,    gain26:  1,
   hard:   0.6,   // |error| past which it stops driving forward and turns in place
   crawl:  10,    // demand while doing that
   swap:   false, // true if GPIO26 is the left wheel rather than GPIO25
@@ -158,10 +167,20 @@ function pilotStep(st, obs, cfg, now) {
   const left = st.steer > 0 ? st.speed : inner;
   const right = st.steer > 0 ? inner : st.speed;
 
-  const pct = (v) => Math.round(clamp(lift(v, c.stall), 0, 100) * 10) / 10;
+  // Per wheel: its own dead band, then its own gain. Applied after `swap`, so
+  // the trim belongs to the PIN — which is what you measured — rather than to
+  // whichever side of the robot it happens to drive.
+  //
+  // Number(null) is 0 and Number.isFinite(0) is true, so "no override" has to
+  // be checked for explicitly: falling through to a stall of zero is the one
+  // value that would undo the whole dead-band compensation.
+  const num = (v, d) => (v === null || v === undefined || !Number.isFinite(Number(v))
+    ? d : Number(v));
+  const wheel = (demand, stall, gain) =>
+    Math.round(clamp(lift(clamp(demand * gain, 0, 100), stall), 0, 100) * 10) / 10;
   return {
-    p25: pct(c.swap ? right : left),
-    p26: pct(c.swap ? left : right),
+    p25: wheel(c.swap ? right : left, num(c.stall25, c.stall), num(c.gain25, 1)),
+    p26: wheel(c.swap ? left : right, num(c.stall26, c.stall), num(c.gain26, 1)),
     speed: Math.round(st.speed * 10) / 10,   // the demand, before the dead band
     steer: Math.round(st.steer * 1000) / 1000,
     reason,
@@ -212,6 +231,116 @@ function metresPerSecond(pct, calib) {
   return Math.max(0, (clamp(pct, 0, 100) - dead)) * k;
 }
 
+/**
+ * The speed loop — the only thing that makes a wheel hold its speed.
+ *
+ * Everything else in this file is open loop: it decides a voltage and hopes.
+ * That hope is broken by a dozen things at once — the two DAC channels differ,
+ * the 3.3 V rail sags under load, the ground wire drops a tenth of a volt, the
+ * battery empties, one motor is simply not the other, and the floor changes.
+ * Calibration reduces each of those; none of them go away.
+ *
+ * Measuring the wheel removes all of them together, because the loop stops
+ * caring what voltage it takes. It pushes until the wheel turns at the rate it
+ * was asked for, whatever that costs in volts today.
+ *
+ * Feedback is pulses per second from the motor's hall sensor. The controller is
+ * a PI on top of the open-loop guess: the guess gets it roughly right
+ * immediately, the integral removes what is left. Proportional alone would
+ * leave a permanent error; integral alone would be slow and overshoot.
+ */
+const SPEED_DEFAULTS = {
+  closed:  false,  // off until hzFull has been measured — see /pins
+  hzFull:  0,      // pulses per second this wheel gives at demand 100
+  kP:      0.15,   // pin % per Hz of error
+  kI:      0.6,    // pin % per Hz per second
+  maxTrim: 35,     // how far the loop may pull away from the open-loop guess
+  deadMs:  500,    // no pulses for this long while driving = feedback is gone
+};
+
+/** Fresh state for one wheel's speed loop. */
+function speedState(now = 0) {
+  return { t: now, i: 0, movingSince: 0, seenAt: now, ok: true };
+}
+
+/**
+ * One step of the speed loop, for ONE wheel.
+ *
+ * @param st      per-wheel state from speedState()
+ * @param demand  0-100, what the pilot asked for
+ * @param ff      the open-loop pin %, from lift() — the starting guess
+ * @param hz      measured pulses per second, or null if there is no sensor
+ * @param cfg     SPEED_DEFAULTS with the measured numbers filled in
+ * @returns {{pin, target, trim, closed, ok, reason}}
+ */
+function speedStep(st, demand, ff, hz, cfg, now) {
+  const c = { ...SPEED_DEFAULTS, ...cfg };
+  const dt = clamp((now - st.t) / 1000, 0.001, 0.25);
+  st.t = now;
+
+  // Stopped means stopped. Winding the integral against a wheel that is meant
+  // to be still is how a robot lurches when you let go of it.
+  if (demand <= 0) {
+    st.i = 0;
+    st.movingSince = 0;
+    st.ok = true;
+    return { pin: 0, target: 0, trim: 0, closed: false, ok: true, reason: 'dayanıb' };
+  }
+
+  if (!c.closed || !(c.hzFull > 0)) {
+    st.i = 0;
+    return { pin: ff, target: 0, trim: 0, closed: false, ok: true,
+             reason: c.closed ? 'kalibrasiya yoxdur' : 'açıq dövrə' };
+  }
+
+  const target = (demand / 100) * c.hzFull;
+  const meas = (hz === null || hz === undefined || !Number.isFinite(Number(hz)))
+    ? null : Number(hz);
+
+  // No sensor, or a sensor that has gone quiet while we are asking for
+  // movement. Either way the loop is blind, and a blind integrator is a robot
+  // that ramps to full throttle against a jammed wheel. Fall back to the guess
+  // and say so.
+  if (!st.movingSince) st.movingSince = now;
+  if (meas !== null && meas > 0) st.seenAt = now;
+  const blind = meas === null
+    || (meas <= 0 && now - st.seenAt > c.deadMs && now - st.movingSince > c.deadMs);
+  if (blind) {
+    st.i = 0;
+    st.ok = false;
+    return { pin: ff, target, trim: 0, closed: false, ok: false,
+             reason: 'impuls gəlmir — açıq dövrəyə keçdi' };
+  }
+  st.ok = true;
+
+  const err = target - meas;
+  // Integrate first, then clamp the total: clamping the sum rather than the
+  // integral alone is what stops the integral quietly growing while the output
+  // is already pinned.
+  st.i += err * c.kI * dt;
+  st.i = clamp(st.i, -c.maxTrim, c.maxTrim);
+  let trim = clamp(err * c.kP + st.i, -c.maxTrim, c.maxTrim);
+
+  let pin = ff + trim;
+  if (pin > 100 || pin < 0) {
+    pin = clamp(pin, 0, 100);
+    // Anti-windup: hand back exactly the integral the clamped output implies,
+    // so the loop leaves saturation the moment the error changes sign.
+    st.i = clamp(pin - ff - err * c.kP, -c.maxTrim, c.maxTrim);
+    trim = pin - ff;
+  }
+
+  return {
+    pin: Math.round(pin * 10) / 10,
+    target: Math.round(target * 10) / 10,
+    trim: Math.round(trim * 10) / 10,
+    closed: true,
+    ok: true,
+    reason: `hədəf ${Math.round(target)} Hz · ölçülən ${Math.round(meas)} Hz`,
+  };
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { PILOT_DEFAULTS, pilotState, pilotStep, metresPerSecond };
+  module.exports = { PILOT_DEFAULTS, pilotState, pilotStep, metresPerSecond,
+                     SPEED_DEFAULTS, speedState, speedStep, lift };
 }

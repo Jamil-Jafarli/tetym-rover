@@ -174,6 +174,7 @@
 
 <script src="/pilot.js"></script>
 <script src="/sonar.js"></script>
+<script src="/wheels.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 
@@ -196,6 +197,7 @@ function connect() {
   ws.onmessage = ev => {
     let s; try { s = JSON.parse(ev.data); } catch { return; }
     if (s.type !== 'status') return;
+    if (WT) WT.fromStatus(s);
     status = s;
     if (s.follow_cfg && s.follow_cfg.pilot && s.follow_cfg.pilot.stall != null) {
       stall = s.follow_cfg.pilot.stall;
@@ -385,6 +387,12 @@ function drawTrace() {
 
 showAll();
 connect();
+
+// The wheel trim, shown the same way on every page — see public/wheels.js.
+// `mode` is a promise to the reader about THIS page: 'raw' means the
+// numbers below are not applied here, which is deliberate on the pages
+// where the threshold is measured.
+const WT = wheelsMount({ strip: true, mode: 'applied' });
 </script>
 </body>
 </html>

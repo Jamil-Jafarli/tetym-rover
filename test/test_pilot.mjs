@@ -15,9 +15,11 @@ const src = readFileSync(join(here, '..', 'public', 'pilot.js'), 'utf8');
 // public/pilot.js is a plain browser script. Rather than adding module
 // plumbing to it just for the tests, evaluate it and take the globals out —
 // the file under test is then exactly the file the browser loads.
-const { PILOT_DEFAULTS, pilotState, pilotStep, metresPerSecond, lift } =
+const { PILOT_DEFAULTS, pilotState, pilotStep, metresPerSecond, lift,
+        SPEED_DEFAULTS, speedState, speedStep } =
   new Function(`${src}
-    return { PILOT_DEFAULTS, pilotState, pilotStep, metresPerSecond, lift };`)();
+    return { PILOT_DEFAULTS, pilotState, pilotStep, metresPerSecond, lift,
+             SPEED_DEFAULTS, speedState, speedStep };`)();
 
 // Most of the checks below are about the control law, not about the motor's
 // dead band, so they run with it switched off and read demands directly.
@@ -117,7 +119,7 @@ console.log('\nYol itəndə: son istiqamətlə yavaş, sonra dayanır');
   const { st, t } = run(road(0.5));  // steady on a right-hand bend
   const before = st.speed, steer = st.steer;
 
-  const a = pilotStep(st, lost, NOSTALL,t + DT);
+  const a = pilotStep(st, lost, NOSTALL, t + DT);
   ok(a.lost, 'itki qeyd olunur');
   ok(Math.abs(a.steer - steer) < 1e-9, `sükan saxlanılır  (${a.steer})`);
   ok(a.speed < before, `sürət azalır  (${before} → ${a.speed})`);
@@ -125,13 +127,13 @@ console.log('\nYol itəndə: son istiqamətlə yavaş, sonra dayanır');
 
   // ... through the hold window ...
   let out = a, tt = t + DT;
-  for (let i = 0; i < 12; i++) { tt += DT; out = pilotStep(st, lost, NOSTALL,tt); }
+  for (let i = 0; i < 12; i++) { tt += DT; out = pilotStep(st, lost, NOSTALL, tt); }
   ok(tt - t > PILOT_DEFAULTS.hold, `${tt - t} ms sonra hold pəncərəsi bitib`);
   ok(out.speed === 0, `dayanıb  (${out.speed} %)`);
   ok(!out.stop, 'amma hələ ENABLE saxlanır — yol qayıda bilər');
 
   // ... and past the grace period it gives up.
-  for (let i = 0; i < 40; i++) { tt += DT; out = pilotStep(st, lost, NOSTALL,tt); }
+  for (let i = 0; i < 40; i++) { tt += DT; out = pilotStep(st, lost, NOSTALL, tt); }
   ok(out.stop, `${tt - t} ms sonra ENABLE-nin düşməsini istəyir`);
   ok(out.reason === 'yol yoxdur — dayandı', `səbəb: ${out.reason}`);
 }
@@ -140,7 +142,7 @@ console.log('\nYol qayıdanda özü davam edir');
 {
   const { st, t } = run(road(0));
   let tt = t, out = null;
-  for (let i = 0; i < 8; i++) { tt += DT; out = pilotStep(st, lost, NOSTALL,tt); }
+  for (let i = 0; i < 8; i++) { tt += DT; out = pilotStep(st, lost, NOSTALL, tt); }
   const dip = out.speed;
   for (let i = 0; i < 30; i++) { tt += DT; out = pilotStep(st, road(0), NOSTALL, tt); }
   ok(out.speed > dip, `sürət geri qalxır  (${dip} → ${out.speed})`);
@@ -184,6 +186,31 @@ console.log('\nÖlü zona: 1.5 V-dən aşağı təkər dönmür');
      `ölü zona nəzərə alınmasa köhnə davranış geri qayıdır  (${old.p26} % < 22 %)`);
 }
 
+console.log('\nHər təkərin öz ölü zonası və öz düzəlişi');
+{
+  // Two motors are never the same motor: one starts at 1.5 V, the other at
+  // 1.6 V. One shared number cannot be right for both.
+  const r = run(road(0), { stall: 22, stall25: 22, stall26: 29, base: 20 }).out;
+  ok(r.p26 > r.p25, `ağır təkərə daha çox verilir  (${r.p25} / ${r.p26})`);
+  ok(r.p25 >= 22 && r.p26 >= 29, 'hər ikisi öz həddinin üstündədir');
+
+  // Fall back to the shared number when a wheel has none of its own.
+  const d = run(road(0), { stall: 25, base: 20 }).out;
+  ok(d.p25 === d.p26, `ayrıca verilməyibsə ümumi hədd işləyir  (${d.p25})`);
+  const half = run(road(0), { stall: 25, stall25: 40, base: 20 }).out;
+  ok(half.p25 > half.p26, `yalnız biri verilsə, yalnız o dəyişir  (${half.p25} / ${half.p26})`);
+
+  // Gain is the last trim: same volts, still faster, so take it down.
+  const g = run(road(0), { stall: 0, base: 40, gain26: 0.8 }).out;
+  near(g.p26, g.p25 * 0.8, 0.2, 'gain tələbi miqyaslayır');
+  const g0 = run(road(0), { stall: 0, base: 40 }).out;
+  ok(g0.p25 === g0.p26, 'düzəliş verilməyibsə heç nə dəyişmir');
+
+  // A stopped wheel must stay stopped whatever the trim says.
+  const stop = run(road(0.95), { stall: 22, stall26: 30, base: 20 }).out;
+  ok(stop.p26 === 0, `tam sükanda daxili təkər yenə tam dayanır  (${stop.p26})`);
+}
+
 console.log('\nYoldan çox uzaqda: sürət minimuma, üzü yola');
 {
   const cfg = { stall: 0, hard: 0.6, crawl: 10, base: 40 };
@@ -216,6 +243,107 @@ console.log('\nGeri qayıtma rejimi titrəmir');
   ok(out.recover, `0.50-də hələ çevrilir (histerezis)  (${out.reason})`);
   for (let i = 0; i < 30; i++) { tt += DT; out = pilotStep(st, road(0.3), cfg, tt); }
   ok(!out.recover, `0.30-da normal sürməyə qayıdır  (${out.reason})`);
+}
+
+console.log('\nSürət dövrəsi: gərginlik nə olursa olsun, sürət eynidir');
+{
+  const CFG = { closed: true, hzFull: 200, kP: 0.15, kI: 0.6, maxTrim: 35 };
+  const SDT = 50;
+
+  /**
+   * A wheel that needs MORE volts than the open-loop guess thinks.
+   * `k` is how many Hz it gives per pin %, so a small k is a heavy wheel.
+   */
+  function spin(k, ffPin, cfg = CFG, n = 200, demand = 50) {
+    const st = speedState(0);
+    let t = 0, out = null, hz = 0;
+    for (let i = 0; i < n; i++) {
+      t += SDT;
+      out = speedStep(st, demand, ffPin, hz, cfg, t);
+      hz = Math.max(0, out.pin * k);       // the wheel responds instantly
+    }
+    return { out, hz, st };
+  }
+
+  // Same demand, two very different wheels: one needs 40 % to do 100 Hz, the
+  // other needs 62 %. The loop has to land both on 100 Hz.
+  const strong = spin(2.5, 40);
+  const weak = spin(1.6, 40);
+  near(strong.hz, 100, 2, 'güclü təkər hədəfə oturur');
+  near(weak.hz, 100, 2, 'zəif təkər də eyni sürətə oturur');
+  ok(weak.out.pin > strong.out.pin,
+     `zəif təkərə daha çox verilir  (${weak.out.pin} vs ${strong.out.pin} %)`);
+  ok(Math.abs(strong.hz - weak.hz) < 3,
+     `iki fərqli motor, eyni sürət  (${Math.round(strong.hz)} / ${Math.round(weak.hz)} Hz)`);
+
+  // The point of the whole thing: the open-loop guess can be wrong and the
+  // answer does not change — as long as the correction fits inside maxTrim.
+  const badGuess = spin(2.0, 25);
+  near(badGuess.hz, 100, 2, 'açıq dövrə təxmini səhv olsa da hədəfə çatır');
+
+  // And when it does not fit, the loop stops at the limit rather than pretending.
+  // maxTrim exists so a wrong guess cannot become full throttle.
+  const wayOff = spin(2.0, 5);
+  ok(wayOff.out.trim <= 35 + 1e-6 && wayOff.hz < 100,
+     `düzəliş həddi aşılmır — hədəfə çatmır, amma qaçmır da  (${wayOff.out.trim} %)`);
+
+  // Halve the demand, halve the speed.
+  const half = spin(2.0, 40, CFG, 200, 25);
+  near(half.hz, 50, 2, 'tələb yarıya düşəndə sürət də yarıya düşür');
+}
+
+console.log('\nSürət dövrəsi təhlükəsiz dayanır');
+{
+  const CFG = { closed: true, hzFull: 200, deadMs: 500 };
+  const st = speedState(0);
+
+  // Zero demand: no integral, no output, whatever the sensor says.
+  const stopped = speedStep(st, 0, 40, 0, CFG, 100);
+  ok(stopped.pin === 0 && stopped.trim === 0, `sıfır tələb, sıfır çıxış  (${stopped.pin})`);
+
+  // A wheel that never moves: jammed, or the sensor wire fell off. The loop
+  // must NOT ramp to full throttle against it.
+  const st2 = speedState(0);
+  let out = null, t = 0;
+  for (let i = 0; i < 40; i++) { t += 50; out = speedStep(st2, 50, 40, 0, CFG, t); }
+  ok(!out.ok, 'impuls gəlmədiyini bildirir');
+  ok(out.pin === 40, `açıq dövrə təxminində qalır, tam qaza basmır  (${out.pin} %)`);
+  ok(/impuls gəlmir/.test(out.reason), `səbəb: ${out.reason}`);
+
+  // No sensor at all is the same answer.
+  const st3 = speedState(0);
+  const none = speedStep(st3, 50, 40, null, CFG, 100);
+  ok(!none.ok && none.pin === 40, 'sensor yoxdursa da açıq dövrə');
+
+  // Not calibrated: behave exactly as before, and say why.
+  const st4 = speedState(0);
+  const raw = speedStep(st4, 50, 40, 120, { closed: true, hzFull: 0 }, 100);
+  ok(raw.pin === 40 && !raw.closed, `hzFull ölçülməyibsə dövrə bağlanmır  (${raw.reason})`);
+  const off = speedStep(st4, 50, 40, 120, { closed: false, hzFull: 200 }, 150);
+  ok(off.pin === 40 && !off.closed, 'söndürülübsə də toxunmur');
+}
+
+console.log('\nSürət dövrəsi doymada ilişmir');
+{
+  // Ask for more than the wheel can ever give: the output pins at 100 and the
+  // integral must not keep growing, or the wheel stays at full throttle for
+  // seconds after the demand drops.
+  const CFG = { closed: true, hzFull: 200, kP: 0.15, kI: 0.6, maxTrim: 35 };
+  const st = speedState(0);
+  let t = 0, hz = 0, out = null;
+  for (let i = 0; i < 200; i++) {
+    t += 50;
+    out = speedStep(st, 100, 80, hz, CFG, t);
+    hz = out.pin * 1.0;                     // can only ever reach 100 Hz
+  }
+  ok(out.pin === 100, `çıxış tavanda  (${out.pin})`);
+  ok(Math.abs(st.i) <= 35 + 1e-6, `inteqral həddi keçmir  (${st.i.toFixed(1)})`);
+
+  // Now the demand drops. It must come down promptly, not after a long unwind.
+  let low = null;
+  for (let i = 0; i < 20; i++) { t += 50; low = speedStep(st, 20, 25, hz, CFG, t); hz = low.pin * 1.0; }
+  ok(low.pin < 60, `tələb düşəndə çıxış da düşür  (${low.pin} %)`);
+  near(hz, 40, 8, 'yeni hədəfə yaxınlaşır');
 }
 
 console.log('\nMəsafə: kalibrasiya sabiti');

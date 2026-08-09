@@ -70,6 +70,20 @@
     <div class="muted" id="reason" style="margin-top:12px;text-align:center">–</div>
   </div>
 
+  <a class="tile" href="/setup" id="tSetup">
+    <div class="t">
+      <span class="ico" style="background:#3a3320">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#d29922" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      </span>
+      <h2>Quraşdırma — nə etməliyəm</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p id="setupHint">Addım-addım siyahı: hər təkərin dönmə həddini ölç, güc
+       düzəlişini tap, yaz. Buradakı rəqəmlər bütün səhifələrdə işlənir.</p>
+  </a>
+
   <a class="tile" href="/drive">
     <div class="t">
       <span class="ico" style="background:#1f3a2a">
@@ -164,6 +178,21 @@
        ölçmək lazımdır.</p>
   </a>
 
+  <a class="tile" href="/pins">
+    <div class="t">
+      <span class="ico" style="background:#2b2b3a">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="7" y="4" width="10" height="16" rx="2"/>
+          <path d="M4 8h3M4 12h3M4 16h3M17 8h3M17 12h3M17 16h3"/></svg>
+      </span>
+      <h2>Boş pinlər — 0-255 əl ilə</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p>Robotun istifadə etmədiyi hər pinə əl ilə dəyər ver, nə olduğunu yaz.
+       Diqqət: <b>yalnız GPIO25/26 analoqdur</b>, qalanları PWM-dir.</p>
+  </a>
+
   <a class="tile" href="/manual">
     <div class="t">
       <span class="ico" style="background:#3d3218">
@@ -188,6 +217,7 @@
 
 </div>
 
+<script src="/wheels.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 let ws = null;
@@ -206,6 +236,7 @@ function connect() {
   ws.onmessage = ev => {
     let s; try { s = JSON.parse(ev.data); } catch (e) { return; }
     if (s.type !== 'status') return;
+    if (WT) paintSetupTile(WT.fromStatus(s));
     const e = s.esp || {};
 
     $('pL').textContent = e.pL != null ? Math.round(e.pL) + ' %' : '–';
@@ -224,6 +255,25 @@ function connect() {
   };
 }
 connect();
+
+// The wheel trim, shown the same way on every page — see public/wheels.js.
+// `mode` is a promise to the reader about THIS page: 'raw' means the
+// numbers below are not applied here, which is deliberate on the pages
+// where the threshold is measured.
+const WT = wheelsMount({ strip: true, mode: 'applied' });
+
+// Say it on the hub, not only inside /setup: an unmeasured robot drives well
+// enough to make you blame the steering gains instead.
+function paintSetupTile(cfg) {
+  const el = document.getElementById('setupHint');
+  if (!el) return;
+  const done = wheelsMeasured(cfg);
+  el.textContent = done
+    ? 'Təkər həddləri ölçülüb. Rəqəmləri dəyişmək və ya məsafə kalibrasiyasını '
+      + 'etmək üçün bura gir.'
+    : '⚠ Təkərlərin dönmə həddi hələ ölçülməyib — robot yavaş sürətdə əyiləcək. '
+      + 'Addım-addım siyahı buradadır.';
+}
 </script>
 </body>
 </html>

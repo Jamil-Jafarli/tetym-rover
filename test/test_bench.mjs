@@ -432,6 +432,7 @@ async function driveChecks() {
     const miss = await fetch(`http://127.0.0.1:${port}/nope`);
     check('unknown route still 404s', miss.status === 404, `${miss.status}`);
 
+
     const ws = new WebSocket(`ws://127.0.0.1:${port}/`);
     await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });
     const inbox = [];
@@ -494,6 +495,11 @@ async function driveChecks() {
     check('but stays enabled, ready for the next key', s.esp.en === true);
 
     // Retune mid-drive.
+    // Snapshot the neighbouring row FIRST. Comparing it against the built-in
+    // defaults instead only passes on a server that has never been tuned — and
+    // this suite is most useful on the robot that HAS been tuned, where
+    // presets.json holds real numbers.
+    const otherBefore = JSON.stringify(s.presets.a);
     ws.send(JSON.stringify({ cmd: 'presets', presets: { w: { p: [90, 20] } } }));
     await waitAck('presets');
     holding = ['w'];
@@ -506,7 +512,7 @@ async function driveChecks() {
     check('editing percent leaves the direction alone',
       JSON.stringify(s.presets.w.r) === '[false,false]');
     check('other rows are untouched',
-      JSON.stringify(s.presets.a) === JSON.stringify(DEFAULT_PRESETS.a));
+      JSON.stringify(s.presets.a) === otherBefore, otherBefore);
 
     ws.send(JSON.stringify({ cmd: 'presets', presets: { d: { p: [500, -30] } } }));
     await waitAck('presets');

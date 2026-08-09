@@ -246,6 +246,11 @@ async function main() {
   const bench = new Bench({ transport, vMax: args.vMax });
   await bench.open();
 
+  // The persisted tuning. Declared here rather than next to the socket because
+  // the HTTP handler below closes over it too, and a `let` read before its own
+  // declaration throws rather than reading undefined.
+  let followCfg = loadFollowCfg();
+
   // ── static pages ──────────────────────────────────────────────────
   const PAGES = {
     '/':       'home.html',    // hub: status + links to everything
@@ -257,12 +262,18 @@ async function main() {
     '/sonar':  'sonar.html',   // the spinning HC-SR04, as a map
     '/obstacle': 'obstacle.html',  // the forward HC-SR04, as a stop
     '/pins':   'pins.html',    // the spare pins, by hand
+    '/setup':  'setup.html',   // what to measure, in order, and where it goes
   };
 
   // The two pages that see the road share their code rather than each keeping
   // a copy, so tuning on /vision is tuning what /follow drives with.
+  //
+  // wheels.js is the same idea one level down: the per-wheel trim is a property
+  // of the robot, not of a page, so every page reads it from one file and shows
+  // the same numbers.
   const SCRIPTS = { '/road.js': 'road.js', '/pilot.js': 'pilot.js',
-                    '/analyse.js': 'analyse.js', '/sonar.js': 'sonar.js' };
+                    '/analyse.js': 'analyse.js', '/sonar.js': 'sonar.js',
+                    '/wheels.js': 'wheels.js' };
 
   const onRequest = (req, res) => {
     const url = (req.url || '/').split('?')[0];
@@ -301,6 +312,17 @@ async function main() {
       return;
     }
 
+    // The wheel trim, for the two pages that have no socket. Read-only: the
+    // only writer is the follow_cfg command, so there is one code path that
+    // can change the robot and it is the one that is already tested.
+    if (url === '/api/wheels') {
+      const b = Buffer.from(JSON.stringify(followCfg || {}));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
+                           'Content-Length': b.length, 'Cache-Control': 'no-store' });
+      res.end(b);
+      return;
+    }
+
     const page = PAGES[url], script = SCRIPTS[url];
     if (!page && !script) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -324,7 +346,6 @@ async function main() {
   // ── browser websocket, same port ──────────────────────────────────
   const wss = new WebSocketServer({ server });
   const runLog = new FollowLog();
-  let followCfg = loadFollowCfg();
 
   wss.on('connection', (ws, req) => {
     const peer = req.socket.remoteAddress;

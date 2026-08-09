@@ -82,20 +82,37 @@ node server.js --esp 192.168.4.1         # board's own access point (default)
 node server.js --esp 192.168.1.42        # or your network, or esp32-dac.local
 ```
 
-Five pages, one WebSocket, one port:
+One WebSocket, one port:
 
 | | |
 |---|---|
 | **/** | hub — live status and links to everything |
+| **/setup** | what to measure, in order, and where the number goes |
 | **/drive** | hold **W / A / S / D** to drive |
 | **/vision** | camera; finds the road and shows the steering error |
 | **/follow** | the same detector, driving the motors, recording the run |
 | **/tune** | read a run back: charts, manoeuvres, and what to change |
 | **/obstacle** | the forward HC-SR04: drive, stop, wait, carry on |
 | **/sonar** | the spinning HC-SR04, as a map of the room |
+| **/pins** | every spare GPIO, 0-255 by hand, with a notes column |
 | **/manual** | type the two percentages by hand |
 
-There is nothing to configure in the browser.
+Every setting that can be got wrong has an **ⓘ** beside it — what it is, how it
+is measured, and when it is the right thing to reach for. Hover it, or tap it on
+a phone. The text lives in one table in `public/wheels.js`, so the explanation
+next to a slider cannot drift away from what the slider does.
+
+Start at **/setup**. It is a numbered list of the six things that have to be
+measured on a physical robot, each with the field to type the answer into and a
+one-wheel test button to take the measurement with. What you put there is
+stored on the server and shown on *every* page, so a threshold measured once is
+not measured again.
+
+Two of those pages deliberately do **not** apply the trim — `/manual` and
+`/pins` send whatever percentage you type straight to the pin, because that is
+where the threshold is measured, and measuring through the correction you are
+trying to find gives you a number that is not the number. Each page says which
+it is in the strip at the top: **XAM ÇIXIŞ** (raw) or **TƏKƏR AYARI** (applied).
 
 No board yet? `npm run fake` runs a simulated ESP32 and the full UI.
 
@@ -388,6 +405,18 @@ Zero stays zero on purpose — stopping the inner wheel outright is what makes t
 tightest turn — and the step at zero is real, not an artefact: a motor that will
 not move below 1.5 V has exactly that discontinuity.
 
+**One threshold is not enough.** Two motors off the same reel differ by a few
+percent, and a few percent near the threshold is the difference between turning
+and not turning. So there is a per-pin override — `stall25`, `stall26` — and a
+per-pin `gain` after it, and they live in `public/wheels.js` rather than inside
+the follow page, because the trim is a property of the robot rather than of a
+page. Every page reads the same four numbers from the server and prints them in
+a strip at the top; `/setup` is where you change them.
+
+The order matters and `/setup` enforces it: thresholds first, gain last. A gain
+measured against a wrong threshold is not a measurement, it is a number that
+happens to work at one speed.
+
 The consequence to keep in mind: **a demand of 20 is no longer 20 % on the
 pin.** It is 38 %, or 1.86 V. Every slider prints its own voltage next to it, so
 what the wire gets is never a matter of inference. Measure your own threshold on
@@ -666,6 +695,38 @@ because scanning is not movement: a board mapping a room must not look to the
 300 ms drive watchdog like one that is being driven, and a page that only wants
 to scan should not have to pretend to be a driver.
 
+## 9. The spare pins — `/pins`
+
+Every GPIO the robot does not already use, with a slider from 0 to 255, a place
+to write what you wired to it, and a CSV button so the notes leave with you.
+
+**Only GPIO25 and GPIO26 are analog.** They are the chip's two real DACs and
+they are already the drive path, so they are not on this page — `/manual` is
+where you set those. Everything on `/pins` is **PWM**: a 5 kHz square wave whose
+duty cycle is the number you typed. A multimeter reads the average and it looks
+like a voltage; an oscilloscope shows what it really is; a motor controller
+expecting a clean analog input is not fooled. The page says so at the top rather
+than letting the slider imply otherwise.
+
+Offered: `4, 5, 16, 17, 21, 22` and — with a warning — `2, 15`, which are
+strapping pins that only care what they see *at boot*.
+
+Refused, by the firmware rather than by the page: `0` and `12` (strapping, and
+12 can select the wrong flash voltage), `1` and `3` (the serial console), `6-11`
+(the flash chip — writing to these bricks the board until it is reflashed), and
+`34-39` (input only, no output driver at all). Asking for one of those is
+counted as a bad packet, not quietly ignored.
+
+The list comes from the board, not from the page, so changing `TEST_PINS` in the
+sketch changes the page with nothing to keep in step.
+
+Values are **not** watchdogged — a bench number you set by hand should still be
+there when you come back with a multimeter. They are cleared on STOP, on idle,
+and when the last browser disconnects.
+
+If you put an I²C device on `21`/`22` (see `docs/`), take them out of
+`TEST_PINS`: the page would otherwise let you drive the bus.
+
 ## Why go through Node instead of the browser talking to the ESP32 directly?
 
 The board's 300 ms watchdog needs a steady 20 Hz stream, and a browser tab that
@@ -748,6 +809,7 @@ are what the motor controller physically reads. The percent conversion lives in
 ```jsonc
 {"cmd": "set",  "v25": 1.80, "v26": 1.50, "en": true, "r25": false, "r26": false}
 {"cmd": "scan", "spin": 60}      // the sonar servo, -100..100; 0 stops it
+{"cmd": "pin",  "gpio": 4, "val": 128}   // a spare pin, 0-255. Unknown pins refused
 {"cmd": "stop"}
 {"cmd": "ping"}
 ```
@@ -846,15 +908,40 @@ before you put it on the floor.
 ## Test
 
 ```bash
-npm test             # all five suites
+npm test             # everything
+npm run test:globals # no two scripts on a page declare the same name — 1 s
 npm run test:bench   # server + firmware + follow path
 npm run test:pilot   # the control law, on its own
+npm run test:wheels  # the shared wheel trim, and that every page agrees on it
 npm run test:analyse # what /tune concludes from a log
 npm run test:sonar   # the obstacle state machine and the map
 npm run test:vision  # vision page only (needs playwright)
+npm run test:pages   # every page opens without throwing (needs playwright)
 ```
 
-**196 checks** for the control path, no hardware. It runs `esp32ws_sim.js` — a behavioural mirror of
+The two browser suites skip themselves with a note if playwright is not
+installed, so `npm test` is still worth running without it.
+
+### Why `test_globals.mjs` exists
+
+The shared modules are loaded as plain `<script>` tags, so they all land in one
+global scope, and a second top-level `const` with the same name is a
+SyntaxError — not a warning, not a shadow. The offending script and everything
+after it simply does not run.
+
+`pilot.js`, `sonar.js` and `analyse.js` each defined `const clamp`. That meant
+`/follow` — the page that drives the robot — **threw on load and had done ever
+since `sonar.js` was added**. The page rendered. The sliders were there. Nothing
+happened when you pressed ARM. Neither the unit tests nor a careful reading
+could see it, because each module is correct on its own and only the
+combination is broken.
+
+So there is now a check that reads every page, works out which scripts it
+loads, and fails if any name is declared twice. It takes a second and needs no
+browser. It also verifies its own detector against known-good and known-bad
+input first, because a check that cannot fail is not a check.
+
+**212 checks** for the control path, no hardware. It runs `esp32ws_sim.js` — a behavioural mirror of
 `ws_dac.ino`, including the watchdog, the idle-when-no-clients rule and the direction
 interlock — as a
 real WebSocket server, then drives the real `server.js` against it over a real
@@ -923,16 +1010,22 @@ constant comes out the same whether the lap was driven fast or slow.
 | `public/tune.html` | reads a run back: charts, manoeuvres, suggestions |
 | `public/obstacle.html` | forward sonar: drive, stop, wait, carry on |
 | `public/sonar.html` | the spinning sonar, as a polar map |
+| `public/pins.html` | every spare GPIO, 0-255 by hand |
 | `public/drive.html` | keyboard drive page, self-contained |
 | `follow_log.js` | writes `logs/follow-*.json` and its summary |
 | `presets.json` | key table + master level, written when you edit them (git-ignored) |
 | `follow.json` | follow sliders + distance calibration (git-ignored) |
 | `logs/` | one JSON file per run (git-ignored) |
-| `test/test_bench.mjs` | server + firmware + follow + sonar suite, 192 checks |
-| `test/test_pilot.mjs` | the control law, 60 checks, no browser |
+| `public/wheels.js` | the shared wheel trim + the ⓘ text, used by every page |
+| `public/setup.html` | the numbered checklist: measure, type, saved everywhere |
+| `test/test_globals.mjs` | no duplicate top-level names on any page, 24 checks |
+| `test/test_bench.mjs` | server + firmware + follow + sonar suite, 212 checks |
+| `test/test_pilot.mjs` | the control law and the speed loop, 85 checks, no browser |
+| `test/test_wheels.mjs` | the shared trim, 55 checks — incl. /manual vs /follow agreement |
 | `test/test_analyse.mjs` | the log analysis, 54 checks, no browser |
 | `test/test_sonar.mjs` | the sonar logic, 54 checks, no browser |
 | `test/test_vision.mjs` | vision suite, 28 checks — real browser, synthetic tracks |
+| `test/test_pages.mjs` | every page opens clean, 34 checks — real browser |
 
 ## USB instead of wifi
 
