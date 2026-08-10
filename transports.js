@@ -6,8 +6,8 @@
 //
 // Contract:
 //   await open()
-//   send(v25, v26, en, dir)  dir is [rev25, rev26]; called at 20 Hz
-//   scan(spin)          spin the sonar servo, -100..100. Wifi only.
+//   send(v25, v26, en, dir, lift)  dir is [rev25, rev26], lift is -255..255;
+//                                  called at 20 Hz
 //   pin(gpio, value)    put 0-255 on a spare pin, for /pins. Wifi only.
 //   readback()          what the board says it actually did, or null
 //   get fresh()         have we heard from the board recently
@@ -68,30 +68,16 @@ export class WsTransport {
     });
   }
 
-  send(v25, v26, en = false, dir = [false, false]) {
+  send(v25, v26, en = false, dir = [false, false], lift = 0) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     try {
+      // The lift rides in the drive packet on purpose. It is movement, so it
+      // belongs to the 300 ms watchdog: stop sending and the actuator stops,
+      // the same way the wheels do.
       this.ws.send(JSON.stringify({
         cmd: 'set', v25, v26, en, r25: dir[0] === true, r26: dir[1] === true,
+        lift: Math.max(-255, Math.min(255, Math.round(Number(lift) || 0))),
       }));
-    } catch (err) {
-      this._error = String(err.message || err);
-    }
-  }
-
-  /**
-   * Spin the scan servo, or stop it.
-   *
-   * Deliberately its own message rather than a field on `set`: the drive stream
-   * is watchdogged at 300 ms and a scan command is not a movement command. A
-   * board that is mapping the room must not look to the watchdog like one that
-   * is being driven, and a page that only wants to scan should not have to
-   * pretend to be a driver to do it.
-   */
-  scan(spin) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    try {
-      this.ws.send(JSON.stringify({ cmd: 'scan', spin: Math.round(Number(spin) || 0) }));
     } catch (err) {
       this._error = String(err.message || err);
     }
@@ -123,6 +109,12 @@ export class WsTransport {
       en: s.en === true, en_pin: s.en_pin,
       rev: Array.isArray(s.rev) ? [s.rev[0] === true, s.rev[1] === true] : null,
       rev_pin: s.rev_pin, rev_wait: s.rev_wait === true, dir: s.dir,
+      // The lift, as the board reports it: what the bridge is doing, what was
+      // asked for, whether the run limit has cut it, and which pins it is on.
+      lift: Number.isFinite(s.lift) ? s.lift : null,
+      lift_set: Number.isFinite(s.lift_set) ? s.lift_set : null,
+      lift_cut: s.lift_cut === true,
+      lift_pin: s.lift_pin || null,
       pkt: s.pkt, bad: s.bad,
       rssi: s.rssi, uptime: s.uptime, ap: s.ap, sim: s.sim === true,
       board_vmax: s.vmax,
@@ -174,13 +166,13 @@ export class SerialTransport {
     await new Promise((r) => setTimeout(r, esp.BOOT_WAIT_MS));
   }
 
-  // The USB firmware has neither an enable line nor direction relays, so `en`
-  // and `dir` are accepted and ignored here. Use the wifi board (ws_dac.ino).
-  /** The USB board has no sonar, no servo and no spare-pin support. */
-  scan() { /* not available over the serial firmware */ }
-  pin() { /* likewise */ }
+  // The USB firmware has neither an enable line, direction relays nor the
+  // lift's L298N, so `en`, `dir` and `lift` are accepted and ignored here.
+  // Use the wifi board (ws_dac.ino) for any of them.
+  /** The USB board has no sonar and no spare-pin support. */
+  pin() { /* not available over the serial firmware */ }
 
-  send(v25, v26, _en = false, _dir = [false, false]) {
+  send(v25, v26, _en = false, _dir = [false, false], _lift = 0) {
     try {
       const { frame } = esp.pack2(v25, v26);
       this.port.write(frame, (err) => {

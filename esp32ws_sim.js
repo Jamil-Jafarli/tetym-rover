@@ -21,10 +21,8 @@ export const PIN_REV_26 = 18;
 export const REV_SETTLE_MS = 1000;
 export const V_STOPPED_EPS = 0.03;
 
-// The two HC-SR04s and the servo that spins one of them. Same defaults as the
-// sketch; both report their pins so the pages never have to guess.
-export const PIN_SERVO = 13;
-export const PIN_TRIG_SCAN = 27, PIN_ECHO_SCAN = 33;
+// The forward HC-SR04. Same defaults as the sketch; both report their pins so
+// the pages never have to guess.
 export const PIN_TRIG_FWD = 14, PIN_ECHO_FWD = 32;
 // An HC-SR04 pings at about 20 Hz comfortably; faster and the previous echo is
 // still bouncing around the room when the next one goes out.
@@ -34,7 +32,18 @@ export const PING_PERIOD_MS = 50;
 // the ones that do something permanent: 0 and 12 are strapping pins, 1/3 are
 // the console, 6-11 are the flash chip and 34-39 have no output driver.
 // Only 25 and 26 are real DACs; these are all PWM, and the page says so.
-export const TEST_PINS = [4, 5, 16, 17, 21, 22, 2, 15];
+// 4, 16 and 17 belong to the lift's L298N — see PIN_LIFT_* below.
+export const TEST_PINS = [5, 21, 22, 2, 15, 13, 27, 33];
+
+// The lift: one DC actuator on half an L298N. IN1/IN2 pick the direction, ENA
+// is the PWM. Mirrors PIN_LIFT_* in the sketch.
+export const PIN_LIFT_IN1 = 16, PIN_LIFT_IN2 = 17, PIN_LIFT_PWM = 4;
+// Reversing a bridge under load throws the winding's energy back through it,
+// so a direction change passes through zero and waits — the same rule as the
+// wheel relays. And an actuator against its end stop is a stalled motor, so a
+// single continuous run is capped; it re-arms on a command of 0.
+export const LIFT_FLIP_MS = 250;
+export const LIFT_MAX_RUN_MS = 8000;
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 export const dacFor = (v, vMax = 3.3) =>
@@ -51,6 +60,14 @@ export class Esp32WsSim {
     this.revOut = [false, false];   // where the relays actually are
     this.idleSinceMs = 0;
     this.revBlocked = false;
+    // The lift. `wantLift` is the last thing asked for, `liftOut` is what the
+    // bridge is doing — they differ while a flip passes through zero and while
+    // the run limit is holding it off.
+    this.wantLift = 0;
+    this.liftOut = 0;
+    this.liftFlipMs = 0;
+    this.liftRunMs = 0;
+    this.liftCut = false;
     this.atIdle = true;
     this.clients = 0;
     this.lastPacketMs = 0;
@@ -60,19 +77,12 @@ export class Esp32WsSim {
     this.t0 = Date.now();
 
     // ── the sonar half ──
-    // `world` is what the tests (or --fake) put around the robot: a function of
-    // the scan angle returning centimetres, or null for "no echo came back".
-    // Nothing here models physics; it models the SHAPE of the data, which is
-    // what the pages and the state machine have to cope with.
-    this.spin = 0;                   // -100..100, servo command; 0 = stopped
-    this.spinAt = 0;                 // when the current spin started
-    this.spinMs = 0;                 // ms of spinning so far
-    this.revs = 0;
-    this.periodMs = 2400;            // how long a full turn takes at spin 100
-    this.world = null;               // (angleDeg) => cm | null
+    // `world` is what the tests (or --fake) put in front of the robot: a
+    // function returning centimetres, or null for "no echo came back". Nothing
+    // here models physics; it models the SHAPE of the data, which is what the
+    // pages and the state machine have to cope with.
+    this.world = null;               // () => cm | null
     this.fwdCm = null;               // what the forward sensor sees
-    this.scanCm = null;
-    this.scanSince = 0;              // ms since the spin started, at that reading
     this.lastPingMs = 0;
 
     // Whatever has been put on a spare pin by hand, 0-255.
@@ -138,15 +148,6 @@ export class Esp32WsSim {
       ws.send(this._statusJson());
       return;
     }
-    // The scan servo is its own command: it has nothing to do with the drive
-    // watchdog, and a board that is scanning must not look like one that is
-    // being told to move.
-    if (cmd === 'scan') {
-      this._setSpin(typeof doc.spin === 'number' ? doc.spin : 0);
-      this.good++;
-      ws.send(this._statusJson());
-      return;
-    }
     if (cmd !== 'set') { this.bad++; return; }
 
     let a = this.target25, b = this.target26, got = false;
@@ -165,6 +166,10 @@ export class Esp32WsSim {
     // Absent "en" means false: a client that never mentions it must not be
     // able to leave the driver enabled.
     this.wantEnable = doc.en === true;
+    // Absent means stop. The lift moves a load, so a client that stops talking
+    // has to stop the actuator — same watchdog, same packet, same rule.
+    this.wantLift = Number.isFinite(doc.lift)
+      ? clamp(Math.round(doc.lift), -255, 255) : 0;
     this.lastPacketMs = Date.now();
     this.atIdle = false;
     this.good++;
@@ -177,6 +182,40 @@ export class Esp32WsSim {
     this.enableOut = false;
     // Relays are deliberately not reset here — see the firmware comment.
     this.wantRev = [false, false];
+    // The lift is: it is the one output that can still be doing work while the
+    // wheels are stopped.
+    this.wantLift = 0;
+    this.liftOut = 0;
+    this.liftRunMs = 0;
+    this.liftCut = false;
+  }
+
+  /** The lift's interlock: never reverse under load, never run past the stop. */
+  _updateLift(now) {
+    if (this.wantLift === 0) {
+      this.liftCut = false;
+      this.liftRunMs = 0;
+      this.liftOut = 0;
+      return;
+    }
+    if (this.liftCut) { this.liftOut = 0; return; }
+    const flipping = (this.liftOut > 0 && this.wantLift < 0)
+                  || (this.liftOut < 0 && this.wantLift > 0);
+    if (flipping) {
+      this.liftOut = 0;
+      this.liftFlipMs = now;
+      this.liftRunMs = 0;
+      return;
+    }
+    if (this.liftFlipMs && now - this.liftFlipMs < LIFT_FLIP_MS) return;
+    this.liftFlipMs = 0;
+    if (this.liftRunMs === 0) this.liftRunMs = now;
+    if (now - this.liftRunMs >= LIFT_MAX_RUN_MS) {
+      this.liftCut = true;
+      this.liftOut = 0;
+      return;
+    }
+    this.liftOut = this.wantLift;
   }
 
   get outputsAtIdle() {
@@ -188,54 +227,22 @@ export class Esp32WsSim {
     return this.wantRev[0] !== this.revOut[0] || this.wantRev[1] !== this.revOut[1];
   }
 
-  /**
-   * Start or stop the scan servo.
-   *
-   * Continuous rotation, so there is no position to command — only a speed, and
-   * the angle is whatever the elapsed time says it is. Stopping freezes the
-   * accumulated time rather than zeroing it, so a pause does not silently
-   * rotate the whole map.
-   */
-  _setSpin(v) {
-    const want = clamp(Math.round(Number(v) || 0), -100, 100);
-    if (want === this.spin) return;
-    if (this.spin !== 0) this.spinMs += Date.now() - this.spinAt;   // bank it
-    this.spin = want;
-    this.spinAt = Date.now();
-  }
-
   /** Everything back to 0 — on stop, on idle, and when the last client goes. */
   _clearTestPins() {
     for (const p of TEST_PINS) this.testPins[p] = 0;
   }
 
-  /** Milliseconds of actual rotation since the scan began. */
-  get spinElapsed() {
-    return this.spinMs + (this.spin !== 0 ? Date.now() - this.spinAt : 0);
-  }
-
-  /** Where the spinning sensor is pointing, in degrees. */
-  get scanAngle() {
-    const per = this.periodMs * (100 / Math.max(1, Math.abs(this.spin)));
-    if (!(per > 0)) return 0;
-    return ((this.spinElapsed / per) * 360 * Math.sign(this.spin || 1)) % 360;
-  }
-
-  /** Fire both sensors, at the rate a real HC-SR04 can manage. */
+  /** Fire the sensor, at the rate a real HC-SR04 can manage. */
   _ping() {
     const now = Date.now();
     if (now - this.lastPingMs < PING_PERIOD_MS) return;
     this.lastPingMs = now;
-    const ask = (a) => {
+    const ask = () => {
       if (typeof this.world !== 'function') return null;
-      const v = this.world(((a % 360) + 360) % 360);
+      const v = this.world(0);
       return Number.isFinite(v) ? v : null;     // null is a real answer: no echo
     };
-    this.fwdCm = this.fwdOverride !== undefined ? this.fwdOverride : ask(0);
-    if (this.spin !== 0) {
-      this.scanCm = ask(this.scanAngle);
-      this.scanSince = Math.round(this.spinElapsed);
-    }
+    this.fwdCm = this.fwdOverride !== undefined ? this.fwdOverride : ask();
   }
 
   /** The interlock — mirror of updateReverse() in the firmware. */
@@ -271,6 +278,7 @@ export class Esp32WsSim {
       this.target25 = V_IDLE;
       this.target26 = V_IDLE;
     }
+    this._updateLift(now);
     if (maxStep <= 0) return;
     const slew = (cur, tgt) => {
       const d = tgt - cur;
@@ -294,13 +302,12 @@ export class Esp32WsSim {
       pins: { ...this.testPins },
       son: {
         fwd_cm: this.fwdCm == null ? null : r2(this.fwdCm),
-        scan_cm: this.scanCm == null ? null : r2(this.scanCm),
-        scan_t: this.scanSince,          // ms of rotation when that echo landed
-        spin: this.spin,
-        pin: { servo: PIN_SERVO,
-               trig_s: PIN_TRIG_SCAN, echo_s: PIN_ECHO_SCAN,
-               trig_f: PIN_TRIG_FWD, echo_f: PIN_ECHO_FWD },
+        pin: { trig_f: PIN_TRIG_FWD, echo_f: PIN_ECHO_FWD },
       },
+      lift: this.liftOut,           // what the bridge is doing
+      lift_set: this.wantLift,      // ...and what was asked for
+      lift_cut: this.liftCut,       // run limit fired; let go to re-arm
+      lift_pin: [PIN_LIFT_IN1, PIN_LIFT_IN2, PIN_LIFT_PWM],
       rev_wait: this.revBlocked,
       dir: !this.revOut[0] && !this.revOut[1] ? 'forward'
          : this.revOut[0] && this.revOut[1] ? 'BACK'

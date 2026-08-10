@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="az">
+<html lang="tr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Robot · qeydi oxu</title>
+<title>Robot · kaydı oku</title>
 <style>
   :root{
     --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
@@ -68,24 +68,24 @@
 
   <div class="card">
     <div class="row">
-      <h1>Qeydi oxu</h1>
-      <span class="muted" id="state">fayl gözlənilir</span>
+      <h1>Kaydı oku</h1>
+      <span class="muted" id="state">dosya bekleniyor</span>
     </div>
     <div class="row" style="margin-top:10px">
-      <span class="muted"><a href="/">&larr; ana səhifə</a></span>
-      <span class="muted"><a href="/follow">sürməyə qayıt &rarr;</a></span>
+      <span class="muted"><a href="/">&larr; ana sayfa</a></span>
+      <span class="muted"><a href="/follow">sürüşe dön &rarr;</a></span>
     </div>
   </div>
 
   <div class="card">
-    <div class="lbl">Serverdəki sürüşlər</div>
-    <select id="runs"><option value="">yüklənir…</option></select>
+    <div class="lbl">Sunucudaki sürüşler</div>
+    <select id="runs"><option value="">yükleniyor…</option></select>
     <div class="btnrow">
-      <button id="load">Seçiləni aç</button>
-      <button id="refresh">Siyahını yenilə</button>
+      <button id="load">Seçileni aç</button>
+      <button id="refresh">Listeyi yenile</button>
     </div>
     <div class="lbl" style="margin-top:16px">Ya da faylı bura at</div>
-    <div id="drop">JSON faylını buraya sürüşdür — ya da klikləyib seç
+    <div id="drop">JSON dosyasını buraya sürükle — ya da tıklayıp seç
       <input type="file" id="file" accept="application/json,.json" hidden>
     </div>
   </div>
@@ -96,53 +96,53 @@
       <div class="row"><h2 id="rTitle">—</h2><span class="muted" id="rWhen"></span></div>
       <div class="muted" id="rNote" style="margin-bottom:12px"></div>
       <div class="grid">
-        <div><span class="lbl">Müddət</span><b id="mDur">–</b></div>
-        <div><span class="lbl">Orta sürət</span><b id="mSpeed">–</b></div>
+        <div><span class="lbl">Süre</span><b id="mDur">–</b></div>
+        <div><span class="lbl">Ortalama hız</span><b id="mSpeed">–</b></div>
         <div><span class="lbl">Ən pis sapma</span><b id="mWorst">–</b></div>
         <div><span class="lbl">Yırğalanma</span><b id="mWob">–</b></div>
-        <div><span class="lbl">Sükan dirənməsi</span><b id="mSat">–</b></div>
-        <div><span class="lbl">Yol itkisi</span><b id="mLost">–</b></div>
+        <div><span class="lbl">Direksiyon doyması</span><b id="mSat">–</b></div>
+        <div><span class="lbl">Yol kaybı</span><b id="mLost">–</b></div>
       </div>
     </div>
 
     <div class="card">
-      <h2>Sapma və sürət</h2>
+      <h2>Sapma ve hız</h2>
       <div id="chart"></div>
-      <p class="muted" style="margin:8px 0 0">Yuxarı: sapma — orta xətt yolun
-      mərkəzidir. Aşağı: sürət. Qırmızı sahələr yolun itdiyi yerlərdir.</p>
+      <p class="muted" style="margin:8px 0 0">Üstte: sapma — orta çizgi yolun
+      merkezidir. Altta: hız. Kırmızı alanlar yolun kaybolduğu yerlerdir.</p>
     </div>
 
     <div class="card">
-      <h2>Nə dəyişməli</h2>
+      <h2>Ne değişmeli</h2>
       <div id="findings"></div>
       <div id="applyBox" hidden>
         <div class="btnrow">
-          <button id="apply" class="go">Bu rəqəmləri tətbiq et</button>
+          <button id="apply" class="go">Bu sayıları uygula</button>
         </div>
         <p class="muted" style="margin:8px 0 0" id="applyNote"></p>
       </div>
     </div>
 
     <div class="card">
-      <h2>Məsafə kalibrasiyası</h2>
-      <p class="muted" style="margin:0 0 10px">Bu dövrənin <b>həqiqi</b>
-      uzunluğunu lentlə ölç və bura yaz. Qalanını qeyddəki sürət profilindən
-      özüm hesablayıram — enkoder olmadan alına biləcək yeganə düzgün üsul budur.</p>
+      <h2>Mesafe kalibrasyonu</h2>
+      <p class="muted" style="margin:0 0 10px">Bu turun <b>gerçek</b>
+      uzunluğunu metreyle ölç ve buraya yaz. Gerisini kayıttaki hız profilinden
+      kendim hesaplarım — enkoder olmadan elde edilebilecek tek doğru yöntem budur.</p>
       <div class="two">
-        <div><span class="lbl">dövrənin uzunluğu, metr</span>
-          <input type="number" id="realM" min="0" step="0.1" placeholder="məs. 12"></div>
-        <div><span class="lbl">nəticə</span>
+        <div><span class="lbl">turun uzunluğu, metre</span>
+          <input type="number" id="realM" min="0" step="0.1" placeholder="ör. 12"></div>
+        <div><span class="lbl">sonuç</span>
           <div class="muted" id="calibOut" style="padding:11px 0">—</div></div>
       </div>
       <div class="btnrow">
-        <button id="applyCalib" disabled>Kalibrasiyanı yadda saxla</button>
+        <button id="applyCalib" disabled>Kalibrasiyanı kaydet</button>
       </div>
     </div>
 
     <div class="card">
-      <h2>Hərəkətlər</h2>
+      <h2>Hareketler</h2>
       <table><thead><tr>
-        <th>nə</th><th>başladı</th><th>müddət</th><th>sürət</th><th>ən kəskin</th><th>məsafə</th>
+        <th>ne</th><th>başladı</th><th>süre</th><th>hız</th><th>en keskin</th><th>mesafe</th>
       </tr></thead><tbody id="segs"></tbody></table>
     </div>
 
@@ -175,10 +175,10 @@ async function listRuns() {
     const { files } = await r.json();
     $('runs').innerHTML = files.length
       ? files.map(f => `<option value="${f}">${f}</option>`).join('')
-      : '<option value="">hələ heç bir sürüş yoxdur</option>';
+      : '<option value="">henüz hiçbir sürüş yok</option>';
     $('load').disabled = !files.length;
   } catch {
-    $('runs').innerHTML = '<option value="">server əlçatmaz</option>';
+    $('runs').innerHTML = '<option value="">sunucu erişilemiyor</option>';
     $('load').disabled = true;
   }
 }
@@ -198,7 +198,7 @@ function readFile(f) {
   const fr = new FileReader();
   fr.onload = () => {
     try { show(JSON.parse(fr.result), f.name); }
-    catch { fail('Bu JSON deyil — fayl oxunmadı.'); }
+    catch { fail('Bu JSON değil — dosya okunmadı.'); }
   };
   fr.readAsText(f);
 }
@@ -290,7 +290,7 @@ function drawChart(rows) {
           opacity=".8"/>
     <path d="${line(yV, 'speed')}" fill="none" stroke="#3fb950" stroke-width="1.6"/>
     <text x="${pad + 2}" y="${pad + 11}" fill="#8b949e" font-size="10">sapma +1</text>
-    <text x="${pad + 2}" y="${pad * 2 + half + 11}" fill="#8b949e" font-size="10">sürət 100 %</text>
+    <text x="${pad + 2}" y="${pad * 2 + half + 11}" fill="#8b949e" font-size="10">hız 100 %</text>
   </svg>`;
 }
 
@@ -306,8 +306,8 @@ function drawFindings(r) {
   const keys = Object.keys(r.suggest);
   $('applyBox').hidden = keys.length === 0;
   if (keys.length) {
-    $('applyNote').textContent = 'Bir dəfəyə bir-iki rəqəm dəyiş, sonra yenə '
-      + 'bir dövrə sür — hansı dəyişikliyin nə etdiyini ancaq belə bilmək olar.';
+    $('applyNote').textContent = 'Bir seferde bir-iki sayı değiştir, sonra yine '
+      + 'bir tur sür — hangi değişikliğin ne yaptığını ancak böyle bilebilirsin.';
   }
 }
 
@@ -316,12 +316,12 @@ const fmtFrom = (pilot, k) => (pilot && pilot[k] != null ? pilot[k] : '?');
 $('apply').addEventListener('click', () => {
   if (!result) return;
   sendWs({ cmd: 'follow_cfg', cfg: { pilot: { ...(result.pilot || {}), ...result.suggest } } });
-  $('apply').textContent = 'Saxlanıldı — /follow-da qüvvədədir';
+  $('apply').textContent = 'Kaydedildi — /followta geçerli';
   $('apply').disabled = true;
 });
 
 function drawSegments(segs) {
-  const cls = { 'sol döngə': 'l', 'sağ döngə': 'r', 'itki': 'x', 'düz': '' };
+  const cls = { 'sol viraj': 'l', 'sağ viraj': 'r', 'kayıp': 'x', 'düz': '' };
   $('segs').innerHTML = segs.map(s => `<tr>
     <td><span class="tag ${cls[s.kind] || ''}">${s.kind}</span></td>
     <td class="n">${(s.t / 1000).toFixed(1)} s</td>

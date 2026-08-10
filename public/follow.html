@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="az">
+<html lang="tr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Robot · yolu təqib et</title>
+<title>Robot · yolu takip et</title>
 <style>
   :root{
     --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
@@ -79,31 +79,30 @@
 
   <div class="card">
     <div class="row">
-      <h1>Yolu təqib et</h1>
+      <h1>Yolu takip et</h1>
       <div class="row" style="gap:7px">
-        <span class="dot" id="dot"></span><span class="muted" id="state">qoşulur</span>
+        <span class="dot" id="dot"></span><span class="muted" id="state">bağlanıyor</span>
       </div>
     </div>
     <div class="row" style="margin-top:10px">
-      <span class="muted"><a href="/">&larr; ana səhifə</a></span>
+      <span class="muted"><a href="/">&larr; ana sayfa</a></span>
       <span class="muted"><a href="/vision">kamera</a> ·
-        <a href="/obstacle">maneə</a> · <a href="/tune">qeyd &rarr;</a></span>
+        <a href="/obstacle">engel</a> · <a href="/tune">kayıt &rarr;</a></span>
     </div>
     <div class="err" id="err" hidden></div>
   </div>
 
   <div class="card warn">
-    <div class="lbl" style="color:var(--warn)">Başlamazdan əvvəl</div>
-    <p class="muted" style="margin:8px 0 0">Kamerada yol düzgün tapılanadək
-    <b>/vision</b> səhifəsində tənzimlə, sonra bura qayıt. İlk dəfə
-    <b>təkərləri yerdən qaldır</b>, «düz yolda sürət»i 20 % qoy və bir dövrə
-    izlə. Burada master səviyyə yoxdur: sürgüdə yazan faiz elə pinə gedən
-    faizdir. <b>Boşluq düyməsi</b> hər an dayandırır.</p>
+    <div class="lbl" style="color:var(--warn)">Başlamadan önce</div>
+    <p class="muted" style="margin:8px 0 0">Kamerada yol doğru bulunana kadar
+    <b>/vision</b> sayfasında ayarla, sonra buraya dön. İlk seferde
+    <b>tekerleri yerden kaldır</b>, «düz yolda hız»ı 20 % yap ve bir tur
+    izle. Burada master seviye yok: sürgüde yazan yüzde doğrudan pine giden
+    yüzdedir. <b>Boşluk tuşu</b> her an durdurur.</p>
   </div>
 
   <div class="card" style="padding:10px">
     <canvas id="view" width="480" height="360"></canvas>
-    <video id="cam" playsinline muted></video>
   </div>
 
   <!-- ── the two buttons that matter ── -->
@@ -113,21 +112,21 @@
       <button id="kill">DAYAN</button>
     </div>
     <div class="muted" style="margin-top:10px;text-align:center" id="why">
-      əvvəlcə kameranı başlat
+      önce kamerayı başlat
     </div>
   </div>
 
   <div class="card">
     <div class="read">
-      <div><span class="lbl">Sürət</span><b id="rSpeed">–</b>
+      <div><span class="lbl">Hız</span><b id="rSpeed">–</b>
         <span class="muted" id="rSpeedV">–</span></div>
       <div><span class="lbl">Sapma</span><b id="rErr">–</b></div>
       <div><span class="lbl">Zolaq</span><b id="rBands">–</b></div>
-      <div><span class="lbl">Məsafə</span><b id="rDist">–</b></div>
+      <div><span class="lbl">Mesafe</span><b id="rDist">–</b></div>
     </div>
     <div class="row" style="margin-top:10px">
       <span class="muted">Qabaqda</span>
-      <span class="muted" id="rSon">sensor yoxdur</span>
+      <span class="muted" id="rSon">sensör yok</span>
     </div>
     <div class="bars">
       <div class="bar"><i id="b25"></i></div>
@@ -146,19 +145,25 @@
 
   <div class="card">
     <div class="lbl">Kamera</div>
-    <select id="devs"></select>
+    <div class="btnrow" style="margin-top:8px">
+      <button id="srcRpi" class="on">RPi veb-kamera</button>
+      <button id="srcBrowser">Bu brauzer</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0">Kamera robotun üstünde, Raspberry
+    Piye bağlı — telefon yok, izin yok, https gerekmez.</p>
+    <select id="devs" style="margin-top:10px"></select>
     <div class="btnrow">
-      <button id="start">Başlat</button>
+      <button id="start">Kamerayı durdur</button>
       <button id="mirror">Güzgü</button>
       <button id="flip">180°</button>
     </div>
     <div class="btnrow">
-      <button id="pick" style="flex:1">Video faylı ilə sına (motorsuz)</button>
+      <button id="pick" style="flex:1">Video dosyasıyla dene (motorsuz)</button>
       <input type="file" id="file" accept="image/*,video/*" hidden>
     </div>
     <div class="row" style="margin-top:14px">
-      <span class="lbl" style="margin:0">Trek növü</span>
-      <span class="muted" id="lockNote">sürüş boyu kilidlənir</span>
+      <span class="lbl" style="margin:0">Parkur türü</span>
+      <span class="muted" id="lockNote">sürüş boyunca kilitlenir</span>
     </div>
     <div class="btnrow" style="margin-top:0">
       <button id="mAuto" class="on">Avto</button>
@@ -168,180 +173,179 @@
   </div>
 
   <div class="card">
-    <div class="row"><span class="lbl" style="margin:0">Sürət həddi</span>
+    <div class="row"><span class="lbl" style="margin:0">Hız sınırı</span>
       <span class="muted">100 % = <b id="vFull">–</b></span></div>
-    <p class="muted" style="margin:0 0 14px">Bu faizlər <b>tələbdir</b>:
-    0 = dayan, 100 = tam qaz. Aşağıdakı «dönmə həddi»ndən yuxarı hissəyə
-    yayılırlar, ona görə yanındakı volt rəqəmi pinə gedən əsl gərginlikdir.</p>
+    <p class="muted" style="margin:0 0 14px">Bu yüzdeler bir <b>taleptir</b>:
+    0 = dur, 100 = tam gaz. Aşağıdaki «dönme eşiği»nin üstündeki aralığa
+    yayılırlar, bu yüzden yanındaki volt değeri pine giden gerçek gerilimdir.</p>
 
     <div class="sl">
-      <div class="row"><span class="muted">Dönmə həddi — təkər neçə voltdan
-        dönür</span><b id="vStall">1.50 V</b></div>
+      <div class="row"><span class="muted">Dönme eşiği — teker kaç volttan
+        sonra döner</span><b id="vStall">1.50 V</b></div>
       <input type="range" id="stall" min="0" max="60" step="1" value="22">
-      <p class="muted" style="margin:4px 0 0">Bundan aşağısı «yavaş» deyil,
-      «dayanmış»dır. Ölç: manual səhifədə faizi yavaş-yavaş qaldır, təkər ilk
-      dönən anı yaz.</p>
+      <p class="muted" style="margin:4px 0 0">Bunun altı «yavaş» değil,
+      «durmuş»tur. Ölç: manual sayfasında yüzdeyi yavaş yavaş yükselt, teker ilk
+      döndüğü anı yaz.</p>
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Düz yolda sürət</span><b id="vBase">34 %</b></div>
+      <div class="row"><span class="muted">Düz yolda hız</span><b id="vBase">34 %</b></div>
       <input type="range" id="base" min="5" max="100" step="1" value="34">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Ən aşağı sürət</span><b id="vMin">16 %</b></div>
+      <div class="row"><span class="muted">En düşük hız</span><b id="vMin">16 %</b></div>
       <input type="range" id="min" min="0" max="60" step="1" value="16">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Ən yuxarı sürət (tavan)</span><b id="vMax">100 %</b></div>
+      <div class="row"><span class="muted">En yüksek hız (tavan)</span><b id="vMax">100 %</b></div>
       <input type="range" id="max" min="10" max="100" step="1" value="100">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Döngədə yavaşlama</span><b id="vCurve">0.75</b></div>
+      <div class="row"><span class="muted">Virajda yavaşlama</span><b id="vCurve">0.75</b></div>
       <input type="range" id="curve" min="0" max="100" step="1" value="75">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Sürətlənmə — % / saniyə</span><b id="vAccel">90</b></div>
+      <div class="row"><span class="muted">Hızlanma — % / saniye</span><b id="vAccel">90</b></div>
       <input type="range" id="accel" min="20" max="400" step="5" value="90">
     </div>
   </div>
 
   <div class="card">
-    <div class="lbl" style="margin-bottom:4px">Təkər balansı</div>
+    <div class="lbl" style="margin-bottom:4px">Teker dengesi</div>
     <p class="muted" style="margin:0 0 12px">İki motor heç vaxt eyni motor
-    deyil. Hər təkərin öz dönmə həddi və öz gücü var — eyni gərginlikdə biri
-    daha sürətli gedirsə, robot düz getmir. Bunlar <b>ölçüləndən sonra</b>
-    doldurulur: <a href="/manual">manual səhifəsində</a> hər təkəri ayrıca
+    değil. Her tekerin kendi dönme eşiği ve kendi gücü var — aynı gerilimde biri
+    daha hızlı gidiyorsa robot düz gitmez. Bunlar <b>ölçüldükten sonra</b>
+    doldurulur: <a href="/manual">manual sayfasında</a> her tekeri ayrı ayrı
     qaldır, ilk döndüyü faizi yaz.</p>
     <div class="sl">
-      <div class="row"><span class="muted">GPIO25 — dönmə həddi</span><b id="vS25">ümumi</b></div>
+      <div class="row"><span class="muted">GPIO25 — dönme eşiği</span><b id="vS25">genel</b></div>
       <input type="range" id="stall25" min="0" max="60" step="1" value="0">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">GPIO26 — dönmə həddi</span><b id="vS26">ümumi</b></div>
+      <div class="row"><span class="muted">GPIO26 — dönme eşiği</span><b id="vS26">genel</b></div>
       <input type="range" id="stall26" min="0" max="60" step="1" value="0">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">GPIO25 — güc düzəlişi</span><b id="vG25">1.00</b></div>
+      <div class="row"><span class="muted">GPIO25 — güç düzeltmesi</span><b id="vG25">1.00</b></div>
       <input type="range" id="gain25" min="50" max="150" step="1" value="100">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">GPIO26 — güc düzəlişi</span><b id="vG26">1.00</b></div>
+      <div class="row"><span class="muted">GPIO26 — güç düzeltmesi</span><b id="vG26">1.00</b></div>
       <input type="range" id="gain26" min="50" max="150" step="1" value="100">
     </div>
-    <p class="muted" style="margin:10px 0 0">Hədd sürgüsü <b>0</b>-dırsa, yuxarıdakı
-    ümumi hədd işlənir. Güc düzəlişini axırda işlət: əvvəlcə həddləri düzəlt,
-    yalnız sonra hələ də fərq varsa sürətli təkəri azalt.</p>
+    <p class="muted" style="margin:10px 0 0">Eşik sürgüsü <b>0</b> ise yukarıdaki
+    genel eşik kullanılır. Güç düzeltmesini en son kullan: önce eşikleri düzelt,
+    yalnızca sonra hâlâ fark varsa hızlı tekeri azalt.</p>
   </div>
 
   <div class="card">
     <div class="lbl" style="margin-bottom:12px">Sükan</div>
     <div class="sl">
-      <div class="row"><span class="muted">Sərtlik (kP)</span><b id="vKp">0.85</b></div>
+      <div class="row"><span class="muted">Sertlik (kP)</span><b id="vKp">0.85</b></div>
       <input type="range" id="kp" min="10" max="250" step="5" value="85">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Qabağa baxış (kD) — saniyə</span><b id="vKd">0.12</b></div>
+      <div class="row"><span class="muted">İleri bakış (kD) — saniye</span><b id="vKd">0.12</b></div>
       <input type="range" id="kd" min="0" max="60" step="1" value="12">
     </div>
     <div class="btnrow" style="margin-top:0">
-      <button id="swap">Təkərləri dəyiş (sol/sağ)</button>
+      <button id="swap">Tekerleri değiştir (sol/sağ)</button>
     </div>
-    <p class="muted" style="margin:10px 0 0">Robot düzəliş əvəzinə yoldan
-    uzaqlaşırsa — bu düymə. Sükan düz yolda yırğalanırsa kP-ni azalt, döngəni
+    <p class="muted" style="margin:10px 0 0">Robot düzeltme yerine yoldan
+    uzaklaşıyorsa — bu düğme. Direksiyon düz yolda salınıyorsa kPyi azalt, virajı
     gec tutursa kD-ni artır.</p>
   </div>
 
   <div class="card">
-    <div class="row"><span class="lbl" style="margin:0">Qabaqdakı maneə</span>
+    <div class="row"><span class="lbl" style="margin:0">Öndeki engel</span>
       <span class="muted" id="sonNote">–</span></div>
     <div class="btnrow" style="margin-top:10px">
-      <button id="sonOn" class="on">Maneədə dayan</button>
-      <button id="sonOff">Nəzərə alma</button>
+      <button id="sonOn" class="on">Engelde dur</button>
+      <button id="sonOff">Dikkate alma</button>
     </div>
-    <p class="muted" style="margin:10px 0 0">Həddləri <a href="/obstacle">maneə
-    səhifəsində</a> tənzimlə — eyni rəqəmlər burada da işləyir. Maneə görünəndə
-    robot tam dayanır (yavaşlamır: divara nə sürətlə dəyməyi seçmək deyil), yol
-    açılandan sonra gecikmə ilə davam edir. Bu müddətdə «yol itdi» sayğacı
-    işləmir, yoxsa robot gözləyə-gözləyə özünü söndürərdi.</p>
+    <p class="muted" style="margin:10px 0 0">Eşikleri <a href="/obstacle">engel
+    sayfasında</a> ayarla — aynı sayılar burada da geçerli. Engel görününce
+    robot tam durur (yavaşlamaz: duvara hangi hızla çarpacağını seçmek değil), yol
+    açıldıktan sonra gecikmeyle devam eder. Bu süre boyunca «yol kayboldu» sayacı
+    işlemez, yoksa robot bekleye bekleye kendini kapatırdı.</p>
   </div>
 
   <div class="card">
     <div class="lbl" style="margin-bottom:12px">Yoldan uzaqlaşanda</div>
     <div class="sl">
-      <div class="row"><span class="muted">Bu sapmadan sonra çevrilməyə keçir</span>
+      <div class="row"><span class="muted">Bu sapmadan sonra dönmeye geçer</span>
         <b id="vHard">0.60</b></div>
       <input type="range" id="hard" min="30" max="95" step="1" value="60">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Çevrilmə sürəti</span><b id="vCrawl">10 %</b></div>
+      <div class="row"><span class="muted">Dönme hızı</span><b id="vCrawl">10 %</b></div>
       <input type="range" id="crawl" min="0" max="40" step="1" value="10">
     </div>
-    <p class="muted" style="margin:10px 0 0">Yol kadrın kənarına düşəndə irəli
-    sürmək vəziyyəti yalnız pisləşdirir. Bu həddi keçəndə robot daxili təkəri
-    tam dayandırıb yerində — yolun olduğu tərəfə — sürünərək çevrilir, sapma
-    0.15 azalanadək. Qayıtmaq üçün giriş həddindən aşağı düşmək lazımdır, ona
-    görə həddin üstündə titrəmir.</p>
+    <p class="muted" style="margin:10px 0 0">Yol karenin kenarına düşünce ileri
+    sürmek durumu yalnızca kötüleştirir. Bu eşiği geçince robot iç tekeri
+    tam durdurup yerinde — yolun olduğu tarafa — sürünerek döner, sapma
+    0.15 azalana kadar. Geri dönmek için giriş eşiğinin altına inmek gerekir, bu
+    yüzden eşiğin üstünde titremez.</p>
   </div>
 
   <!-- ── the run recorder ── -->
   <div class="card">
-    <div class="row"><span class="lbl" style="margin:0">Qeyd (log)</span>
+    <div class="row"><span class="lbl" style="margin:0">Kayıt (log)</span>
       <span class="muted" id="logState">yazılmır</span></div>
     <div class="two" style="margin-top:10px">
-      <input type="text" id="note" placeholder="qeyd: «3-cü dövrə, yeni kP»">
+      <input type="text" id="note" placeholder="not: «3. tur, yeni kP»">
       <button id="rec">Yazmağa başla</button>
     </div>
-    <p class="muted" style="margin:10px 0 0">Hər kadrın sapması, sürəti və
-    qərarı <code>node/logs/follow-….json</code> faylına yazılır. Sürməyə
-    başlayanda özü açılır, dayananda özü bağlanır.</p>
+    <p class="muted" style="margin:10px 0 0">Her karenin sapması, hızı ve
+    kararı <code>node/logs/follow-….json</code> dosyasına yazılır. Sürmeye
+    başlayınca kendi açılır, durunca kendi kapanır.</p>
 
-    <div class="lbl" style="margin-top:16px">Məsafə kalibrasiyası</div>
-    <p class="muted" style="margin:0 0 10px">Təkərdə enkoder yoxdur, ona görə
-    məsafə hesablanır. Bir dəfə ölç: robotu sabit faizlə düz sür, neçə metr
-    getdiyini və neçə saniyə çəkdiyini yaz.</p>
+    <div class="lbl" style="margin-top:16px">Mesafe kalibrasyonu</div>
+    <p class="muted" style="margin:0 0 10px">Tekerde enkoder yok, bu yüzden
+    mesafe hesaplanır. Bir kez ölç: robotu sabit yüzdeyle düz sür, kaç metre
+    gittiğini ve kaç saniye sürdüğünü yaz.</p>
     <div class="three">
       <div><span class="lbl">faiz</span><input type="number" id="cPct" value="50" min="1" max="100"></div>
       <div><span class="lbl">metr</span><input type="number" id="cM" value="0" min="0" step="0.1"></div>
-      <div><span class="lbl">saniyə</span><input type="number" id="cS" value="0" min="0" step="0.1"></div>
+      <div><span class="lbl">saniye</span><input type="number" id="cS" value="0" min="0" step="0.1"></div>
     </div>
     <div class="row" style="margin-top:10px">
       <span class="muted">Hesablanan</span>
-      <b id="vCalib" style="font:600 13px ui-monospace,Menlo,monospace">kalibrasiya yoxdur</b>
+      <b id="vCalib" style="font:600 13px ui-monospace,Menlo,monospace">kalibrasyon yok</b>
     </div>
   </div>
 
   <div class="card">
-    <div class="lbl">Bu səhifə nə edir</div>
-    <p class="muted" style="margin:8px 0 0">Kameradan gələn hər kadrı
-    <b>/vision</b> ilə eyni detektordan keçirir (<code>road.js</code>), sapmanı
-    ölçür və <code>pilot.js</code> ilə iki təkərin faizini hesablayır. Dönmə
-    yalnız <b>sürət fərqi</b> ilə olur — istiqamət relayları toxunulmur, ona
-    görə döngədə dayanma pauzası yoxdur.</p>
-    <p class="muted" style="margin:8px 0 0">Faizlər <b>birbaşa</b> pinə gedir —
-    /drive-dakı master səviyyə bu səhifədə tətbiq olunmur. Yəni 100 %
-    <code>--v-max</code>-dır (defolt 3.3 V), 0 % isə boşdur (1.00 V). Bir yol,
-    bir hədd: burada tavan «ən yuxarı sürət» sürgüsüdür.</p>
-    <p class="muted" style="margin:8px 0 0"><b>Ölü zona.</b> Motor 1.5 V-dən
-    aşağı ümumiyyətlə dönmür, yəni 22 %-dən aşağı hər faiz «yavaş» yox,
-    «dayanmış» deməkdir. Köhnə qeydlərdə 59 saniyəlik bir sürüşdə təkər
-    əmrlərinin <b>91 %-i</b> məhz o zonada idi — hərəkət əmri verilirdi, təkər
-    dönmürdü. İndi tələb [hədd, 100] aralığına yayılır; yalnız dəqiq sıfır sıfır
-    qalır, çünki daxili təkəri tam dayandırmaq ən kəskin dönüşdür.</p>
-    <p class="muted" style="margin:8px 0 0">Sürət döngədə özü azalır: kadrın
-    yuxarı yarısındakı sapma böyükdürsə robot <b>döngəyə girməmişdən</b>
-    yavaşlayır. Zəncir qısadırsa — yəni uzağı görmürsə — bir az da yavaşlayır.</p>
-    <p class="muted" style="margin:8px 0 0"><b>Trek növü sürüş boyu
-    dəyişmir.</b> Avto rejim kameranı gəzdirərkən hər kadrda qərar verir, amma
-    «sürməyə başla»-ya basdığın anda hansı rəngdə idisə, sonuna qədər o qalır —
-    yarı dövrədə fikrini dəyişdirə bilən yeganə şeylər kölgə, işıqlı qapı və
-    kiminsə ayağıdır. Ölçmək davam edir (rəqəmlər log-a düşür), sadəcə tətbiq
-    olunmur.</p>
-    <p class="muted" style="margin:8px 0 0">Hər sürüş <b>özü</b> qeyd olunur —
-    başlat düyməsi həm də «yazmağa başla» düyməsidir. Sonra <a href="/tune">qeydi
-    oxu</a> səhifəsinə keçib nə dəyişməli olduğunu görürsən.</p>
-    <p class="muted" style="margin:8px 0 0">Yol itsə, son istiqamətlə
-    <b>0.6 saniyə</b> yavaş davam edir (kəskin döngədə kadr itir), sonra
-    dayanır, daha 1.5 saniyədən sonra ENABLE düşür. Server tərəfdə də ölü adam
-    var: kadr 400 ms gəlməsə faiz sıfırlanır.</p>
+    <div class="lbl">Bu sayfa ne yapar</div>
+    <p class="muted" style="margin:8px 0 0">Kameradan gelen her kareyi
+    <b>/vision</b> ile aynı dedektörden geçirir (<code>road.js</code>), sapmayı
+    ölçer ve <code>pilot.js</code> ile iki tekerin yüzdesini hesaplar. Dönüş
+    yalnızca <b>hız farkıyla</b> olur — yön röleleri kullanılmaz, bu yüzden
+    virajda durma duraklaması yoktur.</p>
+    <p class="muted" style="margin:8px 0 0">Yüzdeler <b>doğrudan</b> pine gider —
+    /drivedaki master seviye bu sayfada uygulanmaz. Yani 100 %
+    <code>--v-max</code>tır (varsayılan 3.3 V), 0 % ise boştur (1.00 V). Tek yol,
+    tek sınır: burada tavan «en yüksek hız» sürgüsüdür.</p>
+    <p class="muted" style="margin:8px 0 0"><b>Ölü bölge.</b> Motor 1.5 Vun
+    altında hiç dönmez, yani 22 %-in altındaki her yüzde «yavaş» değil,
+    «durmuş» demektir. Eski kayıtlarda 59 saniyelik bir sürüşte teker
+    komutlarının <b>91 %-i</b> tam o bölgedeydi — hareket komutu veriliyordu, teker
+    dönmüyordu. Şimdi talep [eşik, 100] aralığına yayılıyor; yalnızca tam sıfır sıfır
+    kalır, çünkü iç tekeri tam durdurmak en keskin dönüştür.</p>
+    <p class="muted" style="margin:8px 0 0">Hız virajda kendi azalır: karenin
+    üst yarısındaki sapma büyükse robot <b>viraja girmeden önce</b>
+    yavaşlar. Zincir kısaysa — yani uzağı görmüyorsa — biraz daha yavaşlar.</p>
+    <p class="muted" style="margin:8px 0 0"><b>Parkur türü sürüş boyunca
+    değişmez.</b> Oto mod kamerayı gezdirirken her karede karar verir, ama
+    «sürmeye başla»ya bastığın anda hangi renkteyse sonuna kadar o kalır —
+    tur ortasında fikrini değiştirebilecek tek şeyler gölge, aydınlık kapı ve
+    birinin ayağıdır. Ölçüm devam eder (sayılar loga düşer), sadece uygulanmaz.</p>
+    <p class="muted" style="margin:8px 0 0">Her sürüş <b>kendiliğinden</b> kaydedilir —
+    başlat düğmesi aynı zamanda «yazmaya başla» düğmesidir. Sonra <a href="/tune">kaydı
+    oku</a> sayfasına geçip ne değiştirmen gerektiğini görürsün.</p>
+    <p class="muted" style="margin:8px 0 0">Yol kaybolursa son yönle
+    <b>0.6 saniye</b> yavaş devam eder (keskin virajda kare kaybolur), sonra
+    durur, 1.5 saniye daha sonra ENABLE düşer. Sunucu tarafında da ölü adam
+    var: kare 400 ms gelmezse yüzde sıfırlanır.</p>
   </div>
 
 </div>
@@ -349,13 +353,15 @@
 <script src="/road.js"></script>
 <script src="/pilot.js"></script>
 <script src="/sonar.js"></script>
+<script src="/cam.js"></script>
 <script src="/wheels.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const view = $('view'), vctx = view.getContext('2d', { willReadFrequently: true });
-const cam = $('cam');
+// The picture source: the Pi's webcam, this browser's camera, or a file.
+const src = camMount({ onState: paintSource });
 
-let stream = null, camOn = false, source = null;
+let camOn = true;
 let mirrored = false, flipped = false;
 let frames = 0, fpsAt = performance.now(), fps = 0;
 
@@ -386,7 +392,7 @@ function connect() {
     wsOpen = false;
     // The server already drops to idle when the socket dies; disarming here is
     // so the page cannot look like it is still driving.
-    disarm('əlaqə kəsildi');
+    disarm('bağlantı kesildi');
     setTimeout(connect, 1000);
   };
   ws.onerror = () => ws.close();
@@ -397,7 +403,7 @@ function connect() {
     status = s;
     paintLink(s);
     if (!armed && s.follow_cfg) applySaved(s.follow_cfg);
-    if (armed && !s.running) disarm('server dayandırdı');
+    if (armed && !s.running) disarm('sunucu durdurdu');
   };
 }
 
@@ -415,6 +421,9 @@ function applySaved(c) {
   if (c.obstacle) for (const k of Object.keys(OBSTACLE_DEFAULTS)) {
     if (k in c.obstacle) ocfg[k] = c.obstacle[k];
   }
+  // Whether the brake is armed is the server's state, so the buttons start
+  // showing what it is rather than what this page assumed.
+  if (c.obstacle && c.obstacle.guard === false) sonarOn = false;
   showAll();
 }
 
@@ -428,12 +437,12 @@ const saveCfg = () => sendWs({ cmd: 'follow_cfg', cfg: {
 function paintLink(s) {
   const ok = s.esp_fresh && !s.serial_error;
   $('dot').className = 'dot ' + (armed ? 'go' : ok ? 'ok' : 'bad');
-  $('state').textContent = s.serial_error ? 'serial xətası'
-    : !ok ? 'ESP32 əlçatmaz' : armed ? 'SÜRÜR' : 'hazır';
+  $('state').textContent = s.serial_error ? 'seri port hatası'
+    : !ok ? 'ESP32 erişilemiyor' : armed ? 'SÜRÜR' : 'hazır';
   $('vFull').textContent = `${(s.vmax ?? 3.3).toFixed(2)} V`;
   $('logState').textContent = s.log && s.log.active
-    ? `${s.log.file} · ${s.log.rows} sətir` : 'yazılmır';
-  $('rec').textContent = s.log && s.log.active ? 'Yazmağı dayandır' : 'Yazmağa başla';
+    ? `${s.log.file} · ${s.log.rows} satır` : 'yazılmır';
+  $('rec').textContent = s.log && s.log.active ? 'Yazmayı durdur' : 'Yazmaya başla';
 }
 
 // ── controls ────────────────────────────────────────────────────────
@@ -516,7 +525,7 @@ const showV = (pct) => { const v = volts(pct); return v == null ? '–' : v.toFi
 
 function showCalib() {
   const at = metresPerSecond(calib.pct, calib);
-  $('vCalib').textContent = at == null ? 'kalibrasiya yoxdur'
+  $('vCalib').textContent = at == null ? 'kalibrasyon yok'
     : `${at.toFixed(2)} m/s @ ${calib.pct} %`;
 }
 
@@ -527,13 +536,19 @@ function setMode(m) {
   $('mWhite').classList.toggle('on', m === 'white');
   roadSetMode(m);
 }
-$('sonOn').addEventListener('click',  () => { sonarOn = true;  paintSonar(); });
-$('sonOff').addEventListener('click', () => { sonarOn = false; paintSonar(); });
+// The brake is the server's now, so these two buttons write the server's flag
+// rather than a variable in this tab. A switch that says "off" while the robot
+// still stops — or worse, says "on" while it does not — is the one thing a
+// safety control must never be.
+const sendGuard = (on) => sendWs({ cmd: 'follow_cfg', cfg: { obstacle: { guard: on } } });
+$('sonOn').addEventListener('click',  () => { sonarOn = true;  sendGuard(true);  paintSonar(); });
+$('sonOff').addEventListener('click', () => { sonarOn = false; sendGuard(false); paintSonar(); });
 function paintSonar() {
   $('sonOn').classList.toggle('on', sonarOn);
   $('sonOff').classList.toggle('on', !sonarOn);
   $('sonNote').textContent = sonarOn
-    ? `${ocfg.stopCm} sm-dən yaxında dayanır` : 'sensor nəzərə alınmır';
+    ? `${ocfg.stopCm} sm-den yakında durur — sunucuda, bütün sayfalar için`
+    : 'sensör dikkate alınmıyor (sunucuda da kapalı)';
 }
 
 $('mAuto').addEventListener('click',  () => { setMode('auto');  saveCfg(); });
@@ -548,69 +563,54 @@ $('flip').addEventListener('click', () => {
 });
 
 // ── camera ──────────────────────────────────────────────────────────
-function fail(msg) {
-  $('err').hidden = false;
-  $('err').textContent = msg;
+// The Pi's webcam by default — see public/cam.js. It is the same picture the
+// robot's QR reader is looking at, over plain http, with nothing to grant.
+function paintSource(st) {
+  $('srcRpi').classList.toggle('on', st.mode === 'rpi');
+  $('srcBrowser').classList.toggle('on', st.mode === 'browser');
+  $('err').hidden = !st.err;
+  if (st.err) $('err').textContent = st.err;
+  // A camera that stops delivering is a reason to stop driving, and the page
+  // must not wait to be told: this is the same event as a closed laptop lid.
+  if (armed && !st.live && st.err) disarm('kamera itdi');
 }
 
 async function listDevices() {
-  try {
-    const all = await navigator.mediaDevices.enumerateDevices();
-    const cams = all.filter(d => d.kind === 'videoinput');
-    $('devs').innerHTML = cams.length
-      ? cams.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Kamera ' + (i + 1)}</option>`).join('')
-      : '<option value="">kamera tapılmadı</option>';
-  } catch { /* labels need permission first */ }
+  const cams = await src.devices();
+  $('devs').innerHTML = cams.length
+    ? cams.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Kamera ' + (i + 1)}</option>`).join('')
+    : '<option value="">tarayıcı kamerası bulunamadı</option>';
 }
 
-async function startCam() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    fail('Bu ünvanda kameraya icazə yoxdur — brauzer yalnız localhost və ya '
-       + 'https üzərində kamera verir. Robotu sürən kompüterdə '
-       + 'http://localhost:8090/follow ünvanını aç.');
-    return;
-  }
-  try {
-    if (stream) stream.getTracks().forEach(t => t.stop());
-    const id = $('devs').value;
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: id ? { deviceId: { exact: id } }
-                : { facingMode: { ideal: 'environment' } },
-      audio: false,
-    });
-    cam.srcObject = stream;
-    await cam.play();
-    source = cam; camOn = true;
-    $('err').hidden = true;
-    $('start').textContent = 'Kameranı dayandır';
-    listDevices();
-  } catch (e) {
-    fail('Kamera açılmadı: ' + e.message);
-  }
-}
+$('srcRpi').addEventListener('click', () => { camOn = true; src.useRpi(); });
+$('srcBrowser').addEventListener('click', async () => {
+  camOn = true;
+  await src.useBrowser($('devs').value);
+  listDevices();
+});
+$('devs').addEventListener('change', () => {
+  if (src.mode === 'browser') src.useBrowser($('devs').value);
+});
 
 $('start').addEventListener('click', () => {
   if (camOn) {
-    disarm('kamera dayandı');
-    camOn = false; source = null;
-    if (stream) stream.getTracks().forEach(t => t.stop());
+    disarm('kamera durdu');
+    camOn = false;
+    src.stop();
     $('start').textContent = 'Başlat';
-  } else startCam();
+  } else {
+    camOn = true;
+    src.useRpi();
+    $('start').textContent = 'Kamerayı durdur';
+  }
 });
-$('devs').addEventListener('change', () => { if (camOn) startCam(); });
 
 $('pick').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', () => {
   const f = $('file').files[0];
   if (!f) return;
-  const url = URL.createObjectURL(f);
-  if (f.type.startsWith('video')) {
-    cam.srcObject = null; cam.src = url; cam.loop = true; cam.play(); source = cam;
-  } else {
-    const img = new Image(); img.onload = () => { source = img; }; img.src = url;
-  }
   camOn = true;
-  $('err').hidden = true;
+  src.useFile(f);
 });
 
 // ── arm / disarm ────────────────────────────────────────────────────
@@ -619,8 +619,8 @@ $('file').addEventListener('change', () => {
 // rather than arming into a robot that will immediately time out.
 function arm() {
   if (armed) return;
-  if (!ready(source)) { $('why').textContent = 'kamera işləmir'; return; }
-  if (!wsOpen) { $('why').textContent = 'serverlə əlaqə yoxdur'; return; }
+  if (!src.ready()) { $('why').textContent = 'kamera çalışmıyor'; return; }
+  if (!wsOpen) { $('why').textContent = 'sunucuyla bağlantı yok'; return; }
   pst = pilotState(performance.now());
   ost = obstacleState(performance.now());
   dist = 0; distAt = performance.now();
@@ -630,7 +630,7 @@ function arm() {
   // doorway cannot talk it into the other reading.
   roadLockAuto(true);
   $('arm').classList.add('live');
-  $('arm').textContent = 'SÜRÜR — dayandırmaq üçün bas';
+  $('arm').textContent = 'SÜRÜYOR — durdurmak için bas';
   sendWs({ cmd: 'start' });
   // Every run is recorded, always, and always as its own file. The lap worth
   // having is the one that went wrong, and that is never the lap you remembered
@@ -645,14 +645,14 @@ function disarm(why) {
   roadLockAuto(false);              // free to re-decide while you point it around
   $('arm').classList.remove('live');
   $('arm').textContent = 'SÜRMƏYƏ BAŞLA';
-  $('why').textContent = why || 'dayandı';
+  $('why').textContent = why || 'durdu';
   sendWs({ cmd: 'stop' });
   flushRows(true);
   sendWs({ cmd: 'log_stop' });
 }
 
-$('arm').addEventListener('click', () => armed ? disarm('əl ilə dayandırıldı') : arm());
-$('kill').addEventListener('click', () => disarm('DAYAN düyməsi'));
+$('arm').addEventListener('click', () => armed ? disarm('elle durduruldu') : arm());
+$('kill').addEventListener('click', () => disarm('DUR düğmesi'));
 
 // Space is the panic key, and it must work with the focus anywhere on the page.
 addEventListener('keydown', (e) => {
@@ -664,13 +664,13 @@ addEventListener('keydown', (e) => {
     && ['text', 'number', 'search'].includes(el.type);
   if (typing && e.key !== 'Escape') return;
   e.preventDefault();
-  disarm('boşluq düyməsi');
+  disarm('boşluk tuşu');
 });
 // A hidden tab gets its rAF throttled to ~1 Hz, which is not a rate you can
 // steer at. Leaving is stopping.
-addEventListener('blur', () => disarm('pəncərə fokusu itdi'));
+addEventListener('blur', () => disarm('pencere odağı kayboldu'));
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) disarm('səhifə arxa plana keçdi');
+  if (document.hidden) disarm('sayfa arka plana geçti');
 });
 
 // ── recording ───────────────────────────────────────────────────────
@@ -704,21 +704,16 @@ function flushRows(force) {
 }
 
 // ── loop ────────────────────────────────────────────────────────────
-function ready(src) {
-  if (!src) return false;
-  return src.tagName === 'IMG' ? src.complete : src.readyState >= 2;
-}
-
 let sentCmdAt = 0, t0 = performance.now();
 
 function loop() {
   requestAnimationFrame(loop);
-  if (!camOn || !ready(source)) return;
+  if (!camOn || !src.ready()) return;
 
   vctx.save();
   vctx.translate(mirrored ? W : 0, flipped ? H : 0);
   vctx.scale(mirrored ? -1 : 1, flipped ? -1 : 1);
-  vctx.drawImage(source, 0, 0, W, H);
+  vctx.drawImage(src.el, 0, 0, W, H);
   vctx.restore();
 
   const now = performance.now();
@@ -734,8 +729,13 @@ function loop() {
   // enabled, so the readout is honest either way, but it only takes the wheels
   // when it is switched on — and when it does, it takes them completely: a
   // "slow down for the wall" would be a decision about how hard to hit it.
+  // The verdict comes from the server — the same obstacleStep, run once, at
+  // 20 Hz, by the thing that also gates the throttle. Running a second copy
+  // here would give the readout an opinion the robot does not share.
   const fwd = status && status.esp && status.esp.son ? status.esp.son.fwd_cm : undefined;
-  obs = obstacleStep(ost, fwd === undefined ? null : fwd, ocfg, now);
+  obs = (status && status.obstacle)
+    ? status.obstacle
+    : obstacleStep(ost, fwd === undefined ? null : fwd, ocfg, now);
   if (sonarOn && obs.blocked) {
     out = { ...out, p25: 0, p26: 0, speed: 0, reason: obs.reason, blockedBySonar: true };
     // Losing the road while stopped in front of something is not the road being
@@ -846,27 +846,27 @@ function paintReadout(res, e, out) {
   $('b26').style.width = Math.min(100, out.p26) + '%';
   $('steer').style.left = (50 + out.steer * 48) + '%';
   $('rFps').textContent = fps;
-  $('rMode').textContent = res.mode === 'dark' ? 'qara yol' : 'ağ yol';
-  $('lockNote').textContent = cfg.mode !== 'auto' ? 'əl ilə seçilib'
-    : armed ? `kilidli: ${res.mode === 'dark' ? 'qara yol' : 'ağ yol'}`
-    : 'sürüş boyu kilidlənir';
+  $('rMode').textContent = res.mode === 'dark' ? 'siyah yol' : 'beyaz yol';
+  $('lockNote').textContent = cfg.mode !== 'auto' ? 'elle seçildi'
+    : armed ? `kilitli: ${res.mode === 'dark' ? 'siyah yol' : 'beyaz yol'}`
+    : 'sürüş boyunca kilitlenir';
   $('rReason').textContent = armed ? out.reason
-    : (status && status.reason) || 'dayanıb';
+    : (status && status.reason) || 'durdu';
   $('rReason').style.color = (out.recover || out.blockedBySonar) ? 'var(--stop)' : '';
-  $('rSon').textContent = !sonarOn ? 'sönülü'
-    : obs.cm == null ? 'əks-səda yox'
-    : obs.phase === 'go' ? `açıq · ${obs.cm} sm`
-    : obs.phase === 'stop' ? `MANEƏ ${obs.cm} sm`
-    : `gözləyir ${(obs.waitLeft / 1000).toFixed(1)} s`;
+  $('rSon').textContent = !sonarOn ? 'kapalı'
+    : obs.cm == null ? 'yankı yok'
+    : obs.phase === 'go' ? `açık · ${obs.cm} sm`
+    : obs.phase === 'stop' ? `ENGEL ${obs.cm} sm`
+    : `bekliyor ${(obs.waitLeft / 1000).toFixed(1)} s`;
   $('rSon').style.color = sonarOn && obs.blocked ? 'var(--stop)' : '';
   if (!armed) $('why').textContent = camOn
-    ? (wsOpen ? 'hazır — sürməyə başla' : 'serverlə əlaqə yoxdur')
-    : 'əvvəlcə kameranı başlat';
+    ? (wsOpen ? 'hazır — sürmeye başla' : 'sunucuyla bağlantı yok')
+    : 'önce kamerayı başlat';
 }
 
 showAll();
 paintSonar();
-listDevices();
+src.useRpi();               // the robot's own eye, by default
 connect();
 loop();
 

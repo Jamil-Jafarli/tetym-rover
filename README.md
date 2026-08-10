@@ -4,17 +4,32 @@ A web interface for driving the ESP32's two DACs. You type a **percentage**
 for each channel, press **START**, and they stream to the board over wifi until
 you press **STOP**.
 
+The robot carries a **Raspberry Pi**, and the Pi is where this server runs:
+
+```
+powerbank → Raspberry Pi → ESP32 → ESC → motor
+                 └── USB webcam
+```
+
+The Pi used to be optional and the camera used to be a phone. Both of those
+are gone. The webcam plugs into the Pi, the Pi holds the 20 Hz stream to the
+ESP32 over wifi, and the browser — on a laptop, on a phone, anywhere on the
+network — only *watches*. That removes the whole HTTPS-and-camera-permission
+problem the camera pages used to have, and it means the robot can see, read a
+QR code and stop for an obstacle with no browser open at all.
+
 ```
 GPIO25 (DAC1) → controller throttle signal wire     analog
 GPIO26 (DAC2) → controller throttle signal wire     analog
 GPIO23        → driver enable / brake release       digital: 0 at rest, 1 on START
 GPIO19        → GPIO25 wheel's direction relay       digital: 1 forward, 0 back
 GPIO18        → GPIO26 wheel's direction relay       digital: 1 forward, 0 back
-GPIO13        → scan servo signal (continuous rotation)   50 Hz PWM
-GPIO27 / 33   → scan HC-SR04       TRIG / ECHO
 GPIO14 / 32   → forward HC-SR04    TRIG / ECHO
 GND           → controller GND        (required, common ground)
 ```
+
+The Pi's side is two plugs: the webcam in a USB port, and power. It reaches the
+ESP32 over the board's own wifi network exactly as a laptop used to.
 
 **0 %** is idle — 1.00 V, which the controller reads as zero throttle.
 **100 %** is whatever ceiling you started the server with (`--v-max`).
@@ -26,8 +41,16 @@ moment you press START — and back to 0 on STOP, on a closed tab, on a link
 timeout, and on boot. Wire it to whatever your driver needs held high to run.
 
 ```
-browser ⇄ Node (this) ⇄ wifi WebSocket ⇄ ESP32 ⇄ GPIO25 / GPIO26
+browser ⇄ Node on the Pi (this) ⇄ wifi WebSocket ⇄ ESP32 ⇄ GPIO25 / GPIO26
+             ├── USB webcam ──→ MJPEG to the browser, QR to itself
+             └── forward HC-SR04 (via the ESP32) ──→ the 30 cm brake
 ```
+
+**The interface is in Turkish** — every page, the shared wheel-trim strip, the
+`/tune` findings, and the `reason` strings the server puts in the status frame.
+Identifiers are not: keys (`w`, `wa`), gear names (`normal`, `fast`), pin names,
+JSON fields and WebSocket commands stay English because they are protocol, and
+so are this file, the code comments and the server's own console output.
 
 ## 1. Flash the board
 
@@ -87,13 +110,13 @@ One WebSocket, one port:
 | | |
 |---|---|
 | **/** | hub — live status and links to everything |
+| **/dashboard** | everything at once: speed, volts, ESP32 + Pi health, camera, obstacle, QR, map |
 | **/setup** | what to measure, in order, and where the number goes |
 | **/drive** | hold **W / A / S / D** to drive |
 | **/vision** | camera; finds the road and shows the steering error |
 | **/follow** | the same detector, driving the motors, recording the run |
 | **/tune** | read a run back: charts, manoeuvres, and what to change |
 | **/obstacle** | the forward HC-SR04: drive, stop, wait, carry on |
-| **/sonar** | the spinning HC-SR04, as a map of the room |
 | **/pins** | every spare GPIO, 0-255 by hand, with a notes column |
 | **/manual** | type the two percentages by hand |
 
@@ -123,10 +146,15 @@ No board yet? `npm run fake` runs a simulated ESP32 and the full UI.
 | `--fake` | off | simulated board, nothing is driven |
 | `--http <n>` | `8090` | web port |
 | `--host <addr>` | `0.0.0.0` | bind address — every interface by default |
-| `--https` | off | serve over TLS, so the camera works from other devices |
+| `--https` | off | serve over TLS. No longer needed for the camera — see below |
 | `--cert <file>` | — | use your own certificate instead (implies `--https`) |
 | `--key <file>` | — | ...and its private key |
 | `--v-max <v>` | `3.3` | what 100 % means, in volts |
+| `--camera <dev>` | `/dev/video0` | the webcam on this machine |
+| `--cam-size <WxH>` | `640x480` | capture size |
+| `--cam-fps <n>` | `15` | capture rate — the camera picks the nearest it supports |
+| `--no-camera` | off | do not open a camera at all |
+| `--no-qr` | off | camera on, QR reader off |
 | `--list` | — | list serial ports and exit |
 
 Start with `--v-max 1.8` on a real motor until you know where each one begins
@@ -146,20 +174,16 @@ reachable from this network at:
 No authentication, on purpose: this is a bench tool on your own wifi. Do not put
 it on one you do not control.
 
-**But the camera will not work over plain http.** Browsers only hand
-`getUserMedia` to `localhost` or to HTTPS, so `/vision` and `/follow` open fine
-from a phone and then sit there with a black rectangle. That is not a networking
-problem and no amount of opening ports fixes it.
+**The camera works over plain http now, from anything.** It used not to: the
+camera was the browser's, browsers only hand `getUserMedia` to `localhost` or
+HTTPS, and so `/vision` opened fine on a phone and then sat there with a black
+rectangle. There was a whole section here about self-signed certificates whose
+only job was to get around that.
 
-```bash
-node server.js --esp 192.168.4.1 --https
-```
-
-The first run makes a self-signed certificate in `node/certs/` — named for every
-address the machine has, so the browser does not also complain about the
-hostname — and reuses it afterwards. The browser will warn once that it is not
-trusted, which is correct: it is not. Accept it and the camera works. `--cert`
-and `--key` take your own certificate if you have a real one.
+The camera is on the Pi. The Pi serves it as MJPEG at
+`/camera/stream.mjpg`, which is an ordinary HTTP response that an `<img>` tag
+can point at — no permission prompt, no certificate, no phone. `--https` is
+still there if you want TLS for its own sake; nothing needs it.
 
 ## 3. The manual page — `/`
 
@@ -291,10 +315,28 @@ key explicitly.
 
 ## 5. The vision page — `/vision`
 
-Point a camera at the track and it finds the road live, in the browser — no
+Point the robot at the track and it finds the road live, in the browser — no
 model, no training, no GPU. It **sends nothing to the motors**; this page is
 for looking and tuning. `/follow` is the same detector with the wheels
 attached, so everything below applies there too.
+
+### Where the picture comes from
+
+The **robot's own webcam**, plugged into the Pi, streamed as MJPEG and drawn
+into a canvas. That is the default and on a real robot it is the only one you
+want: it is the camera bolted to the front, at the height and angle everything
+below was tuned for, and it is the same picture the QR reader is looking at.
+
+Two other sources are kept, as buttons on the page:
+
+| | |
+|---|---|
+| **RPi veb-kamera** | the robot's camera, over the server. The default |
+| **Bu brauzer** | this laptop's own webcam — quick to wave a track at, at a desk. Still needs localhost or HTTPS, because that one really is `getUserMedia` |
+| **file** | an image or a recording of the track. Works everywhere, and is how you tune against a lap you already drove |
+
+All three are the same to the detector — `drawImage` does not care — so what is
+being tuned does not change with the source.
 
 ### Track type — decided automatically
 
@@ -394,10 +436,10 @@ come out solid white and the road solid black. If they do, everything above
 works; if they don't, fix `Eşik düzəlişi` and `Rəng toleransı` first and leave
 the rest alone.
 
-Camera access needs `localhost` or HTTPS, so opening this page from another
-machine over plain `http://` gets no camera — the page says so and offers a
-file picker instead, which works everywhere and is the easy way to test a
-recording of the track.
+This page opens with a live picture from any device on the network, over plain
+`http://`, with nothing granted — because the camera is the Pi's and arrives as
+an ordinary image stream. Only the **Bu brauzer** button still needs
+`localhost` or HTTPS, and it says so when it cannot have them.
 
 ## 6. The follow page — `/follow`
 
@@ -681,6 +723,48 @@ since its last ping is cleared to `null` rather than left showing its previous
 distance, and every consumer of that number treats `null` as "no information",
 never as "clear".
 
+### The 30 cm stop — where it actually lives
+
+**Closer than 30 cm in front and the robot stops.** Not "the obstacle page
+stops"; the robot stops.
+
+That distinction is the whole design. This used to be a behaviour of one page:
+`/obstacle` ran the state machine in the browser and sent zeros when it saw
+something. That protects exactly one page, and there are five ways to drive this
+robot — the keys on `/drive`, a gear, a typed percentage on `/manual`, the pilot
+on `/follow`, and the obstacle page itself. A wall in front of the robot is a
+fact about the robot, not about which tab is open.
+
+So the state machine runs in `bench.js`, at 20 Hz, in `resolve()` — the one
+function every drive path already funnels through. `/obstacle` now *displays*
+the server's verdict rather than computing its own, and it deliberately keeps
+asking to creep forward while blocked: if the brake only worked because the page
+was polite, it would not be a brake.
+
+Three things the brake deliberately does **not** do:
+
+- **It does not drop ENABLE.** It is a brake, not a shutdown. Dropping the relay
+  every time somebody walks past would cost a relay cycle each time.
+- **It does not hold you against a wall.** Only *forward* motion is stopped.
+  Reversing away and pivoting on the spot are exactly what you want to be able
+  to do with a wall in front of you, and neither drives into it.
+- **It does not switch itself off quietly.** There is an escape hatch for bench
+  work — the two buttons on `/follow`, which write `obstacle.guard` — and while
+  it is off every page says so, because a safety control that reads "on" while
+  it is off is worse than not having one.
+
+| | |
+|---|---|
+| **30 cm** | closer than this and the robot stops |
+| **40 cm** | and it may not move again until this far — hysteresis |
+| **3 readings** | in a row, before believing either |
+
+30 cm is not an arbitrary round number: at the speed this robot drives, 30 cm
+ahead of the sensor is roughly where the *robot* is by the time three readings
+have agreed and the next 20 Hz packet has gone out. Below about 20 cm the
+sensor's beam starts seeing the robot's own bumper; much beyond 40 cm it stops
+for doorways.
+
 ### `/obstacle` — stop, wait, carry on
 
 The forward sensor, on its own page, driving straight ahead and nothing else:
@@ -701,45 +785,73 @@ stop restarts, not just the timer.
 
 Two more details that stop it twitching:
 
-- **`stopCm` and `clearCm` are different numbers** (25 and 35 by default).
-  Everything between them changes nothing, so a robot parked at 30 cm cannot
+- **`stopCm` and `clearCm` are different numbers** (30 and 40 by default).
+  Everything between them changes nothing, so a robot parked at 35 cm cannot
   buzz between stopped and going.
 - **Three readings in a row**, not one. A single 12 cm in the middle of a
   corridor is noise; three is a wall.
 
-The thresholds are saved to `follow.json` and **`/follow` obeys the same ones** —
-tune here, drive there. While the robot is stopped for an obstacle the
-lost-the-road timer is held off, or it would give up and drop ENABLE while
-waiting for someone to walk past.
+The thresholds are saved to `follow.json` and the **server** obeys them, so
+tuning them here changes every page at once. While the robot is stopped for an
+obstacle `/follow` holds off its lost-the-road timer, or it would give up and
+drop ENABLE while waiting for someone to walk past.
 
-### `/sonar` — the 360° map
+## 8b. The lift — one actuator on an L298N
 
-The other sensor rides a **continuous-rotation** servo. That means nothing
-measures the angle: it is inferred from time, and the whole map is only as good
-as one number — how long a full turn takes.
+A DC linear actuator that raises and lowers the load, on half an L298N. Two
+buttons, **KALDIR** and **İNDİR**, on `/drive` and on `/dashboard`.
 
-**Calibrate it once.** Mark the sensor, spin it, time ten turns, divide. Get it
-wrong and the map does not fail, it *slides*: walls come out as spirals. Until
-that number exists the page will not draw anything, because a map with an
-invented angle is worse than no map.
+| wire | pin | |
+|---|---|---|
+| IN1 | GPIO16 | 1/0 extends, 0/1 retracts, 0/0 coasts |
+| IN2 | GPIO17 | |
+| ENA | GPIO4 | PWM speed — **take the ENA jumper off** or it is stuck at full |
 
-The board stamps each echo with the milliseconds of rotation behind it, so the
-angle survives a late browser frame — the map is built from the board's clock,
-not from when the tab happened to wake up. Stopping the servo banks the elapsed
-time instead of zeroing it, so pausing does not silently rotate everything.
+The L298N's logic is 5 V and its inputs read 3.3 V happily, so the three wires
+go straight to the ESP32. **All three grounds must be common** — driver, ESP32
+and motor supply — or the inputs float and the bridge does as it pleases. Those
+three pins are no longer offered by `/pins`: a page that could put a raw value
+on ENA while the lift was running would be a second driver for the same motor.
 
-Readings are binned by angle, and each bin keeps the **nearest** hit rather than
-the mean: a mean across a doorway averages the frame with the room beyond and
-invents a wall halfway between, while the nearest is at least something that was
-really there. Bins with no answer are drawn as absent, not as zero.
+The actuator is not a third throttle channel because it is not the same kind of
+thing. The wheel controllers are analog and take a voltage from a DAC; this is
+an H-bridge and wants two digital direction lines and a PWM.
 
-Bins are 6° and the sensor's beam is about **15°**, so neighbouring bins are not
-independent. Good for looking at; not good for calling two bins two objects.
+### Held, not latched
 
-`{"cmd":"scan","spin":60}` is its own message rather than a field on `set`,
-because scanning is not movement: a board mapping a room must not look to the
-300 ms drive watchdog like one that is being driven, and a page that only wants
-to scan should not have to pretend to be a driver.
+There is no "up" that stays up. While a button is down the page repeats the
+command at 20 Hz, and when it stops — released, pointer dragged off the button,
+window blurred, tab hidden, laptop closed — **three** things stop the motor:
+
+1. the page sends one explicit stop as the button comes up
+2. the server drops `lift` to 0 after 400 ms with no repeat
+3. the board's own 300 ms watchdog idles everything, the lift included
+
+Any one is enough; all three exist because a wheel left running coasts, while
+an actuator left running drives into its own end stop and stays there pushing.
+`STOP` and `IDLE` release it too — a stop button that leaves an actuator
+extending is not a stop button.
+
+### Two interlocks in the firmware
+
+- **Never reverse under load.** A direction change passes through zero and
+  waits 250 ms before going the other way. Reversing a bridge while the motor
+  is still turning throws the winding's stored energy back through it. Same
+  rule, and the same reason, as the wheel relays.
+- **Never run past the end.** A single continuous run is capped at 8 s. An
+  actuator against its end stop is a stalled motor drawing locked-rotor
+  current, and a cheap one has no limit switch to save it. When the cap fires
+  the bridge is cut and the status says `cut: true`; it re-arms when the button
+  is released. The pages show that rather than hiding it — it means the
+  actuator has been pushing at something for eight seconds, which is either the
+  end of its travel or a jam.
+
+Speed is `lift.pct` in `follow.json`, default **75 %**. Not 100: an actuator
+that slams into its stop at full duty is the noise you hear shortly before the
+gearbox gives up.
+
+The USB firmware (`throttle_dac_2ch.ino`) has no L298N support — `lift` is
+accepted and ignored on that path. Use the wifi board.
 
 ## 9. The spare pins — `/pins`
 
@@ -772,6 +884,143 @@ and when the last browser disconnects.
 
 If you put an I²C device on `21`/`22` (see `docs/`), take them out of
 `TEST_PINS`: the page would otherwise let you drive the bus.
+
+## 10. The dashboard — `/dashboard`
+
+Everything at once, on one screen, read-only apart from two buttons. It is what
+you leave open on a laptop while somebody else drives.
+
+| Panel | What it is |
+|---|---|
+| the strip along the top | speed, both wheel percentages with their volts and DAC codes, distance to the obstacle, distance travelled, direction and ENABLE |
+| **camera** | the Pi's webcam, live |
+| **maneə** | the forward HC-SR04 as a gauge, with the two thresholds drawn on it and the phase the server is in. The card turns red when the sensor is actually holding the throttle down — not merely when something is in view |
+| **yarışma alanı** | the field map, below: the schematic, the plan, and the robot on it |
+| **kaldırma** | the lift's two buttons, what the bridge is doing, and which pins it is on — see §8b |
+| **konum ve sıradaki dönüş** | which leg it is on, which junction is next and what it does there — left, right, straight, turn round, or stop |
+| **QR** | the last code read, how long ago, and the ones before it |
+| **ESP32** | link, signal, uptime, packets, bad packets, pin volts, DAC codes, relays |
+| **Raspberry Pi** | CPU (total and per core), temperature, memory, load average, clock, this server's own CPU and RSS, disk, uptime, and the firmware's throttle flags |
+
+Speed is shown in **m/s** once the distance calibration exists and as a
+percentage until then, rather than quietly showing one and labelling it the
+other.
+
+The Pi panel earns its place on a robot running off a powerbank. The number to
+watch is not CPU, it is **`gərginlik aşağıdır`** — the firmware's undervoltage
+flag. A powerbank that cannot hold 5 V under the motors throttles the Pi, and
+the symptom is "the camera went choppy", which nobody attributes to the battery.
+
+### The map — the competition field
+
+The map is the arena, drawn the way the rule book draws it (`Şəkil 1`): the
+three pick-up points **A1–A3** along the top, the three drop points **B1–B3**
+down the right, the junctions **D1–D6** and the start area joined by the
+corridors between them, the factory-automation gate across the middle, and the
+nine QR codes **q1–q9** standing on the legs they belong to.
+
+The field lives in `public/field.js` as a graph — the coordinates, the edges and
+which code stands where — and everything reads that one table: the localiser,
+the planner and the drawing. Measure the real arena and it is the only thing to
+edit. `GET /api/field` serves the same graph to anything that is not a browser.
+
+**Where the robot is.** Pick a target, and the robot's position comes from the
+codes, not from the wheels:
+
+- reading `q5` does not mean "a code was read 12 m into the run", it means the
+  robot is **on the D3 → gate leg, 3.9 m east of D1**. That is a measurement,
+  and it replaces the accumulated error outright.
+- a code names an *edge*, not a direction, so which way along it is worked out
+  from the plan, or from continuity with the last code — the robot drove
+  through the junction it was heading for and came out the other side. When
+  neither applies the position is still right and the heading is a guess, and
+  the panel says `yön tahminidir` rather than pretending.
+- between codes it is dead reckoning again, rotated onto the field at the last
+  code. `pose.dead` is how far it has come since — past a couple of metres,
+  believe the next QR rather than the map.
+- with no code read yet, **the robot is not drawn at all**. An unlocalised robot
+  is somewhere, and drawing it on the start line because nothing better is
+  available is exactly the failure this is meant to prevent.
+
+Only codes that carry a **q** are waypoints: `q5`, `Q5`, `qr5`, `qr/5` at the
+end of a URL, or a string that is nothing but a number. A field has other codes
+on it, and reading `kargo-9` as `q9` would put the robot at the far end of the
+arena with total confidence — a wrong fix is much worse than no fix, so those
+are counted as strays and the position is left alone.
+
+**Where it turns.** `field_mission` takes the stops in order — `["A2", "B3"]` —
+and breadth-first search fills in the junctions between them, through the gate,
+including the way back off the branch. At each node the instruction is the
+difference between the bearing coming in and the bearing going out, with a 25°
+dead band so a tape-measured field does not produce `sağa 4°`. The panel shows
+the one for the junction ahead; the map rings that junction so "turn left at D2"
+has a D2 you can see.
+
+The plan doubling back matters: `START → A2 → B3` drives D2 → A2 and then
+A2 → D2, and both legs carry `q3`. Only the direction of travel tells them
+apart, and reading it wrong sends the robot back up the branch it just came
+down — so the same code seen again from the same spot keeps its direction, and
+the same code seen again after a couple of metres of driving means the robot
+went round the node.
+
+The blue trail on top is still dead reckoning, in `public/route.js`: the two
+wheel percentages that reached the pins, through the same speed model `/tune`
+calibrates, into a differential-drive integration. **It is a model, not a
+measurement.** There is no encoder and no IMU on this robot. A wheel slipping in
+a corner writes distance that never happened, and because the heading is an
+integral, a 2 % error in one wheel is not a 2 % error in position: it is a bend
+that never straightens out. That is the whole reason the codes are the position
+and the trail is only what happened between two of them.
+
+Two numbers decide that trail, and both are measured rather than guessed:
+
+- **the distance calibration** (`/setup`, or `/tune` from a real lap). Without
+  it no trail is drawn and nothing moves between codes — a path drawn from an
+  unknown speed is a drawing, not a map, so the robot simply stays on the last
+  QR until the next one is read, and the page says so.
+- **`track`**, the distance between the two driven wheels, centre of tyre to
+  centre of tyre. It converts a speed *difference* into a rate of turn, so
+  getting it wrong does not shift the map, it bends it: a lap that should close
+  comes out as a spiral. It lives in `follow.json` under `route.track`.
+
+The path is fetched once over HTTP (`GET /api/route`) and appended to from the
+status stream, because sending 1 500 points ten times a second to say the last
+one moved 5 cm is how a dashboard becomes the reason the robot stutters.
+
+### Reading QR codes
+
+Server-side, from the same camera, with `jsqr`. The obvious place to decode a QR
+is the page already drawing the video — but then the robot only reads a code
+while somebody happens to be looking at it, and "the last sign we drove past" is
+a fact about the trip, not about a browser tab.
+
+ffmpeg produces a second, small, grey, slow stream on its own pipe for this, so
+the QR reader gets exactly the pixels it wants without anything decoding JPEGs
+in Node and without the video path being touched. One ffmpeg, one device open,
+two outputs.
+
+The part that is easy to get wrong is not decoding, it is **counting**. A sign
+held in front of the robot is in view for several seconds, which is thirty
+decodes of one string, and reporting "30 codes read" when a person showed you
+one is simply wrong. So a reading is new only when the text changes, or when the
+same text comes back after the code has been out of sight for four seconds —
+which is you driving past the same sign twice.
+
+### What it costs the Pi
+
+Measured on a Pi 4, 640x480, one viewer:
+
+| | |
+|---|---|
+| ffmpeg | ~16 % of one core — it is copying the camera's own JPEGs, not encoding |
+| this server, QR off | ~19 % of one core |
+| this server, QR on at 3 fps | ~32 % of one core |
+
+So about a third of one core out of four, most of it the QR decode. `--no-qr`
+buys the difference back, and `--no-camera` buys all of it. Nothing here shares
+a deadline with the 20 Hz control stream closely enough to threaten it: the
+board's watchdog is 300 ms and the longest single block above is a ~40 ms QR
+decode, three times a second.
 
 ## Why go through Node instead of the browser talking to the ESP32 directly?
 
@@ -806,13 +1055,29 @@ is the board's own. Just keep something sending at ~20 Hz.
 {"cmd": "log_start",  "meta": {"note": "…", "pilot": {…}}}
 {"cmd": "log",        "rows": [ … ]}            // batched at ~2 Hz
 {"cmd": "log_stop"}
+
+// the lift — /drive and /dashboard
+// Held, not latched: repeat at ~20 Hz while the button is down. Stop sending
+// and the actuator stops, by three separate watchdogs. See "The lift", below.
+{"cmd": "lift",       "dir": 1}                 // +1 up, -1 down, 0 stop
+                                                // "up" / "down" work too
+
+// dashboard
+{"cmd": "route_reset"}                          // the map starts again from here
+{"cmd": "field_mission", "targets": ["A2", "B3"]}  // the stops to call at, in order
+{"cmd": "field_qr",      "text": "q5"}          // a code read by hand — rehearsal only
 ```
 
-The runs are also readable over plain HTTP, which is how `/tune` offers you the
-lap you just drove instead of a file dialog: `GET /logs` lists them and
-`GET /logs/<name>` returns one. Read-only, and the name is matched against
-`follow-<word>.json` rather than joined into a path — this server has no
-authentication and sits on a shared wifi.
+Five things are readable over plain HTTP, all read-only:
+
+| | |
+|---|---|
+| `GET /logs`, `GET /logs/<name>` | the runs, which is how `/tune` offers the lap you just drove instead of a file dialog. The name is matched against `follow-<word>.json` rather than joined into a path — this server has no authentication and sits on a shared wifi |
+| `GET /camera/stream.mjpg` | the webcam, as `multipart/x-mixed-replace`. Point an `<img>` at it. A viewer that is not keeping up has frames **dropped** rather than queued: a live view a minute behind is worse than one that skipped a second |
+| `GET /camera/frame.jpg` | the latest single frame, for anything that does not want a stream |
+| `GET /api/route` | the whole path and its marks, once — see the map, above |
+| `GET /api/field` | the competition field: nodes, edges and where each QR stands. Static for a whole competition, so it is fetched once rather than repeated ten times a second |
+| `GET /api/wheels` | the wheel trim, for the two pages with no socket |
 
 `follow` and `gear` are held to the same dead-man as `keys`: 400 ms of silence
 and the throttle is zero, `reason` becomes `kadr gəlmir`, and ENABLE stays up so a
@@ -844,15 +1109,70 @@ Status comes back at 10 Hz, plus one immediately after each command carrying
     "rev_wait": false, "dir": "forward",
     "pkt": 482, "bad": 0, "rssi": -52, "uptime": 91234
   },
-  "esp_fresh": true, "vmax": 3.3, "idle_v": 1.0, "serial_error": null
+  "esp_fresh": true, "vmax": 3.3, "idle_v": 1.0, "serial_error": null,
+
+  // the forward sensor's verdict — decided once, server-side, and the same
+  // answer the throttle above is obeying
+  "obstacle": {
+    "phase": "stop",          // "go" | "stop" | "wait"
+    "cm": 18.4,               // null when no echo came back — never 0
+    "blocked": true,          // the sensor says stop
+    "blocking": true,         // ...and it is being acted on (forward, guard on)
+    "guard": true,            // false = switched off for bench work, and visibly so
+    "stops": 3,
+    "reason": "maneə 18.4 sm — dayanıb",
+    "cfg": {"stopCm": 30, "clearCm": 40, "confirm": 3, "waitMs": 1200}
+  },
+
+  // where it has been. `marks` is the last few QR reads and obstacle stops;
+  // the path itself is GET /api/route
+  "route": {
+    "x": 1.2, "y": 4.8, "bearing": 92.5, "dist": 11.4, "v": 0.31,
+    "moving": true, "points": 214, "seq": 213, "track": 0.3,
+    "calibrated": true, "marks": [ … ]
+  },
+
+  // the lift. `dir` is what is being held, `out` is what goes on the wire, and
+  // `at` is what the board says the bridge is doing — they disagree exactly
+  // when it matters: during the pass through zero, and when the run limit fires
+  "lift": {"dir": 1, "out": 191, "pct": 75, "at": 191, "cut": false,
+           "pin": [16, 17, 4]},
+
+  // where that is on the competition field, and what to do at the node ahead.
+  // `pose.known` is false until a code has been read: an unlocalised robot is
+  // somewhere, not at the origin
+  "field": {
+    "qr": "q5", "from": "D3", "to": "GATE", "sure": true, "known": true,
+    "pose": {"known": true, "x": 4.02, "y": 0, "bearing": 90, "dead": 0.12},
+    "turn": {"node": "GATE", "dir": "straight", "deg": 0, "label": "düz get",
+             "then": "D4", "dist": 1.6},
+    "plan": ["START","D1","D2","A2","D2","D3","GATE","D4","D6","B3"],
+    "stops": ["A2","B3"], "step": 6, "on_plan": true,
+    "reads": 4, "strays": 1, "unknown": null, "seen": [ … ]
+  },
+
+  // the Pi's own three
+  "cam": {"on": true, "live": true, "device": "/dev/video0", "w": 640, "h": 480,
+          "fps": 25, "frames": 9184, "viewers": 2, "err": null},
+  "qr":  {"available": true, "text": "ROBOT-A1", "at": 1786288938999,
+          "age_s": 12.4, "count": 3, "decodes": 41, "ms": 38, "history": [ … ]},
+  "rpi": {"cpu": 31.2, "cores": [40, 28, 25, 31], "temp_c": 52.6, "mhz": 1800,
+          "mem": {"total": 1934311424, "used": 787…, "pct": 40.7},
+          "load": [0.42, 0.51, 0.44], "uptime_s": 2760,
+          "proc": {"cpu": 22.1, "rss": 91…, "up_s": 310, "pid": 4046},
+          "throttled": {"under_voltage": false, "ever_under_voltage": true, "ok": true}}
 }
 ```
 
-`reason` says why the output is what it is: `running`, `key w`,
-`gear normal`, `gear fast`, `follow: döngə`, `BACK`, `PIVOT A`, `back…`
-(settling), `no keys held`, `no gear report`, `kadr gəlmir`, `level 0 %`,
-`stopped`, `no browser connected`, `esp32 unreachable`. The drive page also
-gets back `keys`, `combo` (the row that matched) and the full `presets` table.
+`reason` says why the output is what it is, in the interface's language —
+Turkish: `sürüyor`, `tuş w`, `hız normal`, `hız hızlı`, `takip: viraj`, `GERİ`,
+`DÖNÜŞ A`, `geri…` (settling), `tuş basılı değil`, `hız bildirimi yok`,
+`kare gelmiyor`, `seviye 0 %`, `engel 18 sm — durdu` (the 30 cm brake),
+`durduruldu`, `tarayıcı bağlı değil`, `esp32 erişilemiyor`. The keys behind
+them — `w`, `normal`, `fast` — stay English, because they are protocol: they
+are in `presets.json`, in the WebSocket messages and in the tests. Only the
+words a person reads are translated. The drive page also gets back `keys`,
+`combo` (the row that matched) and the full `presets` table.
 
 **This server ⇄ ESP32** — `ws://<esp-ip>:81/`, the board's own protocol. The
 board speaks **volts**, not percent: it does not know your ceiling, and volts
@@ -860,8 +1180,8 @@ are what the motor controller physically reads. The percent conversion lives in
 `bench.js`, in one place.
 
 ```jsonc
-{"cmd": "set",  "v25": 1.80, "v26": 1.50, "en": true, "r25": false, "r26": false}
-{"cmd": "scan", "spin": 60}      // the sonar servo, -100..100; 0 stops it
+{"cmd": "set",  "v25": 1.80, "v26": 1.50, "en": true, "r25": false, "r26": false,
+                "lift": 191}             // the L298N: -255..255, sign is direction
 {"cmd": "pin",  "gpio": 4, "val": 128}   // a spare pin, 0-255. Unknown pins refused
 {"cmd": "stop"}
 {"cmd": "ping"}
@@ -872,16 +1192,14 @@ The status carries the sonar back:
 ```jsonc
 "son": {
   "fwd_cm": 42.1,        // null when no echo came back — never 0
-  "scan_cm": 130.5,
-  "scan_t": 3169,        // ms of rotation behind that echo, not wall-clock time
-  "spin": 60,
-  "pin": {"servo":13,"trig_s":27,"echo_s":33,"trig_f":14,"echo_f":32}
+  "pin": {"trig_f":14,"echo_f":32}
 }
 ```
 
 `en` is the digital pin. **Leaving it out means 0** — a client that never
 mentions it can never leave the driver enabled. `r25` / `r26` behave the same
-way for the two direction relays.
+way for the two direction relays, and so does `lift`: a packet that does not
+mention the actuator stops it.
 
 ### Direction
 
@@ -913,8 +1231,8 @@ the targets are forced to idle. So the stopping starts with the packet that
 asked for the turn, not with the next one.
 
 Pressing A, D or S therefore stops the robot, waits about a second, and only
-then moves. The drive page shows `FORWARD` / `STOPPING…` / `PIVOT` / `BACK` so
-the pause is never a mystery. Relays de-energise to *forward*, so a dead ESP32,
+then moves. The drive page shows `İLERİ` / `DURDURULUYOR…` / `DÖNÜŞ` / `GERİ`
+so the pause is never a mystery. Relays de-energise to *forward*, so a dead ESP32,
 a cut wire or a flat 12 V rail all leave the robot facing the safe way.
 
 The full build — parts, wiring, commissioning order — is in
@@ -970,6 +1288,9 @@ npm run test:pilot   # the control law, on its own
 npm run test:wheels  # the shared wheel trim, and that every page agrees on it
 npm run test:analyse # what /tune concludes from a log
 npm run test:sonar   # the obstacle state machine and the map
+npm run test:route   # dead reckoning — the map's arithmetic
+npm run test:field   # the field graph, QR localisation, and the turns it hands out
+npm run test:camera  # JPEG framing, QR counting, and the Pi's own numbers
 npm run test:vision  # vision page only (needs playwright)
 npm run test:pages   # every page opens without throwing (needs playwright)
 ```
@@ -996,7 +1317,7 @@ loads, and fails if any name is declared twice. It takes a second and needs no
 browser. It also verifies its own detector against known-good and known-bad
 input first, because a check that cannot fail is not a check.
 
-**249 checks** for the control path, no hardware. It runs `esp32ws_sim.js` — a behavioural mirror of
+**272 checks** for the control path, no hardware. It runs `esp32ws_sim.js` — a behavioural mirror of
 `ws_dac.ino`, including the watchdog, the idle-when-no-clients rule and the direction
 interlock — as a
 real WebSocket server, then drives the real `server.js` against it over a real
@@ -1004,14 +1325,44 @@ browser WebSocket and verifies what landed on the simulated pins — including a
 full drive-page session: every key and combination, live preset edits, and the
 400 ms dead-man.
 
-**54 checks** for the sonar. `obstacleStep` and the map are pure functions, so
-the sensor can be made to misbehave in exactly the ways a real HC-SR04 does: a
-single stray reading that must not stop the robot, three in a row that must,
-a target parked between the two thresholds, someone stepping half out of the way
-during the wait, and — the one that matters — the echo dying while stopped in
-front of something soft, which must not read as "the way is clear". Plus the
-angle arithmetic, including wrapping past 360°, and that an uncalibrated spin
-produces no map at all.
+**43 checks** for the route. `routeStep` is pure, so a whole drive is simulated
+in a loop against arithmetic: drive at a known speed for two seconds and the
+robot has to be exactly that far away, a 1 m square has to close on its own
+start, and reversing one wheel has to pivot at twice the rate of stopping it.
+The other half is what it refuses to invent — no distance calibration means no
+map at all rather than a guess, the first step only starts the clock (an
+integration against "now minus zero" is how a fresh page reports the robot 1.7
+billion metres from home), and a ten-second gap does not become ten seconds of
+driving.
+
+**45 checks** for the camera, the QR reader and the Pi stats. The camera half is
+the part that would be worst to debug on a robot: cutting ffmpeg's byte stream
+back into whole JPEGs, with frames split across chunks, three frames in one
+chunk, junk before the first marker, and a stream that has lost sync and must be
+dropped rather than held forever. The QR half is a **real decode** — an actual
+"ROBOT-A1" code, embedded as its module matrix and painted into a grey buffer
+the shape ffmpeg produces — followed by the part that is easy to get wrong:
+twenty frames of the same sign is one reading, and the same code after a real
+gap is two.
+
+**29 checks** for the sonar. `obstacleStep` is a pure function, so the sensor
+can be made to misbehave in exactly the ways a real HC-SR04 does: a single stray
+reading that must not stop the robot, three in a row that must, a target parked
+between the two thresholds, someone stepping half out of the way during the
+wait, and — the one that matters — the echo dying while stopped in front of
+something soft, which must not read as "the way is clear".
+
+**22 of the 272** are the 30 cm brake, end to end, and they are the ones to read
+if you change anything near it. They do not test the state machine — that is the
+54 above. They test that it **cannot be got past**: the robot is driven with a
+typed percentage, which is the path that never had an obstacle check in it, a
+wall appears at 15 cm, and the pins have to go to idle without the browser being
+told anything and without the browser co-operating. Then the things that would
+make it useless: that ENABLE stays up, that a single close reading does not stop
+it, that reversing away from the wall still works, that turning back to forward
+re-arms it, that switching it off is possible and visible in the status, and
+that an echo which simply stops coming back while stopped does not read as the
+way being clear.
 
 **28 checks** for the vision page. It lifts the `<script>` straight out of
 `public/vision.html` into a real browser and runs it against painted tracks —
@@ -1049,7 +1400,11 @@ constant comes out the same whether the lap was driven fast or slow.
 | File | What it is |
 |---|---|
 | `server.js` | HTTP (both pages) + browser WebSocket, CLI |
-| `bench.js` | START/STOP state, percent → volts, the one function that decides pin values |
+| `bench.js` | START/STOP state, percent → volts, the 30 cm brake, the route, where it is on the field — the one function that decides pin values |
+| `camera.js` | the Pi's webcam: one ffmpeg, MJPEG out to viewers, a grey tap for QR |
+| `qr.js` | reading QR codes off that tap, and counting them honestly |
+| `rpi.js` | what the Pi is doing to itself: CPU, temperature, RAM, throttling |
+| `shared.js` | loads the pages' pure modules into Node — see the note at its top |
 | `transports.js` | `WsTransport` (wifi) and `SerialTransport` (USB) |
 | `esp.js` | USB wire format — port of `rpi/esp.py` |
 | `esp32ws_sim.js` | mirror of `ws_dac.ino`; powers `--fake` |
@@ -1059,12 +1414,16 @@ constant comes out the same whether the lap was driven fast or slow.
 | `public/road.js` | the road detector, shared by `/vision` and `/follow` |
 | `public/pilot.js` | the control law: error → two wheel percentages. Pure |
 | `public/analyse.js` | reads a run log and says what to change. Pure |
-| `public/sonar.js` | the obstacle state machine and the 360° map. Pure |
+| `public/sonar.js` | the obstacle state machine. Pure |
+| `public/route.js` | dead reckoning: two wheel percentages → a path. Pure |
+| `public/field.js` | the competition field: the graph, QR localisation, the plan and the turns. Pure |
+| `public/lift.js` | the lift's two buttons and their dead-man, shared by /drive and /dashboard |
+| `public/cam.js` | where a page gets its pictures from: the Pi, this browser, or a file |
+| `public/dashboard.html` | everything at once: speed, volts, ESP32 + Pi, camera, obstacle, QR, the field map and the next turn |
 | `public/vision.html` | camera + road detection (qara/ağ yol), look and tune |
 | `public/follow.html` | the same detector, driving, with the run recorder |
 | `public/tune.html` | reads a run back: charts, manoeuvres, suggestions |
 | `public/obstacle.html` | forward sonar: drive, stop, wait, carry on |
-| `public/sonar.html` | the spinning sonar, as a polar map |
 | `public/pins.html` | every spare GPIO, 0-255 by hand |
 | `public/drive.html` | keyboard drive page, self-contained |
 | `follow_log.js` | writes `logs/follow-*.json` and its summary |
@@ -1074,13 +1433,16 @@ constant comes out the same whether the lap was driven fast or slow.
 | `public/wheels.js` | the shared wheel trim + the ⓘ text, used by every page |
 | `public/setup.html` | the numbered checklist: measure, type, saved everywhere |
 | `test/test_globals.mjs` | no duplicate top-level names on any page, 24 checks |
-| `test/test_bench.mjs` | server + firmware + gears + follow + sonar suite, 249 checks |
+| `test/test_bench.mjs` | server + firmware + gears + follow + sonar + the 30 cm brake, 272 checks |
 | `test/test_pilot.mjs` | the control law and the speed loop, 85 checks, no browser |
 | `test/test_wheels.mjs` | the shared trim, 55 checks — incl. /manual vs /follow agreement |
 | `test/test_analyse.mjs` | the log analysis, 54 checks, no browser |
-| `test/test_sonar.mjs` | the sonar logic, 54 checks, no browser |
+| `test/test_sonar.mjs` | the sonar logic, 29 checks, no browser |
+| `test/test_route.mjs` | dead reckoning, 43 checks, no browser |
+| `test/test_field.mjs` | the field graph, QR localisation and the turns, 105 checks, no browser |
+| `test/test_camera.mjs` | JPEG framing, a real QR decode, the Pi stats — 45 checks |
 | `test/test_vision.mjs` | vision suite, 28 checks — real browser, synthetic tracks |
-| `test/test_pages.mjs` | every page opens clean, 34 checks — real browser |
+| `test/test_pages.mjs` | every page opens clean, 36 checks — real browser |
 
 ## USB instead of wifi
 

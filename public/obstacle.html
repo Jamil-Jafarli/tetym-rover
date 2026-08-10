@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="az">
+<html lang="tr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Robot · maneədə dayan</title>
+<title>Robot · engelde dur</title>
 <style>
   :root{
     --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
@@ -83,45 +83,49 @@
 
   <div class="card">
     <div class="row">
-      <h1>Maneədə dayan</h1>
+      <h1>Engelde dur</h1>
       <div class="row" style="gap:7px">
-        <span class="dot" id="dot"></span><span class="muted" id="state">qoşulur</span>
+        <span class="dot" id="dot"></span><span class="muted" id="state">bağlanıyor</span>
       </div>
     </div>
     <div class="row" style="margin-top:10px">
-      <span class="muted"><a href="/">&larr; ana səhifə</a></span>
-      <span class="muted"><a href="/sonar">360° xəritə &rarr;</a></span>
+      <span class="muted"><a href="/">&larr; ana sayfa</a></span>
     </div>
   </div>
 
   <div class="card warn">
-    <div class="lbl" style="color:var(--warn)">Bu səhifə nə edir</div>
-    <p class="muted" style="margin:8px 0 0">Qabağa baxan HC-SR04-ü sınayır:
-    robot <b>düz irəli</b> sürünür, qarşısına nəsə çıxanda dayanır, maneə
-    keçəndən sonra bir az gözləyib yoluna davam edir. Kamera işlətmir, sükan
-    yoxdur — yalnız bu bir davranış. İlk dəfə <b>təkərləri yerdən qaldır</b>.
-    <b>Boşluq</b> hər an dayandırır.</p>
+    <div class="lbl" style="color:var(--warn)">Bu sayfa ne yapar</div>
+    <p class="muted" style="margin:8px 0 0">Öne bakan HC-SR04ü dener:
+    robot <b>düz ileri</b> sürünür, önüne bir şey çıkınca durur, engel
+    geçtikten sonra biraz bekleyip yoluna devam eder. Kamera kullanmaz, direksiyon
+    yok — yalnızca bu tek davranış. İlk seferde <b>tekerleri yerden kaldır</b>.
+    <b>Boşluk</b> her an durdurur.</p>
+    <p class="muted" style="margin:8px 0 0">Freni <b>sunucu tutar</b>, bu
+    sayfa değil: burada gösterilen durum sunucunun kendi kararıdır ve aynı karar
+    <code>/drive</code>, <code>/manual</code>, <code>/follow</code> — bütün
+    sürüş yollarına uygulanır. Bu sayfa engellendiğinde bile «ileri sür»
+    demeye devam eder; durduran sunucudur.</p>
   </div>
 
   <div class="card">
     <div class="row">
-      <h2 style="margin:0">Qabaqdakı məsafə</h2>
+      <h2 style="margin:0">Öndeki mesafe</h2>
       <span class="muted" id="pins">–</span>
     </div>
     <div class="gauge" id="gauge">
       <i id="fill"></i>
-      <div class="mark" id="mStop"><span>dayan</span></div>
-      <div class="mark" id="mClear"><span>açıq</span></div>
+      <div class="mark" id="mStop"><span>dur</span></div>
+      <div class="mark" id="mClear"><span>açık</span></div>
       <div id="cm">–</div>
     </div>
     <div class="phase">
-      <div id="pGo">GEDİR</div>
-      <div id="pStop">DAYANIB</div>
-      <div id="pWait">GÖZLƏYİR</div>
+      <div id="pGo">GİDİYOR</div>
+      <div id="pStop">DURDU</div>
+      <div id="pWait">BEKLİYOR</div>
     </div>
     <div class="read">
-      <div><span class="lbl">Vəziyyət</span><b id="rPhase">–</b></div>
-      <div><span class="lbl">Sürət</span><b id="rSpeed">–</b></div>
+      <div><span class="lbl">Durum</span><b id="rPhase">–</b></div>
+      <div><span class="lbl">Hız</span><b id="rSpeed">–</b></div>
       <div><span class="lbl">Dayanma sayı</span><b id="rCount">0</b></div>
     </div>
     <div class="muted" style="margin-top:10px;text-align:center" id="why">–</div>
@@ -130,44 +134,44 @@
 
   <div class="card">
     <div class="btnrow" style="margin-top:0">
-      <button id="arm">SÜRMƏYƏ BAŞLA</button>
-      <button id="kill">DAYAN</button>
+      <button id="arm">SÜRMEYE BAŞLA</button>
+      <button id="kill">DUR</button>
     </div>
-    <p class="muted" style="margin:10px 0 0">Sürmədən də sınaya bilərsən:
-    əlini sensorun qabağına tut, yuxarıdakı zolağa bax.</p>
+    <p class="muted" style="margin:10px 0 0">Sürmeden de deneyebilirsin:
+    elini sensörün önüne tut, yukarıdaki şeride bak.</p>
   </div>
 
   <div class="card">
-    <div class="lbl" style="margin-bottom:12px">Tənzimləmə</div>
+    <div class="lbl" style="margin-bottom:12px">Ayarlama</div>
     <div class="sl">
-      <div class="row"><span class="muted">Bu məsafədən yaxında dayanır</span>
-        <b id="vStop">25 sm</b></div>
-      <input type="range" id="stopCm" min="5" max="150" step="1" value="25">
+      <div class="row"><span class="muted">Bu mesafeden yakında durur</span>
+        <b id="vStop">30 sm</b></div>
+      <input type="range" id="stopCm" min="5" max="150" step="1" value="30">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Bu məsafədən uzaqda açıq sayır</span>
-        <b id="vClear">35 sm</b></div>
-      <input type="range" id="clearCm" min="5" max="200" step="1" value="35">
+      <div class="row"><span class="muted">Bu mesafeden uzakta açık sayar</span>
+        <b id="vClear">40 sm</b></div>
+      <input type="range" id="clearCm" min="5" max="200" step="1" value="40">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Neçə ardıcıl oxunuş inandırır</span>
+      <div class="row"><span class="muted">Kaç ardışık okuma inandırır</span>
         <b id="vConfirm">3</b></div>
       <input type="range" id="confirm" min="1" max="10" step="1" value="3">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Yol açılandan sonra gözləmə</span>
+      <div class="row"><span class="muted">Yol açıldıktan sonra bekleme</span>
         <b id="vWait">1.2 s</b></div>
       <input type="range" id="waitMs" min="0" max="5000" step="100" value="1200">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Sürünmə sürəti</span>
+      <div class="row"><span class="muted">Sürünme hızı</span>
         <b id="vCreep">12 % · –</b></div>
       <input type="range" id="creep" min="0" max="60" step="1" value="12">
     </div>
-    <p class="muted" style="margin:10px 0 0">«Dayan» və «açıq» qəsdən iki ayrı
-    rəqəmdir: aralarındakı boşluq robotun tam həddin üstündə dayanıb açılıb-
-    bağlanmasının qarşısını alır. Sürət <b>tələbdir</b> — ölü zona
-    <code>/follow</code>-dakı «dönmə həddi» ilə eyni cür tətbiq olunur.</p>
+    <p class="muted" style="margin:10px 0 0">«Dur» ve «açık» bilerek iki ayrı
+    sayıdır: aralarındaki boşluk robotun tam eşiğin üstünde durup açılıp
+    kapanmasını önler. Hız bir <b>taleptir</b> — ölü bölge
+    <code>/follow</code>taki «dönme eşiği» ile aynı şekilde uygulanır.</p>
   </div>
 
 </div>
@@ -180,7 +184,10 @@ const $ = id => document.getElementById(id);
 
 let ws = null, wsOpen = false, status = null;
 let armed = false, stops = 0;
-let st = obstacleState(performance.now());
+// The verdict is the SERVER's, not this page's. It runs the same obstacleStep
+// out of the same file, at 20 Hz, and gates the throttle with the answer — so
+// what is drawn here is what the robot is actually obeying, rather than a
+// second opinion that agrees until one of them is reloaded.
 let out = { blocked: false, phase: 'go', cm: null, reason: '–', waitLeft: 0 };
 const cfg = { ...OBSTACLE_DEFAULTS };
 let stall = 22;                     // shared with /follow via follow.json
@@ -192,7 +199,7 @@ function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/`);
   ws.onopen = () => { wsOpen = true; };
-  ws.onclose = () => { wsOpen = false; disarm('əlaqə kəsildi'); setTimeout(connect, 1000); };
+  ws.onclose = () => { wsOpen = false; disarm('bağlantı kesildi'); setTimeout(connect, 1000); };
   ws.onerror = () => ws.close();
   ws.onmessage = ev => {
     let s; try { s = JSON.parse(ev.data); } catch { return; }
@@ -203,7 +210,15 @@ function connect() {
       stall = s.follow_cfg.pilot.stall;
     }
     if (s.follow_cfg && s.follow_cfg.obstacle) applySaved(s.follow_cfg.obstacle);
-    if (armed && !s.running) disarm('server dayandırdı');
+    if (s.obstacle) {
+      const was = out.phase;
+      out = s.obstacle;
+      stops = s.obstacle.stops ?? stops;
+      if (out.phase === 'stop' && was !== 'stop') { /* counted server-side */ }
+      trace.push({ t: performance.now(), cm: out.cm, phase: out.phase });
+      while (trace.length && trace[trace.length - 1].t - trace[0].t > 20000) trace.shift();
+    }
+    if (armed && !s.running) disarm('sunucu durdurdu');
     paintLink(s);
   };
 }
@@ -229,8 +244,8 @@ const showV = (p) => { const v = volts(p); return v == null ? '–' : v.toFixed(
 function paintLink(s) {
   const ok = s.esp_fresh && !s.serial_error;
   $('dot').className = 'dot ' + (armed ? 'go' : ok ? 'ok' : 'bad');
-  $('state').textContent = s.serial_error ? 'serial xətası'
-    : !ok ? 'ESP32 əlçatmaz' : armed ? 'SÜRÜR' : 'hazır';
+  $('state').textContent = s.serial_error ? 'seri port hatası'
+    : !ok ? 'ESP32 erişilemiyor' : armed ? 'SÜRÜR' : 'hazır';
   const p = s.esp && s.esp.son && s.esp.son.pin;
   $('pins').textContent = p ? `trig ${p.trig_f} · echo ${p.echo_f}` : 'sensor bildirilmir';
 }
@@ -273,12 +288,11 @@ function showAll() {
 // ── arm / disarm ────────────────────────────────────────────────────
 function arm() {
   if (armed) return;
-  if (!wsOpen) { $('why').textContent = 'serverlə əlaqə yoxdur'; return; }
+  if (!wsOpen) { $('why').textContent = 'sunucuyla bağlantı yok'; return; }
   armed = true;
   stops = 0;
-  st = obstacleState(performance.now());
   $('arm').classList.add('live');
-  $('arm').textContent = 'SÜRÜR — dayandırmaq üçün bas';
+  $('arm').textContent = 'SÜRÜYOR — durdurmak için bas';
   sendWs({ cmd: 'start' });
 }
 
@@ -286,44 +300,39 @@ function disarm(why) {
   if (!armed) { $('why').textContent = why || out.reason; return; }
   armed = false;
   $('arm').classList.remove('live');
-  $('arm').textContent = 'SÜRMƏYƏ BAŞLA';
-  $('why').textContent = why || 'dayandı';
+  $('arm').textContent = 'SÜRMEYE BAŞLA';
+  $('why').textContent = why || 'durdu';
   sendWs({ cmd: 'stop' });
 }
 
-$('arm').addEventListener('click', () => armed ? disarm('əl ilə dayandırıldı') : arm());
-$('kill').addEventListener('click', () => disarm('DAYAN düyməsi'));
+$('arm').addEventListener('click', () => armed ? disarm('elle durduruldu') : arm());
+$('kill').addEventListener('click', () => disarm('DUR düğmesi'));
 addEventListener('keydown', (e) => {
   if (e.code !== 'Space' && e.key !== 'Escape') return;
   e.preventDefault();
-  disarm('boşluq düyməsi');
+  disarm('boşluk tuşu');
 });
-addEventListener('blur', () => disarm('pəncərə fokusu itdi'));
+addEventListener('blur', () => disarm('pencere odağı kayboldu'));
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) disarm('səhifə arxa plana keçdi');
+  if (document.hidden) disarm('sayfa arka plana geçti');
 });
 
 // ── loop ────────────────────────────────────────────────────────────
 // 20 Hz: the same rate as the drive stream, because when this page is armed it
 // IS the drive stream and the server's dead-man is watching it.
 setInterval(() => {
-  const now = performance.now();
-  const cm = status && status.esp && status.esp.son ? status.esp.son.fwd_cm : null;
-
-  const was = out.phase;
-  out = obstacleStep(st, cm, cfg, now);
-  if (out.phase === 'stop' && was !== 'stop') stops++;
-
   if (armed) {
     // Straight ahead, both wheels the same — this page is about one behaviour
     // and adding steering to it would only make a failure ambiguous.
-    const demand = out.blocked ? 0 : cfg.creep;
-    const p = Math.round(lift(demand, stall) * 10) / 10;
-    sendWs({ cmd: 'follow', p25: p, p26: p, reason: out.reason.slice(0, 40) });
+    //
+    // Note what is NOT here: this page does not zero its own demand when the
+    // way is blocked. It keeps asking to creep forward, and the server refuses.
+    // That is deliberate — if the brake only worked because the page was
+    // polite, it would not be a brake, and /drive and /manual would still
+    // drive into the wall.
+    const p = Math.round(lift(cfg.creep, stall) * 10) / 10;
+    sendWs({ cmd: 'follow', p25: p, p26: p, reason: 'sürünür' });
   }
-
-  trace.push({ t: now, cm: out.cm, phase: out.phase });
-  while (trace.length && now - trace[0].t > 20000) trace.shift();
   paint();
 }, 50);
 
@@ -333,18 +342,20 @@ function paint() {
   $('gauge').className = 'gauge ' + cls;
   $('fill').style.width = out.cm == null ? '0%'
     : `${Math.min(100, (out.cm / span) * 100)}%`;
-  $('cm').textContent = out.cm == null ? 'əks-səda yox' : out.cm + ' sm';
+  $('cm').textContent = out.cm == null ? 'yankı yok' : out.cm + ' sm';
 
   for (const [id, ph] of [['pGo', 'go'], ['pStop', 'stop'], ['pWait', 'wait']]) {
     $(id).className = out.phase === ph ? `on ${ph}` : '';
   }
   $('rPhase').textContent = out.phase === 'go' ? 'gedir'
-    : out.phase === 'stop' ? 'dayanıb' : `gözləyir ${(out.waitLeft / 1000).toFixed(1)} s`;
-  const demand = armed ? (out.blocked ? 0 : cfg.creep) : 0;
-  $('rSpeed').textContent = armed ? `${demand} %` : '—';
+    : out.phase === 'stop' ? 'durdu' : `bekliyor ${(out.waitLeft / 1000).toFixed(1)} s`;
+  // What is actually on the pins, read back, rather than what we asked for —
+  // the whole point of this page is the difference between the two.
+  const now25 = status && status.out ? status.out[0] : null;
+  $('rSpeed').textContent = !armed ? '—' : now25 == null ? '–' : `${now25} %`;
   $('rCount').textContent = stops;
   $('why').textContent = armed ? out.reason
-    : `${out.reason} · sürmək üçün «sürməyə başla»`;
+    : `${out.reason} · sürmek için «sürmeye başla»`;
   drawTrace();
 }
 

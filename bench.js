@@ -13,9 +13,29 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import * as esp from './esp.js';
+import { loadShared } from './shared.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PRESETS_FILE = path.join(HERE, 'presets.json');
+
+// The two pure modules the pages already share, run here as well rather than
+// reimplemented. /obstacle draws the same obstacleStep the throttle is now
+// gated by, and /dashboard draws the same route the server integrates — one
+// behaviour with one set of tests behind it, not a browser copy and a server
+// copy that agree until they don't. See shared.js for why they are loaded like
+// this rather than imported.
+const { OBSTACLE_DEFAULTS, obstacleState, obstacleStep } =
+  loadShared('sonar.js', ['OBSTACLE_DEFAULTS', 'obstacleState', 'obstacleStep']);
+const { ROUTE_DEFAULTS, routeState, routeStep, routeMark, routeReset, routeBearing } =
+  loadShared('route.js', ['ROUTE_DEFAULTS', 'routeState', 'routeStep', 'routeMark',
+                          'routeReset', 'routeBearing']);
+// The competition field and where the robot is on it. Same reasoning again:
+// the QR codes localise the robot whether or not a browser is open, so the
+// graph, the plan and the next turn are the server's, and /dashboard draws
+// what the robot is actually navigating by rather than a second copy of it.
+const { FIELD, fieldState, fieldSee, fieldMission, fieldClearMission, fieldStatus } =
+  loadShared('field.js', ['FIELD', 'fieldState', 'fieldSee', 'fieldMission',
+                          'fieldClearMission', 'fieldStatus']);
 
 /**
  * What each key combination means.
@@ -70,6 +90,13 @@ export const GEAR_NAMES = Object.keys(DEFAULT_GEARS);
 // Longest match wins, so "wa" beats "w" when both keys are down.
 const COMBO_ORDER = ['wa', 'wd', 'w', 'a', 'd', 's'];
 
+// What the pages call the two gears and the four directions. The keys stay
+// English because they are protocol — they are in presets.json, in the WebSocket
+// messages and in the tests — and only the words a person reads are translated.
+const GEAR_NAMES_TR = { normal: 'normal', fast: 'hızlı' };
+const DIR_SETTLING = { 'İLERİ': 'ileri', 'GERİ': 'geri',
+                       'DÖNÜŞ A': 'dönüş A', 'DÖNÜŞ D': 'dönüş D' };
+
 // If the page goes quiet for this long we treat it as "no keys held". The
 // browser sends at 20 Hz while driving, so this only fires if a tab wedges.
 // The follow page is held to the same rule: a camera that stops delivering
@@ -82,6 +109,13 @@ const KEYS_STALE_MS = 400;
 // is one settle period rather than two stacked up. This timeout is only the
 // fallback for a transport that reports no direction at all (the USB board).
 const REV_FALLBACK_MS = 1600;
+
+// How hard the lift runs, as a percentage of the L298N's PWM. Not 100 by
+// default: an actuator that slams into its end stop at full duty is the noise
+// you hear just before the gearbox gives up. It is a setting because the right
+// number depends on the load, and it lives in follow.json with everything else
+// that was found by trying it.
+export const DEFAULT_LIFT_PCT = 75;
 
 /** @returns {[number, number, [boolean, boolean], string|null]} */
 export function resolveKeys(keys, presets) {
@@ -129,16 +163,83 @@ export class Bench {
     this.gear = null;              // 'normal' | 'fast' | null
     this.lastGearAt = 0;
 
+    // ── the lift ──
+    // One actuator on an L298N, up or down. Held, not latched: the page sends
+    // its direction at 20 Hz for as long as the button is down, and this goes
+    // back to 0 the moment it stops — the same dead-man as a gear, for a motor
+    // that is even less forgiving about being left running. See LIFT_PCT for
+    // why the number here is a percentage and the wire carries 0-255.
+    this.lift = 0;                 // -1 down, 0 stop, +1 up
+    this.liftPct = DEFAULT_LIFT_PCT;
+    this.lastLiftAt = 0;
+
     // Follow page state: the browser's vision loop steering the robot.
     this.autoMode = false;
     this.lastAutoAt = 0;
     this.autoReason = '';
-    this.scanSpin = 0;
 
     // Direction: we ask, the board decides when it is safe to actually move.
     this.dirWant = [false, false];   // [GPIO25 rev, GPIO26 rev]
     this.dirAt = 0;                  // when the request changed
     this._dirLast = [false, false];  // fallback for transports with no readback
+
+    // ── the forward HC-SR04, as a brake ──
+    // It used to be one page's behaviour: /obstacle ran the state machine in
+    // the browser and sent zeros. That protects exactly one page. The robot has
+    // five ways to be driven — keys, a gear, a typed percentage, the pilot, the
+    // obstacle page itself — and a wall in front of it is a fact about the
+    // robot, not about which tab is open. So it lives here, where every one of
+    // those paths already funnels through resolve().
+    this.obsCfg = { ...OBSTACLE_DEFAULTS };
+    this.obsGuard = true;            // on unless follow.json says otherwise
+    this.obsState = obstacleState(Date.now());
+    this.obs = { blocked: false, phase: 'go', cm: null, reason: 'başlıyor', waitLeft: 0 };
+    this.obsStops = 0;
+
+    // ── where it has been ──
+    // Integrated here rather than in the page so the route survives a reload,
+    // is the same for two browsers watching, and exists at all when nobody is
+    // watching. See public/route.js for what it is and is not.
+    this.routeCfg = { ...ROUTE_DEFAULTS };
+    this.route = routeState(Date.now());
+    this.calib = null;               // {pct, metres, seconds, dead} — from /setup
+    this.swap = false;
+
+    // ── where it is on the field ──
+    // The dead reckoning above says how far it has gone; this says where that
+    // is, because the QR codes are bolted to known places and the wheels are
+    // not. See public/field.js.
+    this.field = fieldState();
+  }
+
+  /**
+   * Take the persisted tuning: obstacle thresholds, wheelbase, distance
+   * calibration.
+   *
+   * One setter for the whole file rather than one per number, because these
+   * arrive together — the server hands over follow.json as it loads it and
+   * again whenever a page edits it, and a half-applied config is a robot that
+   * brakes at the old threshold.
+   */
+  setCfg(followCfg) {
+    const cfg = followCfg || {};
+    for (const k of Object.keys(OBSTACLE_DEFAULTS)) {
+      const v = cfg.obstacle && cfg.obstacle[k];
+      if (Number.isFinite(Number(v))) this.obsCfg[k] = Number(v);
+    }
+    // The one non-numeric one: a way to switch the brake off for bench work,
+    // off by default, and reported in the status so it can never be off
+    // without the pages saying so.
+    this.obsGuard = !(cfg.obstacle && cfg.obstacle.guard === false);
+    if (Number.isFinite(Number(cfg.route && cfg.route.track))) {
+      this.routeCfg.track = Number(cfg.route.track);
+    }
+    this.calib = cfg.calib || null;
+    this.swap = !!(cfg.pilot && cfg.pilot.swap);
+    if (Number.isFinite(Number(cfg.lift && cfg.lift.pct))) {
+      this.liftPct = Math.max(0, Math.min(100, Number(cfg.lift.pct)));
+    }
+    return this;
   }
 
   async open() {
@@ -293,19 +394,6 @@ export class Bench {
   }
 
   /**
-   * Spin the sonar servo, or stop it.
-   *
-   * Passed straight through: the scan has nothing to do with the drive state,
-   * so it works whether or not the robot is armed — which is the point, because
-   * mapping a room is something you do while standing still.
-   */
-  setScan(spin) {
-    this.scanSpin = Math.max(-100, Math.min(100, Math.round(Number(spin) || 0)));
-    if (typeof this.tx.scan === 'function') this.tx.scan(this.scanSpin);
-    return this.scanSpin;
-  }
-
-  /**
    * Put a raw 0-255 on a spare pin.
    *
    * Not part of the drive path and not watchdogged: a bench value you set by
@@ -319,8 +407,17 @@ export class Bench {
   }
 
   start() { this.running = true; }
-  stop() { this.running = false; }
+  /**
+   * STOP: the wheels stop, and so does the lift.
+   *
+   * A stop button that leaves an actuator extending is not a stop button. This
+   * is belt and braces — the dead-man in `liftOut` would catch it a fifth of a
+   * second later anyway — but STOP is the control people reach for when
+   * something is going wrong, and it has to mean all of it.
+   */
+  stop() { this.running = false; this.lift = 0; }
 
+  /** Everything that is being held, released. The lift is one of those. */
   idle() {
     this.running = false;
     this.p25 = this.p26 = 0;
@@ -329,6 +426,7 @@ export class Bench {
     this.gear = null;
     this.keys = [];
     this.combo = null;
+    this.lift = 0;
     this.requestDirection([false, false]);
   }
 
@@ -367,10 +465,19 @@ export class Bench {
   }
 
   /** Human label for whatever the direction pair means. */
+  /**
+   * The settling label, written out per direction.
+   *
+   * Not `dirName().toLowerCase()`: JavaScript's lowercase is not Turkish-aware,
+   * so 'İLERİ' comes back as "i̇leri̇" — a dotted i with a second combining dot
+   * on top. One table beats a word that renders wrong on every direction change.
+   */
+  static get settlingNames() { return DIR_SETTLING; }
+
   static dirName(d) {
-    if (!d[0] && !d[1]) return 'FORWARD';
-    if (d[0] && d[1]) return 'BACK';
-    return d[0] ? 'PIVOT A' : 'PIVOT D';
+    if (!d[0] && !d[1]) return 'İLERİ';
+    if (d[0] && d[1]) return 'GERİ';
+    return d[0] ? 'DÖNÜŞ A' : 'DÖNÜŞ D';
   }
 
   // ── the one place that decides what goes out ──────────────────────
@@ -394,51 +501,180 @@ export class Bench {
 
   /** @returns {[number, number, boolean, string]} pct25, pct26, enable, reason */
   resolve() {
-    if (this._closed) return [0, 0, false, 'shutting down'];
-    if (this.clients === 0) return [0, 0, false, 'no browser connected'];
-    if (!this.running) return [0, 0, false, 'stopped'];
-    if (!this.tx.fresh) return [0, 0, false, 'esp32 unreachable'];
+    if (this._closed) return [0, 0, false, 'kapanıyor'];
+    if (this.clients === 0) return [0, 0, false, 'tarayıcı bağlı değil'];
+    if (!this.running) return [0, 0, false, 'durduruldu'];
+    if (!this.tx.fresh) return [0, 0, false, 'esp32 erişilemiyor'];
     // Armed but the drive page stopped reporting: coast, stay enabled. Holding
     // enable through a released key is deliberate — toggling it on every
     // keystroke would hammer the relay.
     if (this.keyMode && Date.now() - this.lastKeysAt > KEYS_STALE_MS) {
-      return [0, 0, true, 'no keys held'];
+      return [0, 0, true, 'tuş basılı değil'];
     }
     // Same rule for the follow page: no fresh frame, no throttle. Enable stays
     // up so a dropped frame does not cost a relay cycle, but nothing moves.
     if (this.autoMode && Date.now() - this.lastAutoAt > KEYS_STALE_MS) {
-      return [0, 0, true, 'kadr gəlmir'];
+      return [0, 0, true, 'kare gelmiyor'];
     }
     // And for a gear. It is a held throttle with no keyup behind it, so the
     // only thing standing between a wedged tab and a robot at 3.12 V is the
     // page still saying, twenty times a second, that it means it.
     if (this.gear && Date.now() - this.lastGearAt > KEYS_STALE_MS) {
-      return [0, 0, true, 'no gear report'];
+      return [0, 0, true, 'hız bildirimi yok'];
     }
     // A direction change is pending: hold everything at zero so the wheels
     // stop and the board's interlock can release. Crossing phase wires under
     // load destroys the controller's output stage.
     if (this.dirSettling) {
-      return [0, 0, true, `${Bench.dirName(this.dirWant).toLowerCase()}…`];
+      return [0, 0, true, `${DIR_SETTLING[Bench.dirName(this.dirWant)]}…`];
+    }
+    // Something in front of us, closer than the threshold. Enable stays up —
+    // this is a brake, not a shutdown, and dropping the relay would cost a
+    // cycle every time somebody walked past.
+    //
+    // Only forward motion is held. Reversing away from a wall and pivoting on
+    // the spot are the two things you actually want to be able to do while the
+    // forward sensor is screaming, and neither of them drives into it.
+    if (this.obsBlocking) {
+      return [0, 0, true, this.obs.reason];
     }
     if (this.level === 0 && !this.autoMode && !this.gear) {
-      return [0, 0, true, 'level 0 %'];
+      return [0, 0, true, 'seviye 0 %'];
     }
     const moving = Bench.dirName(this.dirWant);
-    const label = moving === 'FORWARD'
-      ? (this.autoMode ? `follow: ${this.autoReason || 'gedir'}`
-        : this.gear ? `gear ${this.gear}`
-        : this.combo ? `key ${this.combo}` : 'running')
+    const label = moving === 'İLERİ'
+      ? (this.autoMode ? `takip: ${this.autoReason || 'gidiyor'}`
+        : this.gear ? `hız ${GEAR_NAMES_TR[this.gear] || this.gear}`
+        : this.combo ? `tuş ${this.combo}` : 'sürüyor')
       : moving;
     return [this.scaled(this.p25), this.scaled(this.p26), true, label];
   }
 
+  /**
+   * True when the forward sensor is holding the throttle down right now.
+   *
+   * Split out of resolve() because resolve() is called several times per tick —
+   * once to drive, once per status frame — and it has to give the same answer
+   * every time. Everything that advances a clock happens in tick(), below.
+   */
+  get obsBlocking() {
+    if (!this.obsGuard || !this.obs.blocked) return false;
+    return !this.dirWant[0] && !this.dirWant[1];      // forward only
+  }
+
+  /**
+   * Advance the two things that keep their own history: the obstacle state
+   * machine and the dead-reckoned route. Once per tick, 20 Hz.
+   *
+   * The sensor is read whether or not the robot is running, because /dashboard
+   * and /obstacle both show the distance while it is parked, and a state
+   * machine that only runs while armed would arm into whatever it last saw.
+   */
+  _sense(now) {
+    const board = this.tx.readback();
+    const cm = board && this.tx.fresh && board.son ? board.son.fwd_cm : null;
+    const was = this.obs.phase;
+    this.obs = obstacleStep(this.obsState, cm, this.obsCfg, now);
+    if (this.obs.phase === 'stop' && was !== 'stop') {
+      this.obsStops++;
+      // Where it stopped is worth a pin on the map: unlike the path itself, it
+      // is a place something really was.
+      routeMark(this.route, 'stop', `${this.obs.cm ?? '?'} sm`, now, this.routeCfg);
+    }
+  }
+
   tick() {
+    const now = Date.now();
+    this._sense(now);
     const [a, b, en] = this.resolve();
+    // The route is integrated from what is actually going to the pins, not
+    // from what anybody asked for — the same rule /tune uses for distance,
+    // and the reason a blocked robot does not accumulate metres.
+    routeStep(this.route,
+      { p25: a, p26: b, rev: this.dir, calib: this.calib, swap: this.swap },
+      this.routeCfg, now);
     // Request the direction straight away. Holding the throttle at zero (in
     // resolve) is what lets the board's interlock release.
     this.tx.send(esp.pctToVolts(a, this.vMax), esp.pctToVolts(b, this.vMax), en,
-                 this.dirWant);
+                 this.dirWant, this.liftOut);
+  }
+
+  /**
+   * Raise, lower, or stop the lift.
+   *
+   * Held rather than latched. The page repeats this at 20 Hz while a button is
+   * down and `liftOut` falls back to 0 as soon as it stops arriving, so a
+   * closed tab, a wedged renderer or a dropped wifi link all stop the actuator
+   * within 400 ms. There is no "lift up and forget" command on purpose: this
+   * moves a load, and every other held output on this robot works the same way.
+   *
+   * @param {number|string} dir  +1 / 'up', -1 / 'down', 0 / anything else stops
+   */
+  setLift(dir) {
+    const d = dir === 'up' ? 1 : dir === 'down' ? -1 : Math.sign(Number(dir) || 0);
+    this.lift = d === 1 || d === -1 ? d : 0;
+    this.lastLiftAt = Date.now();
+    return this.lift;
+  }
+
+  /**
+   * What actually goes on the wire: -255..255, or 0 if the page went quiet.
+   *
+   * A getter rather than stored state, for the same reason `obsBlocking` is:
+   * it is read once to drive and once per status frame, and both have to get
+   * the same answer.
+   */
+  get liftOut() {
+    if (!this.lift) return 0;
+    if (Date.now() - this.lastLiftAt > KEYS_STALE_MS) return 0;
+    const pct = Math.max(0, Math.min(100, Number(this.liftPct) || 0));
+    return Math.round(this.lift * (pct / 100) * 255);
+  }
+
+  /** Pin something to where the robot was when it happened — see route.js. */
+  mark(kind, text, now = Date.now()) {
+    return routeMark(this.route, kind, text, now, this.routeCfg);
+  }
+
+  /**
+   * A QR code was read: pin it to the path, and fix the position with it.
+   *
+   * Both, because they answer different questions. The mark is "a code was
+   * read here on the line we have drawn", which is worth seeing even when the
+   * code belongs to somebody else's field. The localisation is "and therefore
+   * the robot is *there*, on this leg, pointing this way" — and that only
+   * happens for a code this field knows.
+   *
+   * The route pose is handed over at the same instant so field.js can anchor
+   * one frame to the other; sampling it a tick later would bake in whatever
+   * the robot did in between.
+   */
+  seeQr(text, now = Date.now()) {
+    const mark = routeMark(this.route, 'qr', text, now, this.routeCfg);
+    const fix = fieldSee(this.field, text, now, FIELD,
+      { x: this.route.x, y: this.route.y, bearing: routeBearing(this.route) });
+    return { mark, fix };
+  }
+
+  /** The stops to call at, in order — e.g. ['A2', 'B3']. */
+  setMission(targets, from = null) {
+    if (!Array.isArray(targets) || targets.length === 0) {
+      fieldClearMission(this.field);
+      return { nodes: [], stops: [], ok: true, reason: null };
+    }
+    return fieldMission(this.field, targets, FIELD, from);
+  }
+
+  /** Start the map again from here. The run log is what keeps a run forever. */
+  resetRoute(now = Date.now()) {
+    routeReset(this.route, now);
+    // The anchor tied the field to route coordinates that no longer exist, so
+    // it goes too. Better to say "I do not know where I am until the next QR"
+    // than to keep an offset into a frame that was just reset to zero.
+    const stops = this.field.stops;
+    this.field = fieldState();
+    if (stops && stops.length) fieldMission(this.field, stops, FIELD, 'START');
+    return this.route;
   }
 
   snapshot() {
@@ -453,7 +689,6 @@ export class Bench {
       keys: this.keys,
       combo: this.combo,
       follow: this.autoMode,
-      scan_spin: this.scanSpin,
       presets: this.presets,
       level: this.level,
       gear: this.gear,                         // which fixed speed is engaged
@@ -484,6 +719,50 @@ export class Bench {
       },
       esp_fresh: this.tx.fresh,
       serial_error: this.tx.error,
+      // The lift: which way it is being asked to go, what that is on the wire,
+      // and what the board says it is actually doing. Three numbers rather than
+      // one because they disagree in exactly the cases worth seeing — a
+      // direction change passing through zero, and the run limit cutting in.
+      lift: {
+        dir: this.lift,                       // -1 / 0 / +1, what is being held
+        out: this.liftOut,                    // -255..255, what goes on the wire
+        pct: this.liftPct,
+        at: board.lift ?? null,               // what the bridge is doing
+        cut: board.lift_cut === true,         // run limit fired; let go to re-arm
+        pin: board.lift_pin || null,
+      },
+      // The forward sensor's verdict, decided here rather than per page, so
+      // every page shows the same phase as the one the throttle obeys.
+      obstacle: {
+        ...this.obs,
+        guard: this.obsGuard,
+        blocking: this.obsBlocking,
+        stops: this.obsStops,
+        cfg: { ...this.obsCfg },
+      },
+      // Small on purpose: position, heading, distance and the marks, at 10 Hz.
+      // The path itself is thousands of points and is fetched once over HTTP —
+      // see GET /api/route — with the page appending as it watches.
+      route: {
+        x: r2(this.route.x), y: r2(this.route.y),
+        bearing: routeBearing(this.route),
+        dist: r2(this.route.dist),
+        v: r2(this.route.v),
+        moving: this.route.moving,
+        points: this.route.path.length,
+        seq: this.route.seq,
+        marks: this.route.marks.slice(-12),
+        track: this.routeCfg.track,
+        calibrated: !!(this.calib && Number(this.calib.pct) > 0
+                       && Number(this.calib.metres) > 0 && Number(this.calib.seconds) > 0),
+        since: this.route.since,
+      },
+      // Where that is on the competition field, which QR said so, and what to
+      // do at the junction ahead. The graph itself is static and is fetched
+      // once — see GET /api/field — so this carries only what changes.
+      field: fieldStatus(this.field,
+        { x: this.route.x, y: this.route.y, bearing: routeBearing(this.route) },
+        FIELD),
     };
   }
 }

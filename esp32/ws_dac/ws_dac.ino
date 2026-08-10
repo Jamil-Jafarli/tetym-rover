@@ -36,6 +36,11 @@
                        (other side of the board from the DACs, on purpose)
        GPIO19        → GPIO25 wheel's direction relay
        GPIO18        → GPIO26 wheel's direction relay
+
+       GPIO16        → L298N IN1   the lift actuator: 1/0 up, 0/1 down, 0/0 coast
+       GPIO17        → L298N IN2
+       GPIO4         → L298N ENA   PWM speed — take the ENA jumper off
+                       L298N GND must be common with the ESP32 and the motor supply
                        LOW = forward, HIGH = that wheel runs backwards.
                        One high  = the robot pivots on the spot.
                        Both high = the robot backs up.
@@ -99,32 +104,53 @@ const int PIN_ENABLE = 23;    // digital: LOW at rest, HIGH while running
 const int PIN_REV_25 = 19;    // direction relay for the GPIO25 wheel
 const int PIN_REV_26 = 18;    // direction relay for the GPIO26 wheel
 
+// ── the lift, through an L298N ───────────────────────────────────────
+// One DC actuator that raises and lowers the load, on one half of an L298N:
+//
+//     IN1, IN2  direction. 1/0 extends, 0/1 retracts, 0/0 coasts.
+//     ENA       speed, as PWM. Take the jumper off ENA or it is stuck at full.
+//
+// The L298N's logic runs off 5 V and its inputs are happy with 3.3 V, so the
+// three wires go straight to the ESP32. Grounds must be common — the driver's
+// GND, the ESP32's GND and the motor supply's GND — or the inputs float and
+// the bridge does whatever it likes.
+//
+// The drive controllers are analog and the two DACs belong to them; this is a
+// bridge, so it wants digital direction and a PWM. That is why the actuator is
+// not simply a third throttle channel.
+const int PIN_LIFT_IN1 = 16;
+const int PIN_LIFT_IN2 = 17;
+const int PIN_LIFT_PWM = 4;    // ENA
+const int LIFT_PWM_HZ = 1000;  // low enough that a geared actuator does not sing
+
+// Reversing an H-bridge while the motor is still turning throws the winding's
+// stored energy back through the bridge. The same rule as the wheel relays,
+// for the same reason: pass through zero and wait before going the other way.
+const uint32_t LIFT_FLIP_MS = 250;
+// An actuator at the end of its travel is a stalled motor drawing locked-rotor
+// current, and it will sit there doing that for as long as you hold the button.
+// This is the limit switch the cheap ones do not come with: after this long in
+// one continuous run the bridge is cut, and it re-arms only on a command of 0.
+const uint32_t LIFT_MAX_RUN_MS = 8000;
+
 // ── sonar ────────────────────────────────────────────────────────────
-// Two HC-SR04s: one bolted to the front, one on a continuous-rotation servo
-// that spins it round. Change these to match your wiring — the board reports
-// them in its status, so the pages follow whatever you set here.
+// One HC-SR04, bolted to the front and pointing straight ahead. Change these to
+// match your wiring — the board reports them in its status, so the pages follow
+// whatever you set here.
 //
 // HC-SR04 runs at 5 V and its ECHO pin swings to 5 V, which will damage a 3.3 V
-// GPIO. Put a divider on each echo line (1k series, 2k to ground gives 3.3 V).
+// GPIO. Put a divider on the echo line (1k series, 2k to ground gives 3.3 V).
 // TRIG is an input on the sensor and is happy with 3.3 V.
-const int PIN_SERVO     = 13;   // continuous-rotation servo, 50 Hz PWM
-const int PIN_TRIG_SCAN = 27;   // the spinning sensor
-const int PIN_ECHO_SCAN = 33;
-const int PIN_TRIG_FWD  = 14;   // the forward-facing one
+const int PIN_TRIG_FWD  = 14;
 const int PIN_ECHO_FWD  = 32;
 
-// One ping per sensor every 50 ms. Faster and the previous burst is still
-// rattling around the room when the next goes out, which reads as a phantom
-// object at whatever distance the old echo came from.
+// One ping every 50 ms. Faster and the previous burst is still rattling around
+// the room when the next goes out, which reads as a phantom object at whatever
+// distance the old echo came from.
 const uint32_t PING_PERIOD_MS = 50;
 // Sound covers 4 m and back in about 23 ms. Anything still silent after 25 ms
 // is not a distant object, it is no object — report nothing, not a big number.
 const uint32_t ECHO_TIMEOUT_US = 25000;
-// Servo: 1500 us is stop on a continuous-rotation servo, and roughly ±500 us
-// either side is full speed one way or the other.
-const int SERVO_STOP_US = 1500;
-const int SERVO_SWING_US = 500;
-const int SERVO_CHANNEL = 4;    // LEDC channel; 0-3 are left alone for the DACs
 
 // ── the spare pins, for /pins ────────────────────────────────────────
 // Everything the robot does not already use, so you can put a value on a pin
@@ -144,9 +170,13 @@ const int SERVO_CHANNEL = 4;    // LEDC channel; 0-3 are left alone for the DACs
 //   34-39   input only, no output driver at all
 // 2 and 15 are strapping pins too, but only care what they see AT boot, so they
 // are included — just do not wire something that holds them while it resets.
-const int TEST_PINS[] = { 4, 5, 16, 17, 21, 22, 2, 15 };
+// 4, 16 and 17 are the L298N's — see PIN_LIFT_* above. A page that could put a
+// raw value on ENA while the lift was running would be a second driver for the
+// same motor, and the two would not agree.
+// 13, 27 and 33 used to be the scanning sensor's servo, trigger and echo. That
+// module is gone, so they are ordinary spare pins now.
+const int TEST_PINS[] = { 5, 21, 22, 2, 15, 13, 27, 33 };
 const int TEST_PIN_COUNT = sizeof(TEST_PINS) / sizeof(TEST_PINS[0]);
-const int TEST_CH0 = 5;         // LEDC channels 5..12; 0-4 are taken
 const int TEST_PWM_HZ = 5000;
 
 // Set true if your driver's enable input is active-LOW.
@@ -203,21 +233,25 @@ bool     revBlocked  = false;                    // asked to flip, waiting to se
 // for up to 25 ms waiting for a wall that may not be there, and this loop also
 // has a 20 Hz control stream and a websocket to service — a sensor must not be
 // able to stall the thing that drives the motors.
-volatile uint32_t echoStartFwd = 0, echoStartScan = 0;
-volatile uint32_t echoUsFwd = 0, echoUsScan = 0;
-volatile bool     echoNewFwd = false, echoNewScan = false;
+volatile uint32_t echoStartFwd = 0;
+volatile uint32_t echoUsFwd = 0;
+volatile bool     echoNewFwd = false;
 
-float    fwdCm = -1, scanCm = -1;          // -1 means "no echo", never 0
-int      spinCmd = 0;                      // -100..100
-uint32_t spinStartMs = 0;                  // when the current spin began
-uint32_t spinBankedMs = 0;                 // rotation banked before it stopped
-uint32_t scanStampMs = 0;                  // rotation behind the last scan echo
+float    fwdCm = -1;                       // -1 means "no echo", never 0
 uint32_t lastPingMs = 0;
-bool     pingFwdNext = true;
-bool     heardFwd = false, heardScan = false;
+bool     heardFwd = false;
 
 // ── spare-pin state ──────────────────────────────────────────────────
 uint8_t  testVal[TEST_PIN_COUNT] = {0};
+
+// The lift. `wantLift` is what the last packet asked for, `liftOut` is what the
+// bridge is actually doing — they differ while a direction change passes
+// through zero, and while the run limit is holding it off.
+int      wantLift = 0;             // -255..255; sign is direction, 0 is coast
+int      liftOut  = 0;             // what is on the pins right now
+uint32_t liftFlipMs = 0;           // when the pass-through-zero started
+uint32_t liftRunMs  = 0;           // when this continuous run started
+bool     liftCut    = false;       // the run limit fired; needs a 0 to re-arm
 
 int testIndex(int gpio) {
   for (int i = 0; i < TEST_PIN_COUNT; i++) if (TEST_PINS[i] == gpio) return i;
@@ -239,7 +273,7 @@ bool setTestPin(int gpio, int value) {
   int i = testIndex(gpio);
   if (i < 0) return false;
   testVal[i] = (uint8_t)v;
-  ledcWrite(TEST_CH0 + i, v);   // 8-bit resolution: the value IS the duty
+  ledcWrite(gpio, v);           // 8-bit resolution: the value IS the duty
   return true;
 }
 
@@ -247,7 +281,7 @@ bool setTestPin(int gpio, int value) {
 void clearTestPins() {
   for (int i = 0; i < TEST_PIN_COUNT; i++) {
     testVal[i] = 0;
-    ledcWrite(TEST_CH0 + i, 0);
+    ledcWrite(TEST_PINS[i], 0);
   }
 }
 
@@ -260,15 +294,6 @@ void IRAM_ATTR onEchoFwd() {
   }
 }
 
-void IRAM_ATTR onEchoScan() {
-  if (digitalRead(PIN_ECHO_SCAN)) { echoStartScan = micros(); }
-  else if (echoStartScan) {
-    echoUsScan = micros() - echoStartScan;
-    echoStartScan = 0;
-    echoNewScan = true;
-  }
-}
-
 /** Microseconds of round trip -> centimetres. 343 m/s, there and back. */
 float cmFromUs(uint32_t us) {
   if (us == 0 || us > ECHO_TIMEOUT_US) return -1;
@@ -276,46 +301,13 @@ float cmFromUs(uint32_t us) {
   return (cm < 2 || cm > 400) ? -1 : cm;    // outside the sensor's real range
 }
 
-/** Total milliseconds the scan servo has actually been turning. */
-uint32_t spinElapsed() {
-  return spinBankedMs + (spinCmd != 0 ? millis() - spinStartMs : 0);
-}
-
-void writeServo(int pct) {
-  int us = SERVO_STOP_US + (pct * SERVO_SWING_US) / 100;
-  // LEDC at 50 Hz / 16-bit: one period is 20000 us mapped onto 65535 counts.
-  ledcWrite(SERVO_CHANNEL, (uint32_t)((us * 65535L) / 20000L));
-}
-
-/**
- * Ask for the spin to start, stop or change.
- *
- * Stopping banks the elapsed time instead of zeroing it, so a pause does not
- * silently rotate the whole map: the angle is derived from how long the servo
- * has turned, and that clock has to survive being paused.
- */
-void setSpin(int pct) {
-  int want = constrain(pct, -100, 100);
-  if (want == spinCmd) return;
-  if (spinCmd != 0) spinBankedMs += millis() - spinStartMs;
-  spinCmd = want;
-  spinStartMs = millis();
-  writeServo(spinCmd);
-}
-
-/** Fire one sensor, alternating, and collect whatever came back. */
+/** Fire the sensor and collect whatever came back. */
 void updateSonar() {
   // Collect whatever the interrupts caught since last time.
   if (echoNewFwd) {
     noInterrupts(); uint32_t u = echoUsFwd; echoNewFwd = false; interrupts();
     fwdCm = cmFromUs(u);
     heardFwd = true;
-  }
-  if (echoNewScan) {
-    noInterrupts(); uint32_t u = echoUsScan; echoNewScan = false; interrupts();
-    scanCm = cmFromUs(u);
-    scanStampMs = spinElapsed();   // stamp it with the rotation, not the wall clock
-    heardScan = true;
   }
 
   uint32_t now = millis();
@@ -326,21 +318,14 @@ void updateSonar() {
   // or too angled to echo reads the same as an empty room, and leaving the
   // previous distance sitting there would make it look live. So a sensor that
   // said nothing since its last ping is cleared before the next one goes out.
-  if (pingFwdNext) {
-    if (!heardFwd) fwdCm = -1;
-    heardFwd = false;
-  } else {
-    if (!heardScan) { scanCm = -1; scanStampMs = spinElapsed(); }
-    heardScan = false;
-  }
+  if (!heardFwd) fwdCm = -1;
+  heardFwd = false;
 
-  int trig = pingFwdNext ? PIN_TRIG_FWD : PIN_TRIG_SCAN;
-  digitalWrite(trig, LOW);
+  digitalWrite(PIN_TRIG_FWD, LOW);
   delayMicroseconds(2);
-  digitalWrite(trig, HIGH);
+  digitalWrite(PIN_TRIG_FWD, HIGH);
   delayMicroseconds(10);          // the datasheet's 10 us burst
-  digitalWrite(trig, LOW);
-  pingFwdNext = !pingFwdNext;
+  digitalWrite(PIN_TRIG_FWD, LOW);
 }
 bool     atIdle = true;
 uint8_t  clients = 0;
@@ -374,6 +359,59 @@ void writeReverse(uint8_t ch, bool on) {
 
 bool revPending() {
   return wantRev[0] != revOut[0] || wantRev[1] != revOut[1];
+}
+
+/* Put a signed value on the bridge. Sign picks the direction pins, magnitude
+   is the PWM. Zero drops both inputs, which coasts rather than brakes — a
+   loaded actuator braked hard is a shock through the gearbox, and it holds its
+   position on the screw anyway. */
+void writeLift(int v) {
+  v = constrain(v, -255, 255);
+  liftOut = v;
+  digitalWrite(PIN_LIFT_IN1, v > 0 ? HIGH : LOW);
+  digitalWrite(PIN_LIFT_IN2, v < 0 ? HIGH : LOW);
+  ledcWrite(PIN_LIFT_PWM, (uint32_t)abs(v));
+}
+
+/* The lift's own interlock, run once per loop.
+
+   Three things can stop it, and all three are the same shape as the wheel
+   relays: never reverse under load, never run past the end of the travel, and
+   never keep running because nobody said stop. The third one is not here — it
+   is the link watchdog in updateOutputs(), which the lift shares precisely
+   because it is movement. */
+void updateLift() {
+  uint32_t now = millis();
+
+  // Asked for zero: that clears the run limit as well. The button was let go,
+  // so the next press starts a fresh run.
+  if (wantLift == 0) {
+    liftCut = false;
+    liftRunMs = 0;
+    if (liftOut != 0) writeLift(0);
+    return;
+  }
+  if (liftCut) { if (liftOut != 0) writeLift(0); return; }
+
+  // Direction change: through zero, and wait there.
+  const bool flipping = (liftOut > 0 && wantLift < 0) || (liftOut < 0 && wantLift > 0);
+  if (flipping) {
+    writeLift(0);
+    liftFlipMs = now;
+    liftRunMs = 0;
+    return;
+  }
+  if (liftFlipMs && now - liftFlipMs < LIFT_FLIP_MS) return;
+  liftFlipMs = 0;
+
+  if (liftRunMs == 0) liftRunMs = now;
+  if (now - liftRunMs >= LIFT_MAX_RUN_MS) {
+    liftCut = true;
+    writeLift(0);
+    Serial.println("lift: run limit — released. Let go and press again.");
+    return;
+  }
+  if (liftOut != wantLift) writeLift(wantLift);
 }
 
 /* True only when both outputs are actually sitting at idle — not merely
@@ -426,6 +464,13 @@ void forceIdle() {
   wantEnable = false;
   writeEnable(false);
   writePins();
+  // The lift stops with everything else. It is the one output on this board
+  // that can still be doing work while the wheels are stopped, which is exactly
+  // why forgetting it here would be the bug that matters.
+  wantLift = 0;
+  liftRunMs = 0;
+  liftCut = false;
+  writeLift(0);
   // The relays are deliberately NOT reset here. Dropping the coils mid-coast
   // would cross the phases while the wheel is still turning — exactly what the
   // interlock exists to prevent. updateReverse() returns them to forward once
@@ -466,6 +511,8 @@ void updateOutputs() {
     target26 = V_IDLE;
   }
 
+  updateLift();
+
   if (maxStep <= 0.0f) return;
   current25 = slew(current25, target25, maxStep);
   current26 = slew(current26, target26, maxStep);
@@ -498,15 +545,16 @@ void sendStatus(int8_t only = -1) {
 
   JsonObject son = doc["son"].to<JsonObject>();
   if (fwdCm  > 0) son["fwd_cm"]  = fwdCm;  else son["fwd_cm"]  = (const char*)NULL;
-  if (scanCm > 0) son["scan_cm"] = scanCm; else son["scan_cm"] = (const char*)NULL;
-  son["scan_t"] = scanStampMs;             // ms of rotation behind that echo
-  son["spin"]   = spinCmd;
   JsonObject sp = son["pin"].to<JsonObject>();
-  sp["servo"]  = PIN_SERVO;
-  sp["trig_s"] = PIN_TRIG_SCAN;
-  sp["echo_s"] = PIN_ECHO_SCAN;
   sp["trig_f"] = PIN_TRIG_FWD;
   sp["echo_f"] = PIN_ECHO_FWD;
+  doc["lift"]     = liftOut;        // what the bridge is doing, not what was asked
+  doc["lift_set"] = wantLift;
+  doc["lift_cut"] = liftCut;        // run limit fired; let go to re-arm
+  JsonArray liftPin = doc["lift_pin"].to<JsonArray>();
+  liftPin.add(PIN_LIFT_IN1);
+  liftPin.add(PIN_LIFT_IN2);
+  liftPin.add(PIN_LIFT_PWM);
   doc["rev_wait"] = revBlocked;
   doc["dir"]      = dirName(revOut);
   doc["set25"]   = roundf(target25 * 100) / 100.0f;
@@ -546,10 +594,6 @@ void handleMessage(uint8_t num, const char* text) {
 
   if (!strcmp(cmd, "ping")) { sendStatus(num); return; }
 
-  // The scan servo is deliberately its own command. It is not movement, so it
-  // has no business feeding the drive watchdog — a board quietly mapping a room
-  // must not look like one that is being driven, and a page that only wants to
-  // scan should not have to pretend to be a driver to do it.
   // One pin, one raw value. Not part of the drive stream and not watchdogged:
   // a bench value you set by hand should stay where you put it while you go and
   // measure it. It is cleared by stop, by idle, and by the last client leaving.
@@ -557,13 +601,6 @@ void handleMessage(uint8_t num, const char* text) {
     int gpio = doc["gpio"].is<int>() ? doc["gpio"].as<int>() : -1;
     int val  = doc["val"].is<int>()  ? doc["val"].as<int>()  : 0;
     if (setTestPin(gpio, val)) goodPkts++; else badPkts++;
-    sendStatus(num);
-    return;
-  }
-
-  if (!strcmp(cmd, "scan")) {
-    setSpin(doc["spin"].is<int>() ? doc["spin"].as<int>() : 0);
-    goodPkts++;
     sendStatus(num);
     return;
   }
@@ -592,6 +629,11 @@ void handleMessage(uint8_t num, const char* text) {
   // Absent "en" means false: a client that never mentions it must not be able
   // to leave the driver enabled.
   wantEnable = doc["en"].is<bool>() ? doc["en"].as<bool>() : false;
+  // Same rule for the lift, and for a better reason: this one moves a load.
+  // Absent means stop, so a client that never mentions the lift cannot leave it
+  // running, and a client that stops sending stops the actuator by the same
+  // 300 ms watchdog that stops the wheels.
+  wantLift = doc["lift"].is<int>() ? constrain(doc["lift"].as<int>(), -255, 255) : 0;
   lastPacketMs = millis();
   atIdle = false;
   goodPkts++;
@@ -684,20 +726,20 @@ void setup() {
   forceIdle();                    // before anything else, so the pins never float
   lastSlewMs = millis();
 
+  // Before Serial, like the relays and for the same reason: until pinMode runs
+  // these are inputs, and a floating IN1/IN2 pair on an L298N is a coin toss.
+  pinMode(PIN_LIFT_IN1, OUTPUT);   digitalWrite(PIN_LIFT_IN1, LOW);
+  pinMode(PIN_LIFT_IN2, OUTPUT);   digitalWrite(PIN_LIFT_IN2, LOW);
+  ledcAttach(PIN_LIFT_PWM, LIFT_PWM_HZ, 8);
+  ledcWrite(PIN_LIFT_PWM, 0);
+
   pinMode(PIN_TRIG_FWD, OUTPUT);   digitalWrite(PIN_TRIG_FWD, LOW);
-  pinMode(PIN_TRIG_SCAN, OUTPUT);  digitalWrite(PIN_TRIG_SCAN, LOW);
   pinMode(PIN_ECHO_FWD, INPUT);
-  pinMode(PIN_ECHO_SCAN, INPUT);
-  attachInterrupt(digitalPinToInterrupt(PIN_ECHO_FWD),  onEchoFwd,  CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_ECHO_SCAN), onEchoScan, CHANGE);
-  ledcSetup(SERVO_CHANNEL, 50, 16);
-  ledcAttachPin(PIN_SERVO, SERVO_CHANNEL);
-  writeServo(0);                  // a continuous servo idles at "stop", not 0 %
+  attachInterrupt(digitalPinToInterrupt(PIN_ECHO_FWD), onEchoFwd, CHANGE);
 
   for (int i = 0; i < TEST_PIN_COUNT; i++) {
-    ledcSetup(TEST_CH0 + i, TEST_PWM_HZ, 8);   // 8-bit, so 0-255 maps straight on
-    ledcAttachPin(TEST_PINS[i], TEST_CH0 + i);
-    ledcWrite(TEST_CH0 + i, 0);
+    ledcAttach(TEST_PINS[i], TEST_PWM_HZ, 8);  // 8-bit, so 0-255 maps straight on
+    ledcWrite(TEST_PINS[i], 0);
   }
 
   Serial.begin(115200);

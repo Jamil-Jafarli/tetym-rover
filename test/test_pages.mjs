@@ -18,7 +18,7 @@ catch {
 }
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const server = spawn('node', ['server.js', '--fake', '--esp', '127.0.0.1', '--http', '8199', '--host', '127.0.0.1'],
+const server = spawn('node', ['server.js', '--fake', '--esp', '127.0.0.1', '--http', '8199', '--host', '127.0.0.1', '--no-camera'],
   { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
 let boot = '';
 server.stdout.on('data', d => { boot += d; });
@@ -30,8 +30,8 @@ const ok = (c, m) => { if (c) { pass++; console.log(`  [PASS] ${m}`); }
                        else { fail++; console.log(`  [FAIL] ${m}`); } };
 
 const browser = await chromium.launch();
-const PAGES = ['/', '/setup', '/manual', '/drive', '/vision', '/follow',
-               '/tune', '/sonar', '/obstacle', '/pins'];
+const PAGES = ['/', '/dashboard', '/setup', '/manual', '/drive', '/vision', '/follow',
+               '/tune', '/obstacle', '/pins'];
 
 console.log('\nHər səhifə səhvsiz açılır və zolağı göstərir');
 for (const path of PAGES) {

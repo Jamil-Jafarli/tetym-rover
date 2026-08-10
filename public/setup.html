@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="az">
+<html lang="tr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quraşdırma · nə etməliyəm</title>
+<title>Kurulum · ne yapmalıyım</title>
 <style>
   :root{
     --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
@@ -74,31 +74,31 @@
 
   <div class="card">
     <div class="row">
-      <h1>Quraşdırma — nə etməliyəm</h1>
+      <h1>Kurulum — ne yapmalıyım</h1>
       <span class="row" style="gap:7px"><span class="dot" id="dot"></span>
-        <span class="muted" id="link">bağlanır…</span></span>
+        <span class="muted" id="link">bağlanıyor…</span></span>
     </div>
-    <p class="muted" style="margin:10px 0 0">Bu səhifədəki rəqəmlər serverdə
-    saxlanır və <b>bütün səhifələrdə</b> işlənir — /manual, /drive, /follow,
-    /tune. Bir dəfə ölç, hər yerdə düz olsun.</p>
+    <p class="muted" style="margin:10px 0 0">Bu sayfadaki sayılar sunucuda
+    saklanır ve <b>bütün sayfalarda</b> kullanılır — /manual, /drive, /follow,
+    /tune. Bir kez ölç, her yerde doğru olsun.</p>
     <div class="nav">
-      <a href="/">← hub</a><a href="/manual">/manual</a><a href="/drive">/drive</a>
+      <a href="/">← ana sayfa</a><a href="/manual">/manual</a><a href="/drive">/drive</a>
       <a href="/follow">/follow</a><a href="/pins">/pins</a>
     </div>
   </div>
 
   <div class="card warnbox" id="banner" hidden>
-    <b>Diqqət —</b> <span id="bannerTxt"></span>
+    <b>Dikkat —</b> <span id="bannerTxt"></span>
   </div>
 
   <div id="steps"></div>
 
   <div class="card">
-    <div class="lbl" style="margin-bottom:8px">Hazırkı ayarlar</div>
+    <div class="lbl" style="margin-bottom:8px">Mevcut ayarlar</div>
     <p class="muted" id="dump" style="margin:0;font:12px/1.6 ui-monospace,Menlo,monospace"></p>
     <div class="row" style="margin-top:14px;gap:8px">
-      <button id="reset" style="flex:1">Hamısını sıfırla</button>
-      <button id="save" style="flex:2">Yadda saxla</button>
+      <button id="reset" style="flex:1">Hepsini sıfırla</button>
+      <button id="save" style="flex:2">Kaydet</button>
     </div>
     <p class="muted" id="saved" style="margin:10px 0 0"></p>
   </div>
@@ -130,7 +130,7 @@ function pushCfg() {
   const pilot = { ...(cfg.pilot || {}) };
   for (const k of Object.keys(edited)) pilot[k] = edited[k];
   send({ cmd: 'follow_cfg', cfg: { ...cfg, pilot } });
-  $('saved').textContent = 'yadda saxlanıldı · ' + new Date().toLocaleTimeString();
+  $('saved').textContent = 'kaydedildi · ' + new Date().toLocaleTimeString();
 }
 
 function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
@@ -147,13 +147,13 @@ function tester(pin) {
   box.className = 'drive';
   box.innerHTML = `
     <div class="row">
-      <span class="muted">GPIO${pin} — yalnız bu təkər</span>
+      <span class="muted">GPIO${pin} — yalnız bu teker</span>
       <span class="live-v"><span class="tv">0</span> % · <span class="tvv">0.00</span> V</span>
     </div>
     <input type="range" min="0" max="100" step="1" value="0">
-    <button class="hold">BASILI SAXLA — sür</button>
-    <p class="muted" style="margin:8px 0 0">Basılı saxla, sürgünü yavaş-yavaş
-    qaldır. Təkərin ilk döndüyü rəqəmi aşağıya yaz.</p>`;
+    <button class="hold">BASILI TUT — sür</button>
+    <p class="muted" style="margin:8px 0 0">Basılı tut, sürgüyü yavaş yavaş
+    yükselt. Tekerin ilk döndüğü sayıyı aşağıya yaz.</p>`;
   const rng = box.querySelector('input');
   const btn = box.querySelector('.hold');
   const paint = () => {
@@ -170,7 +170,7 @@ function tester(pin) {
     e.preventDefault();
     held = pin;
     btn.classList.add('live');
-    btn.textContent = 'SÜRÜR — buraxanda dayanır';
+    btn.textContent = 'SÜRÜYOR — bırakınca durur';
     send({ cmd: 'start', p25: pin === 25 ? Number(rng.value) : 0,
                          p26: pin === 26 ? Number(rng.value) : 0 });
   };
@@ -178,7 +178,7 @@ function tester(pin) {
     if (held !== pin) return;
     held = null;
     btn.classList.remove('live');
-    btn.textContent = 'BASILI SAXLA — sür';
+    btn.textContent = 'BASILI TUT — sür';
     send({ cmd: 'idle' });
   };
   rng.addEventListener('input', paint);
@@ -193,13 +193,13 @@ function tester(pin) {
 
 // ── rendering ─────────────────────────────────────────────────────
 const FIELDS = {
-  stall25: [{ key: 'stall25', label: 'GPIO25', unit: '% — ilk dönən faiz',
+  stall25: [{ key: 'stall25', label: 'GPIO25', unit: '% — ilk dönen yüzde',
               min: 0, max: 60, step: 1, pin: 25 }],
-  stall26: [{ key: 'stall26', label: 'GPIO26', unit: '% — ilk dönən faiz',
+  stall26: [{ key: 'stall26', label: 'GPIO26', unit: '% — ilk dönen yüzde',
               min: 0, max: 60, step: 1, pin: 26 }],
-  gain: [{ key: 'gain25', label: 'GPIO25 güc', unit: '0.50 – 1.50',
+  gain: [{ key: 'gain25', label: 'GPIO25 güç', unit: '0.50 – 1.50',
            min: 0.5, max: 1.5, step: 0.01 },
-         { key: 'gain26', label: 'GPIO26 güc', unit: '0.50 – 1.50',
+         { key: 'gain26', label: 'GPIO26 güç', unit: '0.50 – 1.50',
            min: 0.5, max: 1.5, step: 0.01 }],
 };
 
@@ -231,7 +231,7 @@ function render() {
       const p = document.createElement('p');
       p.className = 'muted';
       p.style.marginTop = '10px';
-      p.textContent = 'Əvvəlki addımlar tamamlanmayıb — bu addım hələ mənasızdır.';
+      p.textContent = 'Önceki adımlar tamamlanmadı — bu adım henüz anlamsız.';
       body.appendChild(p);
     } else {
       for (const f of (FIELDS[s.id] || [])) {
@@ -267,17 +267,17 @@ function render() {
 function repaintDump() {
   const m = wheelsOf({ ...trim(), ...edited });
   const [a, b] = wheelsSummary(m);
-  $('dump').textContent = `${a}\n${b}\nümumi hədd ${m.stall} %  ·  tavan ${vmax.toFixed(2)} V`
-    + `\ntərəflər ${m.swap ? 'dəyişdirilib' : 'normal'}`;
+  $('dump').textContent = `${a}\n${b}\ngenel eşik ${m.stall} %  ·  tavan ${vmax.toFixed(2)} V`
+    + `\ntaraflar ${m.swap ? 'değiştirildi' : 'normal'}`;
   const measured = wheelsMeasured(m);
   $('banner').hidden = measured;
-  $('bannerTxt').textContent = 'təkərlərin dönmə həddi hələ ölçülməyib. '
-    + 'Bu ölçülmədən robot yavaş sürətdə əyilir və dönür — 2-ci və 3-cü addım.';
+  $('bannerTxt').textContent = 'tekerlerin dönme eşiği henüz ölçülmedi. '
+    + 'Bu ölçülmeden robot düşük hızda sapar ve döner — 2. ve 3. adım.';
 }
 
 $('save').addEventListener('click', () => { pushCfg(); render(); });
 $('reset').addEventListener('click', () => {
-  if (!confirm('Bütün təkər ayarları standarta qayıtsın?')) return;
+  if (!confirm('Bütün teker ayarları varsayılana dönsün mü?')) return;
   for (const k of ['stall25', 'stall26']) edited[k] = null;
   edited.gain25 = 1; edited.gain26 = 1;
   pushCfg(); render();
@@ -287,10 +287,10 @@ $('reset').addEventListener('click', () => {
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/`);
-  ws.onopen = () => { $('dot').className = 'dot ok'; $('link').textContent = 'qoşuldu'; };
+  ws.onopen = () => { $('dot').className = 'dot ok'; $('link').textContent = 'bağlandı'; };
   ws.onclose = () => {
     $('dot').className = 'dot bad';
-    $('link').textContent = 'bağlantı yoxdur — çıxış sıfırlandı';
+    $('link').textContent = 'bağlantı yok — çıkış sıfırlandı';
     held = null;
     setTimeout(connect, 1000);
   };
@@ -309,8 +309,8 @@ function connect() {
         render();
       }
     }
-    if (!s.esp_fresh) $('link').textContent = 'ESP32 telemetriyası yoxdur';
-    else if (ws.readyState === 1) $('link').textContent = 'ESP32 qoşulub';
+    if (!s.esp_fresh) $('link').textContent = 'ESP32 telemetrisi yok';
+    else if (ws.readyState === 1) $('link').textContent = 'ESP32 bağlı';
   };
 }
 

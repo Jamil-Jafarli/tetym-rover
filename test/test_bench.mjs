@@ -19,7 +19,8 @@ import * as esp from '../esp.js';
 import { resolveKeys, DEFAULT_PRESETS, DEFAULT_GEARS } from '../bench.js';
 import { summarise } from '../follow_log.js';
 import { Esp32 } from '../esp32sim.js';
-import { Esp32WsSim, dacFor } from '../esp32ws_sim.js';
+import { Esp32WsSim, dacFor, LIFT_FLIP_MS, LIFT_MAX_RUN_MS,
+         LINK_TIMEOUT_MS } from '../esp32ws_sim.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HTTP_PORT = 8794;
@@ -283,7 +284,8 @@ async function serverChecks() {
   console.log('\n3. full stack: browser -> server -> wifi -> ESP32');
   const srv = spawn(process.execPath,
     [path.join(HERE, '..', 'server.js'), '--fake', '--esp', 'sim',
-      '--http', String(HTTP_PORT), '--host', '127.0.0.1', '--v-max', '2.6'],
+      '--http', String(HTTP_PORT), '--host', '127.0.0.1', '--v-max', '2.6',
+      '--no-camera'],
     { stdio: ['ignore', 'pipe', 'pipe'] });
 
   let log = '';
@@ -400,7 +402,8 @@ async function driveChecks() {
   const port = HTTP_PORT + 1;
   const srv = spawn(process.execPath,
     [path.join(HERE, '..', 'server.js'), '--fake', '--esp', 'sim',
-      '--http', String(port), '--host', '127.0.0.1', '--v-max', '2.6'],
+      '--http', String(port), '--host', '127.0.0.1', '--v-max', '2.6',
+      '--no-camera'],
     { stdio: ['ignore', 'pipe', 'pipe'] });
 
   let log = '';
@@ -413,17 +416,16 @@ async function driveChecks() {
 
     const page = await fetch(`http://127.0.0.1:${port}/drive`);
     const html = await page.text();
-    check('GET /drive serves the page', page.status === 200 && html.includes('Keyboard Drive'));
+    check('GET /drive serves the page', page.status === 200 && html.includes('Klavyeyle sür'));
 
     // Every route the hub links to must actually exist, or the nav is a lie.
-    for (const [route, needle] of [['/', 'Robot idarəetmə'],
-                                   ['/manual', 'ESP32 actual'],
-                                   ['/vision', 'Trek növü'],
-                                   ['/follow', 'Yolu təqib et'],
-                                   ['/tune', 'Qeydi oxu'],
-                                   ['/sonar', '360° xəritə'],
-                                   ['/obstacle', 'Maneədə dayan'],
-                                   ['/pins', 'Boş pinlər']]) {
+    for (const [route, needle] of [['/', 'Robot kontrol'],
+                                   ['/manual', 'ESP32 gerçek'],
+                                   ['/vision', 'Parkur türü'],
+                                   ['/follow', 'Yolu takip et'],
+                                   ['/tune', 'Kaydı oku'],
+                                   ['/obstacle', 'Engelde dur'],
+                                   ['/pins', 'Boş pinler']]) {
       const r = await fetch(`http://127.0.0.1:${port}${route}`);
       const t = await r.text();
       check(`GET ${route} serves its page`, r.status === 200 && t.includes(needle),
@@ -546,7 +548,7 @@ async function driveChecks() {
     check('level 0 % means nothing moves',
       s.esp.vL === 1.0 && s.esp.vR === 1.0, `${s.esp.vL} V`);
     check('but the driver stays enabled at level 0', s.esp.en === true);
-    check('reason explains it', s.reason === 'level 0 %', s.reason);
+    check('reason explains it', s.reason === 'seviye 0 %', s.reason);
 
     ws.send(JSON.stringify({ cmd: 'level', level: 500 }));
     await waitAck('level');
@@ -573,7 +575,7 @@ async function driveChecks() {
     s = inbox[inbox.length - 1];
     check('page goes quiet -> coasts to 0 % without waiting for a keyup',
       s.esp.vL === 1.0 && s.esp.vR === 1.0, `${s.esp.vL} V`);
-    check('reason says so', s.reason === 'no keys held', s.reason);
+    check('reason says so', s.reason === 'tuş basılı değil', s.reason);
 
     console.log('\n6. direction through the whole stack (A / D / S)');
     // The dead-man test above stopped the key pump; bring it back.
@@ -592,7 +594,7 @@ async function driveChecks() {
       JSON.stringify(s.dir_want) === '[true,true]', JSON.stringify(s.dir_want));
     check('while settling the output is held at zero',
       s.out[0] === 0 && s.out[1] === 0, `${s.out}`);
-    check('reason tells the user why it paused', /back/i.test(s.reason), s.reason);
+    check('reason tells the user why it paused', /geri/i.test(s.reason), s.reason);
     check('the driver stays enabled through the change', s.esp.en === true);
 
     await sleep(1600);
@@ -669,7 +671,8 @@ async function gearChecks() {
   const port = HTTP_PORT + 2;
   const srv = spawn(process.execPath,
     [path.join(HERE, '..', 'server.js'), '--fake', '--esp', 'sim',
-      '--http', String(port), '--host', '127.0.0.1', '--v-max', '3.3'],
+      '--http', String(port), '--host', '127.0.0.1', '--v-max', '3.3',
+      '--no-camera'],
     { stdio: ['ignore', 'pipe', 'pipe'] });
 
   let log = '';
@@ -739,7 +742,7 @@ async function gearChecks() {
       `${s.esp.vL} / ${s.esp.vR} V`);
     check('the server predicts the same codes it got back',
       JSON.stringify(s.out_dac) === '[124,126]', JSON.stringify(s.out_dac));
-    check('reason names the gear', s.reason === 'gear normal', s.reason);
+    check('reason names the gear', s.reason === 'hız normal', s.reason);
     check('a gear is forward only',
       JSON.stringify(s.dir_want) === '[false,false]', JSON.stringify(s.dir_want));
 
@@ -754,7 +757,7 @@ async function gearChecks() {
       `${s.esp.vL} / ${s.esp.vR} V`);
     check('the two are exclusive — one gear is engaged, never both',
       s.gear === 'fast', `${s.gear}`);
-    check('reason follows', s.reason === 'gear fast', s.reason);
+    check('reason follows', s.reason === 'hız hızlı', s.reason);
 
     // The master level is the one thing on /drive a gear ignores, because a
     // code multiplied by a level is a different code.
@@ -767,7 +770,7 @@ async function gearChecks() {
     await waitAck('level');
     s = await settled();
     check('not even at level 0 — the slider is simply not in this path',
-      s.esp.dacL === 241 && s.reason === 'gear fast',
+      s.esp.dacL === 241 && s.reason === 'hız hızlı',
       `dac ${s.esp.dacL}, reason ${s.reason}`);
     ws.send(JSON.stringify({ cmd: 'level', level: 100 }));
     await waitAck('level');
@@ -781,7 +784,7 @@ async function gearChecks() {
     s = await settled();
     check('a held key drops the gear', s.gear === null, `${s.gear}`);
     check('and the preset is what drives',
-      s.reason === 'key w' && Math.abs(s.esp.vL - esp.pctToVolts(50, 3.3)) < 0.03,
+      s.reason === 'tuş w' && Math.abs(s.esp.vL - esp.pctToVolts(50, 3.3)) < 0.03,
       `${s.reason} ${s.esp.vL} V`);
     clearInterval(keyPump);
 
@@ -828,7 +831,7 @@ async function gearChecks() {
     s = inbox[inbox.length - 1];
     check('the page goes quiet -> the gear coasts to 0 %',
       s.esp.vL === 1.0 && s.esp.vR === 1.0, `${s.esp.vL} V`);
-    check('reason says why', s.reason === 'no gear report', s.reason);
+    check('reason says why', s.reason === 'hız bildirimi yok', s.reason);
     check('the driver stays enabled — a dropped frame is not a relay cycle',
       s.esp.en === true);
     check('and the gear is still selected, waiting to be meant again',
@@ -880,7 +883,8 @@ async function gearChecks() {
   const port2 = HTTP_PORT + 3;
   const srv2 = spawn(process.execPath,
     [path.join(HERE, '..', 'server.js'), '--fake', '--esp', 'sim',
-      '--http', String(port2), '--host', '127.0.0.1', '--v-max', '1.8'],
+      '--http', String(port2), '--host', '127.0.0.1', '--v-max', '1.8',
+      '--no-camera'],
     { stdio: ['ignore', 'pipe', 'pipe'] });
   let log2 = '';
   srv2.stdout.on('data', (d) => { log2 += d.toString(); });
@@ -933,7 +937,8 @@ async function followChecks() {
 
   const srv = spawn(process.execPath,
     [path.join(HERE, '..', 'server.js'), '--fake', '--esp', 'sim',
-      '--http', String(port), '--host', '127.0.0.1', '--v-max', '2.6'],
+      '--http', String(port), '--host', '127.0.0.1', '--v-max', '2.6',
+      '--no-camera'],
     { stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   srv.stdout.on('data', (d) => { log += d.toString(); });
@@ -982,7 +987,7 @@ async function followChecks() {
       JSON.stringify(s.esp.rev) === '[false,false]' && s.dir_settling === false,
       JSON.stringify(s.esp.rev));
     check('status says which page is driving and why',
-      s.follow === true && s.reason.startsWith('follow:'), s.reason);
+      s.follow === true && s.reason.startsWith('takip:'), s.reason);
 
     // The master level belongs to the drive page. On /follow the pilot's own
     // ceiling is the limit, so 100 % means --v-max and nothing silently halves
@@ -1016,7 +1021,7 @@ async function followChecks() {
     s = last();
     check('no frames for 400 ms coasts to 0 %', s.out[0] === 0 && s.out[1] === 0,
       `${s.out}`);
-    check('...and says so', s.reason === 'kadr gəlmir', s.reason);
+    check('...and says so', s.reason === 'kare gelmiyor', s.reason);
     check('...but ENABLE stays up, so a dropped frame costs no relay cycle',
       s.enable === true);
     check('the board really is back at idle',
@@ -1117,22 +1122,16 @@ async function followChecks() {
   }
 }
 
-// ── 6b. the two HC-SR04s ─────────────────────────────────────────────
-// The sensors themselves cannot be tested without hardware; what can be, and
-// what matters, is that a reading gets from the board to the page unmangled and
-// that spinning the servo is not mistaken for driving.
+// ── 6b. the forward HC-SR04 ──────────────────────────────────────────
+// The sensor itself cannot be tested without hardware; what can be, and what
+// matters, is that a reading gets from the board to the page unmangled — and
+// that silence arrives as silence rather than as a zero.
 async function sonarChecks() {
-  console.log('\n6b. sonar: two HC-SR04s and the servo that spins one');
+  console.log('\n6b. sonar: the forward HC-SR04');
   const sim = new Esp32WsSim({ port: 8189, vMax: 3.3 });
   await sim.ready;
   try {
-    // A room: a wall 80 cm ahead, something close on the left, and a window
-    // straight behind that swallows the ping entirely.
-    sim.world = (ang) => {
-      if (ang > 160 && ang < 200) return null;      // no echo comes back
-      if (ang > 250 && ang < 290) return 22;        // the near thing
-      return 80;
-    };
+    sim.world = () => 80;                           // a wall 80 cm ahead
 
     const ws = new WebSocket(sim.url);
     await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });
@@ -1140,60 +1139,27 @@ async function sonarChecks() {
     ws.on('message', (raw) => seen.push(JSON.parse(raw.toString())));
     const last = () => seen[seen.length - 1];
 
-    // Keep the drive watchdog fed so the board stays alive while we scan.
+    // Keep the drive watchdog fed so the board stays alive while we read.
     const pump = setInterval(
       () => ws.send(JSON.stringify({ cmd: 'set', v25: 1.0, v26: 1.0 })), 50);
     await sleep(250);
 
-    let s = last();
-    check('the board reports its sonar pins', s.son && s.son.pin.servo === 13
-      && s.son.pin.trig_f === 14, JSON.stringify(s.son && s.son.pin));
+    const s = last();
+    check('the board reports its sonar pins',
+      s.son && s.son.pin.trig_f === 14 && s.son.pin.echo_f === 32,
+      JSON.stringify(s.son && s.son.pin));
     check('the forward sensor reads without being asked', s.son.fwd_cm === 80,
       `${s.son.fwd_cm} cm`);
-    check('the scan servo is stopped until told otherwise', s.son.spin === 0);
 
-    // ── spinning ──
-    ws.send(JSON.stringify({ cmd: 'scan', spin: 100 }));
-    await sleep(120);
-    check('scan is its own command, not a drive packet', last().son.spin === 100,
-      `${last().son.spin}`);
+    // A soft or angled target sends nothing back, and that must not read as
+    // "wide open" — null is a real answer and it has to survive the wire.
+    sim.world = () => null;
+    await sleep(200);
+    check('no echo comes back as null, not as zero', last().son.fwd_cm === null,
+      `${last().son.fwd_cm}`);
     check('...and it does not disturb the outputs',
       Math.abs(sim.current25 - 1.0) < 0.02 && sim.enableOut === false);
 
-    // Let it go round twice and collect what the page would collect.
-    const grabbed = [];
-    let lastT = -1;
-    for (let i = 0; i < 60; i++) {
-      await sleep(50);
-      const son = last().son;
-      if (son.scan_t !== lastT) { lastT = son.scan_t; grabbed.push(son); }
-    }
-    check('readings arrive stamped with the rotation behind them',
-      grabbed.length > 20 && grabbed.every((g) => Number.isFinite(g.scan_t)),
-      `${grabbed.length} readings`);
-    check('the stamp only ever moves forward',
-      grabbed.every((g, i) => i === 0 || g.scan_t >= grabbed[i - 1].scan_t));
-    check('a direction with no echo comes back as null, not as zero',
-      grabbed.some((g) => g.scan_cm === null),
-      `${grabbed.filter((g) => g.scan_cm === null).length} silent`);
-    check('the near object is seen at all', grabbed.some((g) => g.scan_cm === 22));
-
-    // ── stopping ──
-    ws.send(JSON.stringify({ cmd: 'scan', spin: 0 }));
-    await sleep(120);
-    const frozen = last().son.scan_t;
-    await sleep(300);
-    check('stopping the servo freezes the angle rather than resetting it',
-      last().son.scan_t === frozen && frozen > 0, `${last().son.scan_t}`);
-
-    // Restarting must carry on from where it stopped: zeroing here would rotate
-    // the whole map by however long the pause was.
-    ws.send(JSON.stringify({ cmd: 'scan', spin: 100 }));
-    await sleep(200);
-    check('restarting carries on from the same angle', last().son.scan_t > frozen,
-      `${frozen} → ${last().son.scan_t}`);
-
-    ws.send(JSON.stringify({ cmd: 'scan', spin: 0 }));
     clearInterval(pump);
     ws.close();
   } finally {
@@ -1224,21 +1190,25 @@ async function pinChecks() {
       !('25' in last().pins) && !('26' in last().pins) && !('23' in last().pins),
       Object.keys(last().pins).join(','));
     check('the sonar and relay pins are not either',
-      !['13', '14', '18', '19', '27', '32', '33'].some((p) => p in last().pins));
+      !['14', '18', '19', '32'].some((p) => p in last().pins),
+      Object.keys(last().pins).join(','));
+    check('nor the lift\'s L298N pins — one motor, one driver',
+      !['4', '16', '17'].some((p) => p in last().pins),
+      Object.keys(last().pins).join(','));
     check('they all start at zero',
       Object.values(last().pins).every((v) => v === 0));
 
-    await send({ cmd: 'pin', gpio: 4, val: 200 });
+    await send({ cmd: 'pin', gpio: 5, val: 200 });
     check('a raw value lands on the pin the page asked for',
-      last().pins['4'] === 200, `${last().pins['4']}`);
+      last().pins['5'] === 200, `${last().pins['5']}`);
     check('...and only on that one',
-      Object.entries(last().pins).every(([p, v]) => p === '4' || v === 0));
+      Object.entries(last().pins).every(([p, v]) => p === '5' || v === 0));
 
-    await send({ cmd: 'pin', gpio: 4, val: 999 });
-    check('out of range is clamped, not rejected', last().pins['4'] === 255,
-      `${last().pins['4']}`);
-    await send({ cmd: 'pin', gpio: 4, val: -5 });
-    check('...at both ends', last().pins['4'] === 0, `${last().pins['4']}`);
+    await send({ cmd: 'pin', gpio: 5, val: 999 });
+    check('out of range is clamped, not rejected', last().pins['5'] === 255,
+      `${last().pins['5']}`);
+    await send({ cmd: 'pin', gpio: 5, val: -5 });
+    check('...at both ends', last().pins['5'] === 0, `${last().pins['5']}`);
 
     // The whole safety story: a pin the board did not offer is refused, and
     // refusing is counted as a bad packet rather than quietly ignored.
@@ -1247,23 +1217,24 @@ async function pinChecks() {
     await send({ cmd: 'pin', gpio: 12, val: 255 });     // strapping
     await send({ cmd: 'pin', gpio: 34, val: 255 });     // input only
     await send({ cmd: 'pin', gpio: 25, val: 255 });     // the drive DAC
+    await send({ cmd: 'pin', gpio: 16, val: 255 });     // the lift's IN1
     check('pins that would break something are refused',
-      sim.bad === badBefore + 4, `${sim.bad - badBefore} of 4 rejected`);
+      sim.bad === badBefore + 5, `${sim.bad - badBefore} of 5 rejected`);
     check('...and refusing one changes nothing else',
       Object.values(last().pins).every((v) => v === 0));
 
     // Nothing may be left energised.
     await send({ cmd: 'pin', gpio: 5, val: 180 });
-    await send({ cmd: 'pin', gpio: 16, val: 90 });
+    await send({ cmd: 'pin', gpio: 21, val: 90 });
     check('two pins can be up at once',
-      last().pins['5'] === 180 && last().pins['16'] === 90);
+      last().pins['5'] === 180 && last().pins['21'] === 90);
     await send({ cmd: 'stop' });
     check('STOP clears every spare pin',
       Object.values(last().pins).every((v) => v === 0),
       JSON.stringify(last().pins));
 
-    await send({ cmd: 'pin', gpio: 17, val: 255 });
-    check('a pin is up again before the disconnect', last().pins['17'] === 255);
+    await send({ cmd: 'pin', gpio: 22, val: 255 });
+    check('a pin is up again before the disconnect', last().pins['22'] === 255);
     ws.close();
     await sleep(200);
     check('the last browser leaving clears them too',
@@ -1274,16 +1245,210 @@ async function pinChecks() {
   }
 }
 
-// ── 6c. reachable from the network ───────────────────────────────────
+// ── 6f. the lift, on its L298N ───────────────────────────────────────
+// An actuator is not a wheel. A wheel that is left running coasts and then
+// sits there spinning; an actuator drives into its own end stop and stays
+// there pushing. So the things worth proving are all about stopping: that it
+// stops when the page goes quiet, that it stops before it reverses, and that
+// it stops itself if it has been pushing at something for too long.
+async function liftChecks() {
+  console.log('\n6f. the lift — L298N, both directions');
+  const sim = new Esp32WsSim({ port: 8192, vMax: 3.3 });
+  await sim.ready;
+  try {
+    const ws = new WebSocket(sim.url);
+    await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });
+    const seen = [];
+    ws.on('message', (raw) => seen.push(JSON.parse(raw.toString())));
+    const last = () => seen[seen.length - 1];
+    const drive = async (lift, ms = 160) => {
+      ws.send(JSON.stringify({ cmd: 'set', v25: 1.0, v26: 1.0, en: false, lift }));
+      await sleep(ms);
+    };
+
+    ws.send(JSON.stringify({ cmd: 'ping' }));
+    await sleep(120);
+    check('the board reports which pins the bridge is on',
+      Array.isArray(last().lift_pin) && last().lift_pin.length === 3,
+      JSON.stringify(last().lift_pin));
+    check('it starts stopped', last().lift === 0, `${last().lift}`);
+
+    await drive(200);
+    check('up is a positive value on the bridge', last().lift === 200, `${last().lift}`);
+    await drive(0);
+    check('zero stops it', last().lift === 0, `${last().lift}`);
+
+    await drive(-200);
+    check('down is the same value negated', last().lift === -200, `${last().lift}`);
+
+    // The interlock: a reversal has to pass through zero and wait there, or the
+    // winding's stored energy comes back through the bridge.
+    await drive(200, 150);
+    check('reversing goes through zero first, it does not just flip',
+      last().lift === 0, `${last().lift}`);
+    await drive(200, LIFT_FLIP_MS + 80);
+    check('...and comes up the other way once it has settled',
+      last().lift === 200, `${last().lift}`);
+
+    // Out of range is clamped rather than refused: a page asking for 400 means
+    // "as hard as you can", and dropping the packet would leave it running.
+    await drive(400);
+    check('out of range is clamped, not dropped', last().lift === 255, `${last().lift}`);
+
+    // Silence stops it. This is the one that matters: a closed tab, a crashed
+    // renderer and a dropped wifi link all look exactly like this.
+    await drive(200);
+    await sleep(LINK_TIMEOUT_MS + 120);
+    check('the watchdog stops the lift, not just the wheels',
+      last().lift === 0 && sim.wantLift === 0, `${last().lift}`);
+
+    // A `set` that does not mention the lift means stop, for the same reason
+    // `en` does: a client cannot leave something running by omission.
+    await drive(200);
+    ws.send(JSON.stringify({ cmd: 'set', v25: 1.0, v26: 1.0 }));
+    await sleep(160);
+    check('a packet with no lift field means stop', last().lift === 0, `${last().lift}`);
+
+    // STOP is the button people hit when something is wrong. It has to mean the
+    // actuator as well.
+    await drive(200);
+    ws.send(JSON.stringify({ cmd: 'stop' }));
+    await sleep(160);
+    check('STOP stops the lift too', last().lift === 0, `${last().lift}`);
+
+    ws.close();
+    await sleep(150);
+    check('the last browser leaving stops it', sim.liftOut === 0, `${sim.liftOut}`);
+  } finally {
+    await sim.close();
+  }
+
+  // The run limit, on the state machine directly — eight seconds of real time
+  // is not worth spending in a test suite.
+  {
+    const s2 = new Esp32WsSim({ port: 8193, vMax: 3.3 });
+    s2.wantLift = 220;
+    const t0 = Date.now();
+    s2._updateLift(t0);
+    check('a run starts on the bridge', s2.liftOut === 220, `${s2.liftOut}`);
+    s2._updateLift(t0 + LIFT_MAX_RUN_MS - 10);
+    check('...and stays up until the limit', s2.liftOut === 220, `${s2.liftOut}`);
+    s2._updateLift(t0 + LIFT_MAX_RUN_MS + 1);
+    check('the run limit cuts the bridge — a stalled actuator is a locked rotor',
+      s2.liftOut === 0 && s2.liftCut === true, `${s2.liftOut} cut=${s2.liftCut}`);
+    s2._updateLift(t0 + LIFT_MAX_RUN_MS + 500);
+    check('holding the button down does not restart it',
+      s2.liftOut === 0, `${s2.liftOut}`);
+    s2.wantLift = 0;
+    s2._updateLift(t0 + LIFT_MAX_RUN_MS + 600);
+    check('letting go re-arms it', s2.liftCut === false);
+    s2.wantLift = 220;
+    s2._updateLift(t0 + LIFT_MAX_RUN_MS + 700);
+    check('...and then it runs again', s2.liftOut === 220, `${s2.liftOut}`);
+    await s2.close();
+  }
+}
+
+// ── 6g. the lift, browser to bridge ──────────────────────────────────
+// The firmware's own safety net is tested above. This is the half in front of
+// it: the server has to hold the actuator only while a page keeps asking, and
+// it has to stop it on the controls a person reaches for.
+async function liftServerChecks() {
+  console.log('\n6g. the lift: browser -> server -> bridge');
+  const port = HTTP_PORT + 6;
+  const espPort = 8194;
+  const sim = new Esp32WsSim({ port: espPort, vMax: 3.3 });
+  await sim.ready;
+  const srv = spawn(process.execPath,
+    [path.join(HERE, '..', 'server.js'), '--esp', `127.0.0.1:${espPort}`,
+      '--http', String(port), '--host', '127.0.0.1', '--v-max', '3.3', '--no-camera'],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    await sleep(1500);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/`);
+    await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });
+    let s = null;
+    ws.on('message', (raw) => { const m = JSON.parse(raw.toString());
+                                if (m.type === 'status') s = m; });
+    const send = async (o, ms = 220) => { ws.send(JSON.stringify(o)); await sleep(ms); };
+    // What a page actually does with a button that is down: repeat at 20 Hz.
+    // Sending once and waiting would be testing the dead-man, not the lift.
+    const hold = async (dir, ms) => {
+      const until = Date.now() + ms;
+      while (Date.now() < until) { ws.send(JSON.stringify({ cmd: 'lift', dir })); await sleep(50); }
+    };
+
+    await send({ cmd: 'ping' });
+    check('the status carries the lift', s && s.lift && typeof s.lift.out === 'number',
+      JSON.stringify(s && s.lift));
+    check('it starts stopped', s.lift.dir === 0 && s.lift.out === 0);
+
+    await send({ cmd: 'lift', dir: 1 });
+    check('up asks the bridge for a positive value',
+      s.lift.dir === 1 && s.lift.out > 0, JSON.stringify(s.lift));
+    check('...at the configured percentage, not flat out',
+      s.lift.out === Math.round((s.lift.pct / 100) * 255),
+      `${s.lift.out} for ${s.lift.pct} %`);
+    check('the board is actually doing it', s.lift.at === s.lift.out,
+      `${s.lift.at} vs ${s.lift.out}`);
+
+    await hold(-1, 600);                        // held, and past the flip settle
+    check('down is the same, negated', s.lift.dir === -1 && s.lift.out < 0,
+      JSON.stringify(s.lift));
+    check('...and the bridge got there too', s.lift.at === s.lift.out,
+      `${s.lift.at} vs ${s.lift.out}`);
+
+    // The dead-man. A page that stops repeating has let go of the button —
+    // whether it meant to or not.
+    await sleep(600);
+    check('a page that goes quiet drops the lift',
+      s.lift.dir === -1 && s.lift.out === 0,
+      `dir ${s.lift.dir} out ${s.lift.out}`);
+    check('...and the bridge follows it down', s.lift.at === 0, `${s.lift.at}`);
+
+    // Both of the controls a person hits when something is wrong.
+    await send({ cmd: 'lift', dir: 1 });
+    await send({ cmd: 'stop' });
+    check('STOP releases the lift', s.lift.dir === 0 && s.lift.out === 0,
+      JSON.stringify(s.lift));
+    await send({ cmd: 'lift', dir: 1 });
+    await send({ cmd: 'idle' });
+    check('so does IDLE', s.lift.dir === 0 && s.lift.out === 0, JSON.stringify(s.lift));
+
+    // Anything that is not up or down is stop. There is no third thing an
+    // actuator can be asked to do.
+    await send({ cmd: 'lift', dir: 'up' });
+    check('«up» works as well as +1', s.lift.dir === 1, `${s.lift.dir}`);
+    await hold('down', 500);
+    check('«down» as well as -1', s.lift.dir === -1, `${s.lift.dir}`);
+    await send({ cmd: 'lift', dir: 'sideways' });
+    check('nonsense stops it rather than guessing', s.lift.dir === 0, `${s.lift.dir}`);
+
+    ws.close();
+    await sleep(300);
+    check('the last browser leaving stops the actuator', sim.liftOut === 0,
+      `${sim.liftOut}`);
+  } finally {
+    srv.kill();
+    await sim.close();
+    await sleep(150);
+  }
+}
+
+// ── 6e. reachable from the network ───────────────────────────────────
 // Every other test binds to 127.0.0.1 on purpose, so this is the one place the
 // default is exercised: no --host, which means every interface, which is what
 // lets a phone on the same wifi open the pages at all.
 async function networkChecks() {
-  console.log('\n6c. reachable from other machines');
+  console.log('\n6e. reachable from other machines');
   const port = HTTP_PORT + 3;
   const srv = spawn(process.execPath,
     [path.join(HERE, '..', 'server.js'), '--fake', '--esp', 'sim',
-      '--http', String(port), '--v-max', '2.6'],   // no --host: take the default
+      '--http', String(port), '--v-max', '2.6',    // no --host: take the default
+      // A device that is not there: the banner still has to say where the
+      // stream would be, and a missing webcam must not stop the robot serving
+      // pages. Nothing is opened, so this is still a test and not a camera.
+      '--camera', '/dev/definitely-not-a-camera'],
     { stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
   srv.stdout.on('data', (d) => { log += d.toString(); });
@@ -1299,9 +1464,15 @@ async function networkChecks() {
       log.split('\n').filter((l) => /reachable|interface/.test(l)).join(' | '));
     check('it warns that there is no authentication',
       /no authentication/.test(log));
-    // The reason "it does not work on my phone" is usually not the network.
-    check('it warns that the camera needs https from another device',
-      /https/.test(log) && /camera/.test(log));
+    // The camera used to be the reason for a whole paragraph here: browsers
+    // only hand getUserMedia to localhost or https, so /vision was dead from a
+    // phone. The camera is on the Pi now and is served as MJPEG over plain
+    // http, so what the banner owes the reader is the stream's address.
+    check('it names the camera stream, which needs no https at all',
+      /camera:.*stream\.mjpg/.test(log),
+      (log.match(/camera:.*/) || ['missing'])[0]);
+    check('a camera that is not plugged in does not stop the server',
+      /ESP32 DAC bench/.test(log) && !/fatal/.test(log));
 
     // And it really is serving on the loopback while bound to everything.
     const r = await fetch(`http://127.0.0.1:${port}/`);
@@ -1318,6 +1489,148 @@ async function networkChecks() {
     srv.kill('SIGINT');
     await sleep(400);
     srv.kill('SIGKILL');
+  }
+}
+
+// ── 6c. the 30 cm brake, where it actually lives ─────────────────────
+//
+// The obstacle stop used to be a behaviour of one page. Now it is a property
+// of the server, which means the thing worth testing is not "does the state
+// machine work" — test_sonar does that — but "can any drive path get past it".
+//
+// So this section drives the robot with a typed percentage, which is the path
+// that never had an obstacle check in it, puts a wall in front of the sensor,
+// and asserts the pins go to idle without the browser being told anything and
+// without the browser co-operating.
+//
+// The server is pointed at a simulator we own rather than its own --fake one,
+// because the wall has to be movable from the test.
+async function obstacleGateChecks() {
+  console.log('\n6c. the forward sonar as a brake, enforced by the server');
+  const port = HTTP_PORT + 4;
+  const cfgFile = path.join(HERE, '..', 'follow.json');
+  const hadCfg = fs.existsSync(cfgFile) ? fs.readFileSync(cfgFile, 'utf8') : null;
+
+  const sim = new Esp32WsSim({ port: 8192, vMax: 3.3 });
+  await sim.ready;
+  sim.world = () => 200;                       // wide open to start with
+
+  const srv = spawn(process.execPath,
+    [path.join(HERE, '..', 'server.js'), '--esp', sim.url,
+      '--http', String(port), '--host', '127.0.0.1', '--v-max', '2.6', '--no-camera'],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = '';
+  srv.stdout.on('data', (d) => { log += d.toString(); });
+  srv.stderr.on('data', (d) => { log += d.toString(); });
+
+  try {
+    for (let i = 0; i < 80 && !log.includes('ESP32 DAC bench'); i++) await sleep(100);
+    check('server started against our own simulated board',
+      log.includes('ESP32 DAC bench'));
+    check('it says what it will brake at, on startup',
+      /obstacle: stop under \d+ cm/.test(log),
+      (log.match(/obstacle: stop under.*/) || [''])[0]);
+
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/`);
+    await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });
+    const inbox = [];
+    ws.on('message', (raw) => inbox.push(JSON.parse(raw.toString())));
+    const last = () => inbox[inbox.length - 1];
+    const settle = async (ms = 700) => { inbox.length = 0; await sleep(ms); return last(); };
+
+    // Known thresholds, whatever is in follow.json on this machine.
+    ws.send(JSON.stringify({ cmd: 'follow_cfg',
+      cfg: { obstacle: { stopCm: 30, clearCm: 40, confirm: 3, waitMs: 400 } } }));
+    await sleep(150);
+
+    // ── driving, nothing in the way ──
+    ws.send(JSON.stringify({ cmd: 'set', p25: 60, p26: 60 }));
+    ws.send(JSON.stringify({ cmd: 'start' }));
+    let s = await settle();
+    check('with the way clear, a typed percentage reaches the pins',
+      s.esp.vL > 1.5, `${s.esp.vL} V`);
+    check('the sensor reading is in the status', s.obstacle.cm === 200,
+      `${s.obstacle.cm} cm`);
+    check('...and the phase is "go"', s.obstacle.phase === 'go');
+
+    // ── a wall at 15 cm ──
+    sim.world = () => 15;
+    s = await settle(900);
+    check('the throttle goes to idle with a wall at 15 cm',
+      Math.abs(s.esp.vL - 1.0) < 1e-3 && Math.abs(s.esp.vR - 1.0) < 1e-3,
+      `${s.esp.vL} / ${s.esp.vR} V`);
+    check('the server says why', /engel/.test(s.reason), s.reason);
+    check('it is a brake, not a shutdown: ENABLE stays up', s.esp.en === true);
+    check('the browser was never asked to co-operate — it is still commanding 60',
+      s.set[0] === 60, JSON.stringify(s.set));
+    check('the status marks it as blocking, not merely blocked',
+      s.obstacle.blocking === true && s.obstacle.phase === 'stop');
+    check('the stop is counted', s.obstacle.stops >= 1, `${s.obstacle.stops}`);
+
+    // ── one bad reading is not a wall ──
+    sim.world = () => 200;
+    await sleep(800);                     // clear + the wait window
+    s = await settle();
+    check('it drives again once the way is clear', s.esp.vL > 1.5, `${s.esp.vL} V`);
+    let hits = 0;
+    sim.world = () => (++hits === 1 ? 12 : 200);   // exactly one close reading
+    s = await settle(600);
+    check('a single close reading does not stop it', s.esp.vL > 1.5,
+      `${s.esp.vL} V, phase ${s.obstacle.phase}`);
+
+    // ── backing away from the wall is allowed ──
+    sim.world = () => 15;
+    await sleep(500);
+    check('blocked again', last().obstacle.blocking === true);
+    // 's' is straight back — both relays. The board's interlock holds the
+    // wheels at zero until they move, so what is asserted here is that the
+    // BRAKE is not what is holding them: reversing is how you get away from a
+    // wall, and a robot that cannot back out of a corner is stuck in it.
+    const keys = setInterval(() => ws.send(JSON.stringify({ cmd: 'keys', keys: ['s'] })), 50);
+    await sleep(2200);
+    s = last();
+    clearInterval(keys);
+    check('reversing away from a wall is not braked',
+      s.obstacle.blocking === false && s.obstacle.blocked === true,
+      `blocking=${s.obstacle.blocking} blocked=${s.obstacle.blocked}`);
+    check('...and the wheels actually turn while it reverses', s.esp.vL > 1.3,
+      `${s.esp.vL} V, ${s.reason}`);
+
+    // Back to forward, and confirm the brake comes straight back.
+    ws.send(JSON.stringify({ cmd: 'set', p25: 60, p26: 60 }));
+    await sleep(2200);
+    s = await settle();
+    check('turning back to forward re-arms the brake immediately',
+      Math.abs(s.esp.vL - 1.0) < 1e-3 && s.obstacle.blocking === true,
+      `${s.esp.vL} V`);
+
+    // ── the escape hatch, and that it is visible ──
+    ws.send(JSON.stringify({ cmd: 'follow_cfg', cfg: { obstacle: { guard: false } } }));
+    s = await settle();
+    check('the brake can be switched off for bench work', s.esp.vL > 1.5,
+      `${s.esp.vL} V`);
+    check('...and the status says it is off, so it cannot be off silently',
+      s.obstacle.guard === false && s.obstacle.blocking === false);
+    ws.send(JSON.stringify({ cmd: 'follow_cfg', cfg: { obstacle: { guard: true } } }));
+    s = await settle();
+    check('switching it back on stops the robot again',
+      Math.abs(s.esp.vL - 1.0) < 1e-3, `${s.esp.vL} V`);
+
+    // ── silence is not "clear" ──
+    sim.world = () => null;               // no echo comes back at all
+    s = await settle(900);
+    check('an echo that stops coming back while stopped does not release the brake',
+      s.obstacle.blocking === true && Math.abs(s.esp.vL - 1.0) < 1e-3,
+      `${s.reason}`);
+
+    ws.close();
+  } finally {
+    srv.kill('SIGTERM');
+    await sleep(300);
+    srv.kill('SIGKILL');
+    await sim.close();
+    if (hadCfg === null) { try { fs.unlinkSync(cfgFile); } catch { /* never made */ } }
+    else fs.writeFileSync(cfgFile, hadCfg);
   }
 }
 
@@ -1352,7 +1665,10 @@ await driveChecks();
 await gearChecks();
 await followChecks();
 await sonarChecks();
+await obstacleGateChecks();
 await pinChecks();
+await liftChecks();
+await liftServerChecks();
 await networkChecks();
 summaryChecks();
 console.log('\n' + (pass ? 'ALL CHECKS PASSED' : 'SOME CHECKS FAILED') + '\n');

@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="az">
+<html lang="tr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Robot · boş pinlər</title>
+<title>Robot · boş pinler</title>
 <style>
   :root{
     --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
@@ -76,60 +76,60 @@
 
   <div class="card">
     <div class="row">
-      <h1>Boş pinlər — 0-255 əl ilə</h1>
+      <h1>Boş pinler — 0-255 elle</h1>
       <div class="row" style="gap:7px">
-        <span class="dot" id="dot"></span><span class="muted" id="state">qoşulur</span>
+        <span class="dot" id="dot"></span><span class="muted" id="state">bağlanıyor</span>
       </div>
     </div>
     <div class="row" style="margin-top:10px">
-      <span class="muted"><a href="/">&larr; ana səhifə</a></span>
+      <span class="muted"><a href="/">&larr; ana sayfa</a></span>
       <span class="muted"><a href="/manual">manual &rarr;</a></span>
     </div>
   </div>
 
   <div class="card warnbox">
-    <div class="lbl" style="color:var(--warn)">Əvvəlcə bunu oxu</div>
-    <p class="muted" style="margin:8px 0 0">Bu ESP32-də <b>yalnız iki analog
-    çıxış var</b>: GPIO25 və GPIO26. Onlar əsl DAC-dır və əsl gərginlik verir —
-    və robotun sürücü xəttinə aiddir, ona görə burada yoxdurlar
-    (<a href="/manual">manual səhifəsi</a> onlar üçündür).</p>
-    <p class="muted" style="margin:8px 0 0">Aşağıdakıların hamısı <b>PWM</b>-dir:
-    5 kHz-lik kvadrat dalğa, verdiyin rəqəm isə doldurma nisbətidir. Multimetr
-    ortalamanı göstərir və gərginliyə oxşayır; ossiloskop həqiqəti göstərir. LED,
-    motor drayveri, zumzer üçün əladır — təmiz analog giriş gözləyən kontroller
-    isə aldanmayacaq.</p>
-    <p class="muted" style="margin:8px 0 0">Siyahıda olmayanlara toxunulmur:
-    <code>0, 12</code> — açılış (strapping) pinləri, <code>1, 3</code> — konsol,
-    <code>6-11</code> — flash yaddaş (yazsan lövhə açılmaz),
-    <code>34-39</code> — yalnız giriş, çıxış sürücüsü yoxdur.</p>
+    <div class="lbl" style="color:var(--warn)">Önce bunu oku</div>
+    <p class="muted" style="margin:8px 0 0">Bu ESP32de <b>yalnızca iki analog
+    çıkış var</b>: GPIO25 ve GPIO26. Onlar gerçek DACtır ve gerçek gerilim verir —
+    ve robotun sürüş hattına aittir, bu yüzden burada yoklar
+    (<a href="/manual">manual sayfası</a> onlar için).</p>
+    <p class="muted" style="margin:8px 0 0">Aşağıdakilerin hepsi <b>PWM</b>:
+    5 kHzlik kare dalga, verdiğin sayı ise doluluk oranıdır. Multimetre
+    ortalamayı gösterir ve gerilime benzer; osiloskop gerçeği gösterir. LED,
+    motor sürücüsü, buzzer için harikadır — temiz analog giriş bekleyen bir
+    kontrolcü ise kanmayacak.</p>
+    <p class="muted" style="margin:8px 0 0">Listede olmayanlara dokunulmuyor:
+    <code>0, 12</code> — açılış (strapping) pinleri, <code>1, 3</code> — konsol,
+    <code>6-11</code> — flash bellek (yazarsan kart açılmaz),
+    <code>34-39</code> — yalnızca giriş, çıkış sürücüsü yok.</p>
   </div>
 
   <div class="card">
     <div class="row">
-      <span class="lbl" style="margin:0">Pinlər</span>
+      <span class="lbl" style="margin:0">Pinler</span>
       <span class="muted" id="count">–</span>
     </div>
     <div id="list" style="margin-top:10px"></div>
     <div class="btnrow">
       <button id="allOff">HAMISINI SIFIRLA</button>
     </div>
-    <p class="muted" style="margin:10px 0 0">Qoyduğun rəqəm yerində qalır —
-    ölçməyə gedərkən düşməsin deyə burada ölü adam yoxdur. Lövhə onları
-    <b>STOP-da, idle-da və son brauzer bağlananda</b> sıfırlayır.</p>
+    <p class="muted" style="margin:10px 0 0">Verdiğin sayı yerinde kalır —
+    ölçmeye giderken düşmesin diye burada ölü adam yok. Kart onları
+    <b>STOPta, idlede ve son tarayıcı kapanınca</b> sıfırlar.</p>
   </div>
 
   <div class="card">
-    <div class="row"><span class="lbl" style="margin:0">Qeydlərin</span>
-      <span class="muted">nə qoşdun, nə oldu</span></div>
-    <p class="muted" style="margin:8px 0 10px">Hər pinin yanındakı xanaya
-    yazdıqların brauzerdə yox, <code>follow.json</code>-da saxlanılır — səhifəni
-    bağlasan da qalır. Aşağıdakı cədvəl indiki vəziyyətdir; düymə ilə CSV kimi
-    çıxarıb dəftərinə köçürə bilərsən.</p>
+    <div class="row"><span class="lbl" style="margin:0">Notların</span>
+      <span class="muted">ne bağladın, ne oldu</span></div>
+    <p class="muted" style="margin:8px 0 10px">Her pinin yanındaki kutuya
+    yazdıkların tarayıcıda değil, <code>follow.json</code>ta saklanır — sayfayı
+    kapatsan da kalır. Aşağıdaki tablo şu anki durumdur; düğmeyle CSV olarak
+    dışa aktarıp defterine geçirebilirsin.</p>
     <table><thead><tr>
-      <th>GPIO</th><th>növ</th><th>dəyər</th><th>%</th><th>orta V</th><th>qeyd</th>
+      <th>GPIO</th><th>tür</th><th>değer</th><th>%</th><th>orta V</th><th>not</th>
     </tr></thead><tbody id="tbl"></tbody></table>
     <div class="btnrow">
-      <button id="csv">CSV kimi endir</button>
+      <button id="csv">CSV olarak indir</button>
       <button id="copy">Panoya kopyala</button>
     </div>
   </div>
@@ -185,13 +185,13 @@ function avgVolts(v) {
 
 function build(reported) {
   pins = Object.keys(reported).map(Number).sort((a, b) => a - b);
-  $('count').textContent = `${pins.length} pin · hamısı PWM`;
+  $('count').textContent = `${pins.length} pin · hepsi PWM`;
   $('list').innerHTML = pins.map((g) => `
     <div class="pin" id="p${g}">
       <div class="head">
         <span class="gp">GPIO${g}</span>
         <span class="tag">PWM 5 kHz</span>
-        ${STRAPPING.has(g) ? '<span class="tag warn">açılışda sərbəst qalmalıdır</span>' : ''}
+        ${STRAPPING.has(g) ? '<span class="tag warn">açılışta serbest kalmalı</span>' : ''}
         <span class="val" id="v${g}">0</span>
       </div>
       <div class="ctl">
@@ -199,7 +199,7 @@ function build(reported) {
         <input type="number" id="n${g}" min="0" max="255" step="1" value="0">
       </div>
       <div class="foot">
-        <input type="text" id="t${g}" placeholder="qeyd: nə qoşulub, nə oldu">
+        <input type="text" id="t${g}" placeholder="not: ne bağlı, ne oldu">
         <span class="quick">
           <button data-g="${g}" data-v="0">0</button>
           <button data-g="${g}" data-v="64">64</button>
@@ -236,10 +236,10 @@ function paint(reported) {
   const ok = status && status.esp_fresh && !status.serial_error;
   const any = pins.some((g) => (vals[g] || 0) > 0);
   $('dot').className = 'dot ' + (any ? 'go' : ok ? 'ok' : 'bad');
-  $('state').textContent = !status ? 'qoşulur'
-    : status.serial_error ? 'serial xətası'
-    : !ok ? 'ESP32 əlçatmaz'
-    : any ? 'pin(lər) qaldırılıb' : 'hamısı sıfır';
+  $('state').textContent = !status ? 'bağlanıyor'
+    : status.serial_error ? 'seri port hatası'
+    : !ok ? 'ESP32 erişilemiyor'
+    : any ? 'pin yükseltildi' : 'hepsi sıfır';
 
   for (const g of pins) {
     // What the BOARD says, not what we asked for — if a value did not land,
@@ -289,7 +289,7 @@ $('copy').addEventListener('click', async () => {
     $('copy').textContent = 'kopyalandı';
     setTimeout(() => { $('copy').textContent = 'Panoya kopyala'; }, 1500);
   } catch {
-    $('copy').textContent = 'kopyalanmadı — CSV endir';
+    $('copy').textContent = 'kopyalanamadı — CSV indir';
   }
 });
 

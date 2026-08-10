@@ -118,82 +118,82 @@ function wheelsSteps(w) {
     {
       id: 'dac',
       n: 1,
-      title: 'İki pinin gərginliyini tutuşdur',
+      title: 'İki pinin gerilimini eşitle',
       where: '/pins',
       done: null,          // only you can see a multimeter — see `manual`
       manual: true,
-      what: 'GPIO25 və GPIO26-ya 255 ver, hər ikisini multimetrlə ölç.',
-      then: 'Fərq 0.05 V-dan çoxdursa, ws_dac.ino-da DAC25_AT_255 və '
-          + 'DAC26_AT_255 sabitlərinə öz ölçdüyün rəqəmləri yaz və yenidən yüklə.',
-      why: 'Bu addım pinləri bərabərləşdirir — təkərləri yox. Atlaya bilərsən; '
-         + 'düz getmək üçün 3-cü addım kifayətdir.',
+      what: 'GPIO25 ve GPIO26ya 255 ver, ikisini de multimetreyle ölç.',
+      then: 'Fark 0.05 Vtan fazlaysa, ws_dac.inodaki DAC25_AT_255 ve '
+          + 'DAC26_AT_255 sabitlerine kendi ölçtüğün sayıları yaz ve yeniden yükle.',
+      why: 'Bu adım pinleri eşitler — tekerleri değil. Atlayabilirsin; '
+         + 'düz gitmek için 3. adım yeterli.',
     },
     {
       id: 'stall25',
       n: 2,
-      title: 'GPIO25 — təkər neçə faizdə dönməyə başlayır',
+      title: 'GPIO25 — teker yüzde kaçta dönmeye başlıyor',
       where: '/manual',
       done: t.stall25 !== null,
       value: t.stall25,
       unit: '%',
-      what: 'Robotu qaldır. Yalnız GPIO25-ə faiz ver, 0-dan bir-bir qaldır.',
-      then: 'Təkərin ilk döndüyü rəqəmi yaz.',
-      why: 'Bundan aşağısı «yavaş» deyil, «dayanmış»dır. Loglarda bir sürüşdə '
-         + 'əmrlərin 91 %-i bu ölü zonada idi — hərəkət əmri verilir, təkər dönmür.',
+      what: 'Robotu kaldır. Yalnız GPIO25e yüzde ver, 0dan birer birer yükselt.',
+      then: 'Tekerin ilk döndüğü sayıyı yaz.',
+      why: 'Bunun altı «yavaş» değil, «durmuş»tur. Loglarda bir sürüşte '
+         + 'komutların 91 %-i bu ölü bölgedeydi — hareket komutu verilir, teker dönmez.',
     },
     {
       id: 'stall26',
       n: 3,
-      title: 'GPIO26 — təkər neçə faizdə dönməyə başlayır',
+      title: 'GPIO26 — teker yüzde kaçta dönmeye başlıyor',
       where: '/manual',
       done: t.stall26 !== null,
       value: t.stall26,
       unit: '%',
-      what: 'Eyni şey, bu dəfə yalnız GPIO26.',
-      then: 'İkinci rəqəmi yaz. İki motorda 2–5 % fərq normaldır.',
-      why: 'İki motor heç vaxt eyni motor deyil. Ortaq bir rəqəm hər ikisi üçün '
-         + 'səhv olur — biri hələ dayanır, digəri artıq sürətlənir.',
+      what: 'Aynı şey, bu kez yalnız GPIO26.',
+      then: 'İkinci sayıyı yaz. İki motorda 2–5 % fark normaldir.',
+      why: 'İki motor hiçbir zaman aynı motor değildir. Ortak bir sayı ikisi için de '
+         + 'yanlış olur — biri hâlâ duruyor, öteki çoktan hızlanıyor.',
     },
     {
       id: 'gain',
       n: 4,
-      title: 'Düz getmə — güc düzəlişi',
+      title: 'Düz gitme — güç düzeltmesi',
       where: '/manual',
       done: both ? trimmed : null,
       value: `${t.gain25.toFixed(2)} / ${t.gain26.toFixed(2)}`,
       blocked: !both,
-      what: 'Robotu yerə qoy, hər iki pinə eyni faiz (40) ver, burax.',
-      then: 'Əyildiyi tərəfin ƏKS təkəri sürətlidir. Həmin təkərin gücünü '
-          + '1.00-dan 0.95-ə, sonra 0.90-a endir — düz gedənə qədər.',
-      why: 'Yavaş təkəri qaldırma, sürətlini azalt: yuxarı qalxsa tavana '
-         + 'dirənir və döngədə düzəliş üçün yer qalmır.',
+      what: 'Robotu yere koy, iki pine de aynı yüzdeyi (40) ver, bırak.',
+      then: 'Saptığı tarafın TERS tekeri hızlıdır. O tekerin gücünü '
+          + '1.00dan 0.95e, sonra 0.90a indir — düz gidene kadar.',
+      why: 'Yavaş tekeri yükseltme, hızlıyı azalt: yukarı çıkarsa tavana '
+         + 'dayanır ve virajda düzeltmeye yer kalmaz.',
     },
     {
       id: 'metres',
       n: 5,
-      title: 'Məsafə kalibrasiyası',
+      title: 'Mesafe kalibrasyonu',
       where: '/follow',
       done: null,
       manual: true,
-      what: 'Məlum faizdə (məsələn 40) məlum məsafəni (2 m) sür, saniyəni tut.',
-      then: '/follow → Kalibrasiya kartına faiz, metr və saniyəni yaz.',
-      why: 'Bu olmadan loglar sürəti faizlə yazır, metrlə yox — «bu dövrə 11 m '
-         + 'idi» deyə bilmirsən.',
+      what: 'Bilinen bir yüzdede (örneğin 40) bilinen bir mesafeyi (2 m) sür, saniyeyi tut.',
+      then: '/follow → Kalibrasyon kartına yüzdeyi, metreyi ve saniyeyi yaz.',
+      why: 'Bu olmadan loglar hızı yüzdeyle yazar, metreyle değil — «bu tur 11 m '
+         + 'idi» diyemezsin.',
     },
     {
       id: 'closed',
       n: 6,
-      title: 'Qapalı dövrə — sürət voltajdan asılı olmasın',
+      title: 'Kapalı çevrim — hız gerilime bağlı olmasın',
       where: '/setup',
       done: null,
       manual: true,
       blocked: !both,
-      what: 'Motorun hall sensor naqillərini ESP32-yə bağla, sonra hər təkəri '
-          + '100 %-də sür və impuls tezliyini (Hz) yaz.',
-      then: 'Bundan sonra sistem voltajı özü qaldırıb-endirir; batareya '
-          + 'boşalsa da sürət eyni qalır.',
-      why: 'Yuxarıdakı bütün düzəlişlər BU GÜNÜN batareyasına və BU döşəməyə '
-         + 'aiddir. Yalnız ölçmə onları həmişəlik edir.',
+      what: 'Motorun hall sensör kablolarını ESP32ye bağla, sonra her tekeri '
+          + '100 %-de sür ve darbe frekansını (Hz) yaz.',
+      then: 'Bundan sonra sistem gerilimi kendi yükseltip indirir; batarya '
+          + 'boşalsa da hız aynı kalır.',
+      why: 'Yukarıdaki bütün düzeltmeler BUGÜNÜN bataryasına ve BU zemine '
+         + 'aittir. Yalnızca ölçüm onları kalıcı yapar.',
     },
   ];
 }
@@ -203,8 +203,8 @@ function wheelsSummary(w) {
   const t = wheelsOf(w);
   const s = (v) => (v === null ? `${t.stall} %*` : `${v} %`);
   return [
-    `GPIO25 · hədd ${s(t.stall25)} · güc ${t.gain25.toFixed(2)}`,
-    `GPIO26 · hədd ${s(t.stall26)} · güc ${t.gain26.toFixed(2)}`,
+    `GPIO25 · eşik ${s(t.stall25)} · güç ${t.gain25.toFixed(2)}`,
+    `GPIO26 · eşik ${s(t.stall26)} · güç ${t.gain26.toFixed(2)}`,
   ];
 }
 
@@ -216,87 +216,87 @@ function wheelsSummary(w) {
  * it is "am I the person who should be moving this right now".
  */
 const INFO = {
-  stall: ['Dönmə həddi (ümumi)',
-    'Təkərin dönməyə başladığı faiz. Bundan aşağısı yavaş deyil, dayanmışdır.',
-    'Ölç: /manual-da faizi 0-dan bir-bir qaldır, ilk dönən anı yaz.',
-    'Per-pin həddlər qoyulubsa bu işlənmir.'],
-  stall25: ['GPIO25 — dönmə həddi',
-    'Yalnız bu pinin öz həddi. 0 = ümumi həddi işlət.',
-    'Ölç: /manual-da yalnız GPIO25-ə faiz ver.',
-    'İki motorda 2–5 % fərq normaldır — düzəldilməsə yavaş sürətdə robot əyilir.'],
-  stall26: ['GPIO26 — dönmə həddi',
-    'Yalnız bu pinin öz həddi. 0 = ümumi həddi işlət.',
-    'Ölç: /manual-da yalnız GPIO26-ya faiz ver.',
-    'İki motorda 2–5 % fərq normaldır.'],
-  gain25: ['GPIO25 — güc düzəlişi',
-    'Bu təkərə gedən tələbi vurur. 1.00 = toxunma.',
-    'Ölç: hər iki pinə eyni faiz ver, əyildiyi tərəfin əks təkərini azalt.',
-    'Ən axırda işlət — əvvəlcə həddləri düzəlt. Sürətlini azalt, yavaşı qaldırma.'],
-  gain26: ['GPIO26 — güc düzəlişi',
-    'Bu təkərə gedən tələbi vurur. 1.00 = toxunma.',
-    'Ölç: hər iki pinə eyni faiz ver, əyildiyi tərəfin əks təkərini azalt.',
-    'Ən axırda işlət. Sürətlini azalt, yavaşı qaldırma.'],
-  swap: ['Tərəfləri dəyiş',
-    'GPIO26 sol təkəri sürürsə işə sal.',
-    'Yoxla: /drive-da A bas — robot sola dönməlidir.',
-    'Robot döngəni tərsinə alırsa səbəb budur, kP deyil.'],
-  base:  ['Baza sürəti',
-    'Düz yolda gedilən tələb. Hər şey bundan kəsilir.',
-    'Ölü zonanın üstündə olmalıdır — yanındakı volt rəqəminə bax.',
-    'Robot ləng dönürsə əvvəlcə bunu azalt, kP-ni qaldırma.'],
-  kP: ['Sükan gücü',
-    'Xətadan sükana çevirmə əmsalı.',
-    'Qaldır: robot döngəni gec alırsa. Endir: düz yolda yırğalanırsa.',
-    'Yırğalanma varsa əvvəlcə kD-ni qaldır, sonra kP-ni endir.'],
-  kD: ['Qabağa baxış (saniyə)',
-    'Xətanın neçə saniyə sonrakı yerinə görə sürmək.',
-    'Yırğalanmanı söndürür.',
-    'Çox qaldırsan hərəkət cırıq-cırıq olur — kamera səs-küyü böyüdülür.'],
-  curve: ['Döngədə yavaşlama',
-    'Döngə nə qədər kəskindirsə sürət o qədər kəsilir.',
-    '1.00 = tam döngədə tam dayanma.',
-    'Robot döngədə yoldan çıxırsa bunu qaldır — kP-ni yox.'],
-  hard: ['Xilasetmə həddi',
-    'Bu xətadan sonra irəli getmək vəziyyəti pisləşdirir.',
-    'Robot yerində fırlanıb yola çevrilir.',
-    'Çox tez-tez işə düşürsə base-i azalt.'],
-  gear: ['İki sabit sürət',
-    'NORMAL və SÜRƏT — eyni anda yalnız biri. Seçilən sürət pinlərə birbaşa '
-    + 'öz DAC rəqəmini verir.',
-    'İşlət: ARM, sonra sürəti seç. W/A/S/D basmaq sürəti söndürür — əl həmişə '
+  stall: ['Dönme eşiği (genel)',
+    'Tekerin dönmeye başladığı yüzde. Bunun altı yavaş değil, durmuş demektir.',
+    'Ölç: /manualda yüzdeyi 0dan birer birer yükselt, ilk döndüğü anı yaz.',
+    'Pin başına eşikler girilmişse bu kullanılmaz.'],
+  stall25: ['GPIO25 — dönme eşiği',
+    'Yalnız bu pinin kendi eşiği. 0 = genel eşiği kullan.',
+    'Ölç: /manualda yalnız GPIO25e yüzde ver.',
+    'İki motorda 2–5 % fark normaldir — düzeltilmezse düşük hızda robot sapar.'],
+  stall26: ['GPIO26 — dönme eşiği',
+    'Yalnız bu pinin kendi eşiği. 0 = genel eşiği kullan.',
+    'Ölç: /manualda yalnız GPIO26ya yüzde ver.',
+    'İki motorda 2–5 % fark normaldir.'],
+  gain25: ['GPIO25 — güç düzeltmesi',
+    'Bu tekere giden talebi çarpar. 1.00 = dokunma.',
+    'Ölç: iki pine de aynı yüzdeyi ver, saptığı tarafın ters tekerini azalt.',
+    'En son kullan — önce eşikleri düzelt. Hızlıyı azalt, yavaşı yükseltme.'],
+  gain26: ['GPIO26 — güç düzeltmesi',
+    'Bu tekere giden talebi çarpar. 1.00 = dokunma.',
+    'Ölç: iki pine de aynı yüzdeyi ver, saptığı tarafın ters tekerini azalt.',
+    'En son kullan. Hızlıyı azalt, yavaşı yükseltme.'],
+  swap: ['Tarafları değiştir',
+    'GPIO26 sol tekeri sürüyorsa devreye al.',
+    'Dene: /drivede Aya bas — robot sola dönmeli.',
+    'Robot virajı ters alıyorsa sebebi budur, kP değil.'],
+  base:  ['Taban hız',
+    'Düz yolda giden talep. Her şey bundan kesilir.',
+    'Ölü bölgenin üstünde olmalı — yanındaki volt değerine bak.',
+    'Robot ağır dönüyorsa önce bunu azalt, kPyi yükseltme.'],
+  kP: ['Direksiyon gücü',
+    'Hatadan direksiyona çevirme katsayısı.',
+    'Yükselt: robot virajı geç alıyorsa. İndir: düz yolda salınıyorsa.',
+    'Salınım varsa önce kDyi yükselt, sonra kPyi indir.'],
+  kD: ['İleri bakış (saniye)',
+    'Hatanın kaç saniye sonraki yerine göre sürmek.',
+    'Salınımı söndürür.',
+    'Çok yükseltirsen hareket kesik kesik olur — kamera gürültüsü büyütülür.'],
+  curve: ['Virajda yavaşlama',
+    'Viraj ne kadar keskinse hız o kadar kesilir.',
+    '1.00 = tam virajda tam durma.',
+    'Robot virajda yoldan çıkıyorsa bunu yükselt — kPyi değil.'],
+  hard: ['Kurtarma eşiği',
+    'Bu hatadan sonra ileri gitmek durumu kötüleştirir.',
+    'Robot yerinde dönüp yola yönelir.',
+    'Çok sık devreye giriyorsa basei azalt.'],
+  gear: ['İki sabit hız',
+    'NORMAL ve HIZLI — aynı anda yalnız biri. Seçilen hız pinlere doğrudan '
+    + 'kendi DAC sayısını verir.',
+    'Kullan: ARM, sonra hızı seç. W/A/S/D basmak hızı kapatır — el her zaman '
     + 'üstündür.',
-    'Xam çıxış: dönmə həddi, güc düzəlişi və master level buna TƏTBİQ OLUNMUR '
-    + '— yazdığın rəqəm pinə gedən rəqəmdir.'],
-  gearDac: ['Sürətin DAC rəqəmi',
-    'Pinin aldığı 0-255 rəqəmi: dac = V / 3.3 × 255. 124 ≈ 1.60 V, 241 ≈ 3.12 V.',
-    'Ölç: /manual-da faizi qaldır, təkərin getdiyi sürəti bəyənəndə yanındakı '
-    + 'DAC rəqəmini bura yaz.',
-    '77-dən aşağısı boş yerədir — 1.00 V idle-dır, ondan aşağı heç vaxt '
-    + 'çıxmır. İki pinin rəqəmi 2-3 fərqlənə bilər: motorlar eyni deyil.'],
-  vmax: ['100 % nə deməkdir',
-    'Serverin --v-max dəyəri. 100 % = bu gərginlik.',
-    'ESP32 üçün 3.3 V.',
-    'Bütün faizlər bu tavana görədir.'],
-  closed: ['Qapalı dövrə',
-    'Təkərin real sürətini ölçüb voltajı ona görə düzəldir.',
-    'Motorun hall sensoru lazımdır.',
-    'İşə salınıbsa gain düzəlişləri artıq kritik deyil — dövrə özü tutur.'],
-  dac: ['İki DAC kanalını tutuşdurmaq',
-    'ESP32-nin GPIO25 və GPIO26 kanalları eyni koda bir qədər fərqli gərginlik verir.',
-    'Ölç: hər ikisinə 255 ver, multimetrlə oxu, ws_dac.ino-daki sabitlərə yaz.',
-    'Bu pinləri bərabərləşdirir, təkərləri yox — düz getmək üçün güc düzəlişi lazımdır.'],
-  metres: ['Məsafə kalibrasiyası',
-    'Faizdən metrə çevirmə sabiti. Bu robotda enkoder yoxdur, ona görə əl ilə ölçülür.',
-    'Ölç: məlum faizdə məlum məsafəni sür, saniyəni tut.',
-    'Yalnız loglar üçündür — naviqasiya üçün deyil.'],
-  raw: ['Bu səhifə xam faiz göndərir',
-    'Aşağıdakı ayarlar burada TƏTBİQ OLUNMUR — nə yazsan, pinə o gedir.',
-    'Bilərəkdən belədir: dönmə həddi məhz burada ölçülür.',
-    'Ayarların tətbiq olunduğu yer /follow-dur.'],
-  hzFull: ['Tam sürətdə tezlik',
-    '100 % tələbdə bu təkərin verdiyi impuls/saniyə.',
-    'Ölç: təkəri 100 %-də sür, Hz oxunuşunu yaz.',
-    'Bu ölçülməyibsə qapalı dövrə işə düşmür — sistem açıq dövrədə qalır.'],
+    'Ham çıkış: dönme eşiği, güç düzeltmesi ve master level buna UYGULANMAZ '
+    + '— yazdığın sayı pine giden sayıdır.'],
+  gearDac: ['Hızın DAC sayısı',
+    'Pinin aldığı 0-255 sayısı: dac = V / 3.3 × 255. 124 ≈ 1.60 V, 241 ≈ 3.12 V.',
+    'Ölç: /manualda yüzdeyi yükselt, tekerin gittiği hızı beğendiğinde yanındaki '
+    + 'DAC sayısını buraya yaz.',
+    '77nin altı boşa gider — 1.00 V idledır, onun altına hiçbir zaman '
+    + 'inmez. İki pinin sayısı 2-3 farklı olabilir: motorlar aynı değil.'],
+  vmax: ['100 % ne demek',
+    'Sunucunun --v-max değeri. 100 % = bu gerilim.',
+    'ESP32 için 3.3 V.',
+    'Bütün yüzdeler bu tavana göredir.'],
+  closed: ['Kapalı çevrim',
+    'Tekerin gerçek hızını ölçüp gerilimi ona göre düzeltir.',
+    'Motorun hall sensörü gerekir.',
+    'Devredeyse gain düzeltmeleri artık kritik değil — çevrim kendi tutar.'],
+  dac: ['İki DAC kanalını eşitlemek',
+    'ESP32nin GPIO25 ve GPIO26 kanalları aynı koda biraz farklı gerilim verir.',
+    'Ölç: ikisine de 255 ver, multimetreyle oku, ws_dac.inodaki sabitlere yaz.',
+    'Bu pinleri eşitler, tekerleri değil — düz gitmek için güç düzeltmesi gerekir.'],
+  metres: ['Mesafe kalibrasyonu',
+    'Yüzdeden metreye çevirme sabiti. Bu robotta enkoder yok, bu yüzden elle ölçülür.',
+    'Ölç: bilinen bir yüzdede bilinen bir mesafeyi sür, saniyeyi tut.',
+    'Yalnızca loglar için — navigasyon için değil.'],
+  raw: ['Bu sayfa ham yüzde gönderir',
+    'Aşağıdaki ayarlar burada UYGULANMAZ — ne yazarsan pine o gider.',
+    'Bilerek böyle: dönme eşiği tam burada ölçülür.',
+    'Ayarların uygulandığı yer /followdur.'],
+  hzFull: ['Tam hızda frekans',
+    '100 % talepte bu tekerin verdiği darbe/saniye.',
+    'Ölç: tekeri 100 %-de sür, Hz okumasını yaz.',
+    'Bu ölçülmemişse kapalı çevrim devreye girmez — sistem açık çevrimde kalır.'],
 };
 
 // ── page furniture ────────────────────────────────────────────────────
@@ -447,8 +447,8 @@ function wheelsMount(opts = {}) {
     bar.innerHTML = '';
     const tag = document.createElement('span');
     tag.className = 'wtag';
-    tag.textContent = !measured ? 'ölçülməyib'
-      : opts.mode === 'raw' ? 'xam çıxış' : 'təkər ayarı';
+    tag.textContent = !measured ? 'ölçülmedi'
+      : opts.mode === 'raw' ? 'ham çıkış' : 'teker ayarı';
     const l1 = document.createElement('span'); l1.innerHTML = `<b>${a}</b>`;
     const l2 = document.createElement('span'); l2.innerHTML = `<b>${b}</b>`;
     const gap = document.createElement('span'); gap.className = 'wsep';

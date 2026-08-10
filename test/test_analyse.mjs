@@ -54,9 +54,9 @@ console.log('\nSakit dövrə: heç nə pis deyil, sürət ehtiyatı var');
 {
   const r = analyse(run(400, (i) => ({ err: 0.05 * Math.sin(i / 40), speed: 30 })));
   ok(r.ok, 'oxundu');
-  ok(has(r, 'Sürət ehtiyatı var'), 'sürəti qaldırmağı təklif edir');
+  ok(has(r, 'Hız payı var'), 'sürəti qaldırmağı təklif edir');
   ok(r.suggest.base > 34, `yeni base ${r.suggest.base} > 34`);
-  ok(!has(r, 'Düz yolda yırğalanır'), 'yırğalanma iddiası yoxdur');
+  ok(!has(r, 'Düz yolda salınıyor'), 'yırğalanma iddiası yoxdur');
   ok(r.suggest.kP === undefined, 'kP-yə toxunmur — səbəb yoxdur');
 }
 
@@ -64,7 +64,7 @@ console.log('\nYırğalanma → kP azalır');
 {
   // Crossing the centre every ~3 frames: a controller fighting itself.
   const r = analyse(run(400, (i) => ({ err: 0.3 * Math.sin(i / 1.2), steer: 0.3 })));
-  ok(has(r, 'Düz yolda yırğalanır'), 'yırğalanmanı tutur');
+  ok(has(r, 'Düz yolda salınıyor'), 'yırğalanmanı tutur');
   ok(r.metrics.wobble > 1.5, `saniyədə ${r.metrics.wobble} kəsişmə`);
   ok(r.suggest.kP < 0.85, `kP ${r.suggest.kP} < 0.85`);
   ok(r.suggest.base === undefined, 'eyni anda «sürəti qaldır» demir');
@@ -73,7 +73,7 @@ console.log('\nYırğalanma → kP azalır');
 console.log('\nAğır, gec düzəliş → kP artır');
 {
   const r = analyse(run(400, () => ({ err: 0.35, far: 0.05, steer: 0.3 })));
-  ok(has(r, 'Yavaş düzəlir'), 'daimi sapmanı tutur');
+  ok(has(r, 'Yavaş düzeliyor'), 'daimi sapmanı tutur');
   ok(r.suggest.kP > 0.85, `kP ${r.suggest.kP} > 0.85`);
 }
 
@@ -81,7 +81,7 @@ console.log('\nSükan dirənirsə döngədə daha çox yavaşla');
 {
   const r = analyse(run(400, (i) => ({
     err: i % 2 ? 0.8 : 0.75, far: 0.8, steer: 1, speed: 40 })));
-  ok(has(r, 'Sükan dayanacağa dirənir'), 'doymanı tutur');
+  ok(has(r, 'Direksiyon dayanağa dayanıyor'), 'doymanı tutur');
   ok(r.suggest.curve > 0.75, `curve ${r.suggest.curve} > 0.75`);
 }
 
@@ -91,17 +91,17 @@ console.log('\nYol itirsə sürəti azalt');
     const lost = (i % 100) > 92;                 // six short dropouts
     return { err: lost ? 0 : 0.1, lost, speed: lost ? 10 : 40 };
   }));
-  ok(has(r, 'Yolu itirir'), 'itkiləri tutur');
+  ok(has(r, 'Yolu kaybediyor'), 'itkiləri tutur');
   ok(r.metrics.lost_events === 6, `${r.metrics.lost_events} ayrı itki`);
   ok(r.suggest.base < 34, `base ${r.suggest.base} < 34`);
-  ok(!has(r, 'Sürət ehtiyatı var'), 'yol itirən dövrədə «sürəti qaldır» demir');
+  ok(!has(r, 'Hız payı var'), 'yol itirən dövrədə «sürəti qaldır» demir');
 }
 
 console.log('\nDöngəyə gec girmək → kD artır');
 {
   // The road ahead has swung out but the near end has been let go with it.
   const r = analyse(run(400, () => ({ err: 0.6, far: 0.7, steer: 0.5, speed: 25 })));
-  ok(has(r, 'Döngəyə gec reaksiya'), 'gecikməni tutur');
+  ok(has(r, 'Viraja geç tepki'), 'gecikməni tutur');
   ok(r.suggest.kD > 0.12, `kD ${r.suggest.kD} > 0.12`);
 }
 
@@ -119,7 +119,7 @@ console.log('\nHər tapıntı bir səbəb, bir rəqəm göstərir');
 console.log('\nÇox qısa qeydə rəy verilmir');
 {
   const r = analyse(run(5, () => ({ err: 0.9, steer: 1 })));
-  ok(has(r, 'Qeyd çox qısadır'), 'qısa olduğunu deyir');
+  ok(has(r, 'Kayıt çok kısa'), 'qısa olduğunu deyir');
   ok(Object.keys(r.suggest).length === 0, '5 sətirdən nəticə çıxarmır');
 }
 
@@ -134,9 +134,9 @@ console.log('\nHərəkətlər: düz / sağ / sol / itki');
   push(5,  { steer: 0, lost: true });        // lost it
   const segs = segments(rows);
   ok(segs.length === 5, `beş hissə tapıldı (${segs.map((s) => s.kind).join(', ')})`);
-  ok(segs[1].kind === 'sağ döngə' && segs[3].kind === 'sol döngə',
+  ok(segs[1].kind === 'sağ viraj' && segs[3].kind === 'sol viraj',
      'sağ və sol düzgün ayrılır');
-  ok(segs[4].kind === 'itki', 'itki ayrıca hissədir');
+  ok(segs[4].kind === 'kayıp', 'itki ayrıca hissədir');
   near(segs[1].dur_s, 1.5, 0.11, 'sağ döngənin müddəti');
   ok(segs[3].peak_steer === 0.6, `sol döngənin ən kəskin nöqtəsi ${segs[3].peak_steer}`);
   ok(segs.every((s) => s.dist_m !== null), 'hər hissə üçün məsafə var');
@@ -162,15 +162,15 @@ console.log('\nÖlü zona: köhnə qeydlər özünü izah edir');
   const r = analyse(old);
   ok(r.metrics.dead_frac >= 0.45,
      `təkər əmrlərinin ${Math.round(r.metrics.dead_frac * 100)} %-i ölü zonada`);
-  ok(has(r, 'Daxili təkər ölü zonada qalır'), 'ölü zonanı ayrıca deyir');
-  ok(!has(r, 'Sürət ehtiyatı var'),
+  ok(has(r, 'İç teker ölü bölgede kalıyor'), 'ölü zonanı ayrıca deyir');
+  ok(!has(r, 'Hız payı var'),
      'ölü zonada qalan dövrəyə «sürəti qaldır» demir');
 
   // Both wheels under the threshold: the robot was not driving at all.
   const dead = run(300, () => ({ err: 0.1, speed: 18, p25: 18, p26: 15 }),
                    { base: 18, stall: 22 });
   const d = analyse(dead);
-  ok(has(d, 'Təkərlər ümumiyyətlə dönmürdü'), 'heç tərpənmədiyini tutur');
+  ok(has(d, 'Tekerler hiç dönmüyordu'), 'heç tərpənmədiyini tutur');
   ok(d.suggest.base > 18, `sürəti qaldırmağı təklif edir → ${d.suggest.base}`);
 
   // With the dead band compensated there is nothing to report.
@@ -178,7 +178,7 @@ console.log('\nÖlü zona: köhnə qeydlər özünü izah edir');
                    { base: 18, stall: 22 });
   const g = analyse(good);
   ok(g.metrics.dead_frac === 0, 'kompensasiyadan sonra ölü zona qalmır');
-  ok(!has(g, 'Daxili təkər ölü zonada qalır'), 'şikayət yoxdur');
+  ok(!has(g, 'İç teker ölü bölgede kalıyor'), 'şikayət yoxdur');
 }
 
 console.log('\nYoldan uzaqlaşma sayılır');
@@ -189,7 +189,7 @@ console.log('\nYoldan uzaqlaşma sayılır');
              speed: off ? 10 : 20, reason: off ? 'yol çox sağda — çevrilir' : 'düz yol' };
   }));
   ok(r.metrics.recover_events === 4, `${r.metrics.recover_events} dəfə çevrilib`);
-  ok(has(r, 'Yoldan uzaqlaşır'), 'ayrıca tapıntı kimi göstərir');
+  ok(has(r, 'Yoldan uzaklaşıyor'), 'ayrıca tapıntı kimi göstərir');
 }
 
 console.log('\nMəsafə kalibrasiyası: lentlə ölçdüyün rəqəmdən');

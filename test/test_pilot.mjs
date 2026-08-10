@@ -135,7 +135,7 @@ console.log('\nYol itəndə: son istiqamətlə yavaş, sonra dayanır');
   // ... and past the grace period it gives up.
   for (let i = 0; i < 40; i++) { tt += DT; out = pilotStep(st, lost, NOSTALL, tt); }
   ok(out.stop, `${tt - t} ms sonra ENABLE-nin düşməsini istəyir`);
-  ok(out.reason === 'yol yoxdur — dayandı', `səbəb: ${out.reason}`);
+  ok(out.reason === 'yol yok — durdu', `səbəb: ${out.reason}`);
 }
 
 console.log('\nYol qayıdanda özü davam edir');
@@ -220,7 +220,7 @@ console.log('\nYoldan çox uzaqda: sürət minimuma, üzü yola');
   ok(r.p26 === 0, `daxili təkər dayanır — yerində çevrilir  (${r.p26})`);
   ok(r.p25 > 0, `xarici təkər sürünür  (${r.p25})`);
   near(r.speed, 10, 0.5, 'sürət «crawl»-a düşür');
-  ok(/çox sağda/.test(r.reason), `səbəb: ${r.reason}`);
+  ok(/çok sağda/.test(r.reason), `səbəb: ${r.reason}`);
 
   const l = run(road(-0.9), cfg).out;
   ok(l.steer === -1 && l.p25 === 0 && l.p26 > 0, `sola simmetrikdir  (${l.p25}/${l.p26})`);
@@ -308,7 +308,7 @@ console.log('\nSürət dövrəsi təhlükəsiz dayanır');
   for (let i = 0; i < 40; i++) { t += 50; out = speedStep(st2, 50, 40, 0, CFG, t); }
   ok(!out.ok, 'impuls gəlmədiyini bildirir');
   ok(out.pin === 40, `açıq dövrə təxminində qalır, tam qaza basmır  (${out.pin} %)`);
-  ok(/impuls gəlmir/.test(out.reason), `səbəb: ${out.reason}`);
+  ok(/darbe gelmiyor/.test(out.reason), `səbəb: ${out.reason}`);
 
   // No sensor at all is the same answer.
   const st3 = speedState(0);

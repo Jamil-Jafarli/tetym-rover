@@ -48,10 +48,10 @@ const DEFAULT_STALL = 22;
  */
 function segments(rows) {
   const kindOf = (r) => {
-    if (r.lost) return 'itki';
+    if (r.lost) return 'kayıp';
     const s = Number(r.steer) || 0;
     if (Math.abs(s) < 0.12) return 'düz';
-    return s > 0 ? 'sağ döngə' : 'sol döngə';
+    return s > 0 ? 'sağ viraj' : 'sol viraj';
   };
   const out = [];
   for (const r of rows) {
@@ -83,7 +83,7 @@ function segments(rows) {
   const merged = [];
   for (const s of out) {
     const p = merged[merged.length - 1];
-    if (p && (p.kind === s.kind || (s.n <= 2 && s.kind !== 'itki'))) { eat(p, s); continue; }
+    if (p && (p.kind === s.kind || (s.n <= 2 && s.kind !== 'kayıp'))) { eat(p, s); continue; }
     merged.push({ ...s });
   }
   return merged.map((s) => ({
@@ -245,77 +245,77 @@ function findings(m, pilot) {
   // Before anything else: was it electrically driving at all? Every other
   // reading is meaningless if the answer is no.
   if (m.dead_both_frac >= 0.2) {
-    add('warn', 'Təkərlər ümumiyyətlə dönmürdü',
-      `Kadrların ${Math.round(m.dead_both_frac * 100)} %-ində HƏR İKİ təkər `
-      + `dönmə həddinin (${m.stall} % ≈ 1.5 V) altında idi. Bu, yavaş getmək `
-      + `deyil — dayanmaqdır. «Düz yolda sürət»i qaldır.`,
+    add('warn', 'Tekerler hiç dönmüyordu',
+      `Karelerin ${Math.round(m.dead_both_frac * 100)} %-inde HER İKİ teker `
+      + `dönme eşiğinin (${m.stall} % ≈ 1.5 V) altındaydı. Bu yavaş gitmek `
+      + `değil — durmaktır. «Düz yolda hız»ı yükselt.`,
       { base: Math.round(aclamp(Math.max(p.base * 1.5, 15), 5, 100)) });
   } else if (m.dead_frac >= 0.25) {
-    add('warn', 'Daxili təkər ölü zonada qalır',
-      `Təkər əmrlərinin ${Math.round(m.dead_frac * 100)} %-i 0 ilə ${m.stall} % `
-      + `arasındadır — yəni «yavaşla» deyil, «dayan» deməkdir. Döngə yumşaq `
-      + `deyil, açıq-qapalı olur. Ölü zona kompensasiyası bunu düzəldir.`);
+    add('warn', 'İç teker ölü bölgede kalıyor',
+      `Teker komutlarının ${Math.round(m.dead_frac * 100)} %-i 0 ile ${m.stall} % `
+      + `arasında — yani «yavaşla» değil, «dur» demek. Viraj yumuşak değil, `
+      + `açık-kapalı oluyor. Ölü bölge telafisi bunu düzeltir.`);
   }
 
   if (m.rows < 20) {
-    add('info', 'Qeyd çox qısadır',
-      `Cəmi ${m.rows} sətir. Bir dövrə sür — 30 saniyə kifayətdir — sonra bax.`);
+    add('info', 'Kayıt çok kısa',
+      `Toplam ${m.rows} satır. Bir tur sür — 30 saniye yeter — sonra bak.`);
     return out;
   }
 
   // 1. Wobble on the straight → kP.
   if (m.straight_s < 2) {
-    add('info', 'Düz yol azdır',
-      `Cəmi ${m.straight_s} s düz getdi, ona görə sükanın sərtliyi haqda bir şey `
-      + `deyə bilmərəm. Uzun düz hissəsi olan bir dövrə lazımdır.`);
+    add('info', 'Düz yol az',
+      `Toplam ${m.straight_s} s düz gitti, bu yüzden direksiyonun sertliği `
+      + `hakkında bir şey diyemem. Uzun düz kısmı olan bir tur gerekli.`);
   } else if (m.wobble >= 1.5) {
-    add('warn', 'Düz yolda yırğalanır',
-      `Saniyədə ${m.wobble} dəfə mərkəzi kəsir. Bu, sükanın həddindən artıq `
-      + `sərt olmasıdır — robot düzəlişi düzəldir.`,
+    add('warn', 'Düz yolda salınıyor',
+      `Saniyede ${m.wobble} kez merkezi kesiyor. Bu direksiyonun fazla sert `
+      + `olmasıdır — robot düzeltmeyi düzeltiyor.`,
       { kP: around(aclamp(p.kP * 0.75, 0.1, 2.5)) });
   } else if (m.wobble <= 0.4 && m.avg_abs_err > 0.25) {
-    add('warn', 'Yavaş düzəlir',
-      `Yırğalanma yoxdur (${m.wobble}/s), amma orta sapma ${m.avg_abs_err} — `
-      + `yəni yoldan kənarda gedir və özünü tələsmədən mərkəzə çəkir.`,
+    add('warn', 'Yavaş düzeliyor',
+      `Salınım yok (${m.wobble}/s), ama ortalama sapma ${m.avg_abs_err} — `
+      + `yani yolun kenarında gidiyor ve kendini acele etmeden merkeze çekiyor.`,
       { kP: around(aclamp(p.kP * 1.25, 0.1, 2.5)) });
   } else {
-    add('info', 'Düz yolda sabitdir',
-      `Saniyədə ${m.wobble} kəsişmə, orta sapma ${m.avg_abs_err}. kP yerindədir.`);
+    add('info', 'Düz yolda kararlı',
+      `Saniyede ${m.wobble} kesişme, ortalama sapma ${m.avg_abs_err}. kP yerinde.`);
   }
 
   // 2. Steering saturation → the corner is tighter than the speed allows.
   if (m.sat_frac >= 0.12) {
-    add('warn', 'Sükan dayanacağa dirənir',
-      `Kadrların ${Math.round(m.sat_frac * 100)} %-ində daxili təkər tam dayanıb `
-      + `(sükan ±1). Sürət fərqi ilə bu döngədən kəskin dönmək mümkün deyil — `
-      + `döngəyə daha yavaş girmək lazımdır.`,
+    add('warn', 'Direksiyon dayanağa dayanıyor',
+      `Karelerin ${Math.round(m.sat_frac * 100)} %-inde iç teker tam durmuş `
+      + `(direksiyon ±1). Hız farkıyla bu virajı daha keskin dönmek mümkün değil — `
+      + `viraja daha yavaş girmek gerekiyor.`,
       { curve: around(aclamp(p.curve + 0.1, 0, 1)) });
   }
 
   // 3. Losing the road → too fast into the bends.
   if (m.lost_events > 0) {
     const perMin = m.duration_s > 0 ? (m.lost_events / m.duration_s) * 60 : 0;
-    add(m.lost_events >= 3 ? 'warn' : 'info', 'Yolu itirir',
-      `${m.lost_events} dəfə, cəmi ${m.lost_s} s (dəqiqədə ${around(perMin, 1)}). `
-      + `Kəskin döngədə zəncir qırılır — düz yoldakı sürəti azaltmaq və ya `
-      + `döngədə daha çox yavaşlamaq kömək edir.`,
+    add(m.lost_events >= 3 ? 'warn' : 'info', 'Yolu kaybediyor',
+      `${m.lost_events} kez, toplam ${m.lost_s} s (dakikada ${around(perMin, 1)}). `
+      + `Keskin virajda zincir kopuyor — düz yoldaki hızı azaltmak ya da `
+      + `virajda daha çok yavaşlamak yardımcı olur.`,
       m.lost_events >= 3 ? { base: Math.round(aclamp(p.base * 0.85, 5, 100)) } : null);
   }
 
   // 4. Late corners → kD.
   if (m.bend_s >= 2 && m.bend_entry_err >= 0.45) {
-    add('warn', 'Döngəyə gec reaksiya',
-      `Döngəyə girərkən orta sapma ${m.bend_entry_err} — yol qabaqda artıq `
-      + `dönmüşdü, robot isə hələ düz gedirdi.`,
+    add('warn', 'Viraja geç tepki',
+      `Viraja girerken ortalama sapma ${m.bend_entry_err} — yol ileride çoktan `
+      + `dönmüştü, robot ise hâlâ düz gidiyordu.`,
       { kD: around(aclamp(p.kD + 0.05, 0, 0.6)) });
   }
 
   // 4b. How much of the lap was spent recovering rather than following?
   if (m.recover_events > 0) {
-    add(m.recover_s > m.duration_s * 0.25 ? 'warn' : 'info', 'Yoldan uzaqlaşır',
-      `${m.recover_events} dəfə, cəmi ${m.recover_s} s yerində çevrilməli oldu `
-      + `(sapma ${p.hard}-ı keçdi). Bir-iki dəfə normaldır; çox olarsa döngəyə `
-      + `girmə sürəti hələ də yüksəkdir.`,
+    add(m.recover_s > m.duration_s * 0.25 ? 'warn' : 'info', 'Yoldan uzaklaşıyor',
+      `${m.recover_events} kez, toplam ${m.recover_s} s yerinde dönmek zorunda kaldı `
+      + `(sapma ${p.hard} değerini geçti). Bir-iki kez normaldir; çok olursa viraja `
+      + `giriş hızı hâlâ yüksektir.`,
       m.recover_s > m.duration_s * 0.25
         ? { base: Math.round(aclamp(p.base * 0.8, 5, 100)) } : null);
   }
@@ -324,9 +324,9 @@ function findings(m, pilot) {
   const calm = m.worst_err < 0.45 && m.lost_events === 0 && m.recover_events === 0
     && m.sat_frac < 0.02 && m.wobble < 1.2 && m.dead_frac < 0.1;
   if (calm) {
-    add('info', 'Sürət ehtiyatı var',
-      `Ən pis sapma ${m.worst_err}, heç yol itməyib, sükan heç dirənməyib. `
-      + `Düz yoldakı sürəti bir pillə qaldırmaq olar.`,
+    add('info', 'Hız payı var',
+      `En kötü sapma ${m.worst_err}, hiç yol kaybolmadı, direksiyon hiç dayanmadı. `
+      + `Düz yoldaki hızı bir kademe yükseltebilirsin.`,
       { base: Math.round(aclamp(p.base * 1.15, 5, 100)) });
   }
 
@@ -336,10 +336,10 @@ function findings(m, pilot) {
 /** Everything, for one run. `realMetres` is optional. */
 function analyse(run, realMetres) {
   if (!run || !Array.isArray(run.rows)) {
-    return { ok: false, error: 'Bu fayl bir sürüş qeydi deyil — «rows» massivi yoxdur.' };
+    return { ok: false, error: 'Bu dosya bir sürüş kaydı değil — «rows» dizisi yok.' };
   }
   const rows = run.rows.filter((r) => r && typeof r === 'object');
-  if (!rows.length) return { ok: false, error: 'Qeyd boşdur — heç bir sətir yoxdur.' };
+  if (!rows.length) return { ok: false, error: 'Kayıt boş — hiçbir satır yok.' };
 
   const stall = Number(run.pilot && run.pilot.stall) || DEFAULT_STALL;
   const m = metrics(rows, stall);

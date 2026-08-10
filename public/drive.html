@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="tr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Keyboard Drive</title>
+<title>Klavyeyle sür</title>
 <style>
   :root{
     --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
@@ -114,67 +114,67 @@
 
   <div class="card">
     <div class="row">
-      <h1>Keyboard Drive</h1>
+      <h1>Klavyeyle sür</h1>
       <div class="row" style="gap:7px">
-        <span class="dot" id="dot"></span><span class="muted" id="linktxt">connecting</span>
+        <span class="dot" id="dot"></span><span class="muted" id="linktxt">bağlanıyor</span>
       </div>
     </div>
     <div class="row" style="margin-top:10px">
-      <span class="muted" id="reason">stopped</span>
-      <span class="muted"><a href="/">&larr; ana səhifə</a> &nbsp; <a href="/manual">manual</a></span>
+      <span class="muted" id="reason">durdu</span>
+      <span class="muted"><a href="/">&larr; ana sayfa</a> &nbsp; <a href="/manual">manual</a></span>
     </div>
   </div>
 
   <div class="card">
     <button id="arm">ARM</button>
     <div class="muted" style="text-align:center;margin:12px 0 14px" id="hint">
-      Arm first, then hold W / A / D &middot; S = reverse
+      Önce ARM, sonra W / A / D basılı tut &middot; S = geri
     </div>
     <div class="pad">
       <div></div>
-      <div class="key" data-k="w"><b>W</b><span>forward</span></div>
+      <div class="key" data-k="w"><b>W</b><span>ileri</span></div>
       <div></div>
-      <div class="key" data-k="a"><b>A</b><span>pivot left</span></div>
-      <div class="key" data-k="s"><b>S</b><span>back</span></div>
-      <div class="key" data-k="d"><b>D</b><span>pivot right</span></div>
+      <div class="key" data-k="a"><b>A</b><span>sola dön</span></div>
+      <div class="key" data-k="s"><b>S</b><span>geri</span></div>
+      <div class="key" data-k="d"><b>D</b><span>sağa dön</span></div>
     </div>
   </div>
 
   <div class="card">
     <div class="row" style="margin-bottom:12px">
-      <div class="lbl" style="margin:0" id="gearLbl">Sabit sürət — biri, ya da o biri</div>
-      <span class="muted" id="gearState">seçilməyib</span>
+      <div class="lbl" style="margin:0" id="gearLbl">Sabit hız — biri ya da öteki</div>
+      <span class="muted" id="gearState">seçilmedi</span>
     </div>
     <div class="seg">
       <button class="gear" id="g-normal" data-g="normal">
         <b>NORMAL</b><span id="gs-normal">–</span>
       </button>
       <button class="gear" id="g-fast" data-g="fast">
-        <b>SÜRƏT</b><span id="gs-fast">–</span>
+        <b>HIZLI</b><span id="gs-fast">–</span>
       </button>
     </div>
     <div class="gwarn" id="gearWarn" hidden></div>
     <table style="margin-top:14px">
       <thead>
-        <tr><th>Sürət</th><th>GPIO25 dac</th><th>GPIO26 dac</th></tr>
+        <tr><th>Hız</th><th>GPIO25 dac</th><th>GPIO26 dac</th></tr>
       </thead>
       <tbody id="gbody"></tbody>
     </table>
     <div class="muted" style="margin-top:12px">
-      A gear is the DAC code itself, not a percentage of anything:
-      <code>dac = V / 3.3 &times; 255</code>, so 124 is 1.60 V and 241 is 3.12 V.
-      The wheel trim and the master level below are <b>not</b> applied to it —
-      what you type here is what the pin gets.
-      <br><br>Only one at a time. Tap the lit one again to release it, and
-      pressing W / A / S / D releases it too — a hand on the keyboard always
-      wins. A gear has no keyup behind it, so the page keeps saying it means
-      it at 20 Hz; stop reporting and it coasts to 0 % like everything else.
+      Bir hız, herhangi bir şeyin yüzdesi değil, DAC kodunun kendisidir:
+      <code>dac = V / 3.3 &times; 255</code>, yani 124 = 1.60 V, 241 = 3.12 V.
+      Teker ayarı ve aşağıdaki master seviye buna <b>uygulanmaz</b> —
+      buraya ne yazarsan pine o gider.
+      <br><br>Aynı anda yalnız biri. Yanan düğmeye tekrar basmak onu bırakır,
+      W / A / S / D basmak da bırakır — klavyedeki el her zaman kazanır.
+      Bir hızın arkasında keyup yoktur, bu yüzden sayfa 20 Hzde ciddi olduğunu
+      söylemeye devam eder; bildirmeyi kes, her şey gibi 0 %-e yavaşlar.
     </div>
   </div>
 
   <div class="card">
     <div class="row">
-      <div class="lbl" style="margin:0">Master level — scales everything</div>
+      <div class="lbl" style="margin:0">Master seviye — her şeyi ölçekler</div>
       <div class="row" style="gap:8px">
         <input type="number" id="lvlNum" min="0" max="100" step="1" value="100">
         <span class="unit" style="font-size:18px;color:var(--dim)">%</span>
@@ -192,7 +192,7 @@
   </div>
 
   <div class="card">
-    <div class="lbl">ESP32 actual</div>
+    <div class="lbl">ESP32 gerçek değerler</div>
     <div class="out">
       <div>
         <div class="big"><span id="pL">0</span><span class="unit">%</span></div>
@@ -206,19 +206,19 @@
       </div>
     </div>
     <div class="row" style="margin-top:14px">
-      <span class="muted">Direction <b id="revPin">GPIO19 / GPIO18</b></span>
-      <span id="dirTag" class="dirtag fwd">FORWARD</span>
+      <span class="muted">Yön <b id="revPin">GPIO19 / GPIO18</b></span>
+      <span id="dirTag" class="dirtag fwd">İLERİ</span>
     </div>
     <div class="row" style="margin-top:10px">
-      <span class="muted">ENABLE pin <b id="enPin">GPIO23</b></span>
+      <span class="muted">ENABLE pini <b id="enPin">GPIO23</b></span>
       <span class="row" style="gap:8px">
         <span class="dot" id="endot"></span>
         <b id="enval" style="font:600 15px ui-monospace,monospace">0</b>
       </span>
     </div>
     <div class="diag">
-      <span>held <b id="held">–</b></span>
-      <span>sending <b id="outv">0 / 0 %</b></span>
+      <span>basılı <b id="held">–</b></span>
+      <span>gönderiliyor <b id="outv">0 / 0 %</b></span>
       <span>dac <b id="dacv">– / –</b></span>
       <span>pkt <b id="pkt">0</b></span>
       <span>rssi <b id="rssi">–</b></span>
@@ -228,46 +228,55 @@
 
   <div class="card">
     <div class="row" style="margin-bottom:12px">
-      <div class="lbl" style="margin:0">Values per key — edit freely</div>
-      <button class="small" id="reset">Reset defaults</button>
+      <div class="lbl" style="margin:0">Tuş başına değerler — serbestçe düzenle</div>
+      <button class="small" id="reset">Varsayılanlara dön</button>
     </div>
     <table>
       <thead>
-        <tr><th>Key</th><th>GPIO25 %</th><th style="width:13%">geri</th>
+        <tr><th>Tuş</th><th>GPIO25 %</th><th style="width:13%">geri</th>
             <th>GPIO26 %</th><th style="width:13%">geri</th></tr>
       </thead>
       <tbody id="tbody"></tbody>
     </table>
     <div class="muted" style="margin-top:12px">
-      Saved on the server in <code>presets.json</code>, applied immediately —
-      you can retune mid-drive. Holding W and A together uses the
-      <code>wa</code> row, not W and A mixed. If a turn goes the wrong way,
-      swap that row's two numbers.
-      <br><br>The <b>geri</b> boxes are the direction relays, one per wheel.
-      One ticked = the robot pivots on the spot; both ticked = it backs up.
-      Any change to them makes the robot stop for about a second first —
-      crossing phase wires while a wheel turns destroys the controller.
-      If a pivot spins the wrong way, move the tick to the other wheel.
+      Sunucuda <code>presets.json</code> içinde saklanır, anında uygulanır —
+      sürüş sırasında bile değiştirebilirsin. W ve Ayı birlikte basılı tutmak
+      <code>wa</code> satırını kullanır, W ile Anın karışımını değil. Bir dönüş
+      ters tarafa gidiyorsa o satırın iki sayısını yer değiştir.
+      <br><br><b>geri</b> kutuları yön röleleridir, teker başına bir tane.
+      Biri işaretli = robot yerinde döner; ikisi de işaretli = geri gider.
+      Onlarda yapılan her değişiklik robotu önce bir saniye kadar durdurur —
+      teker dönerken faz kablolarını çaprazlamak kontrolcüyü yakar.
+      Yerinde dönüş ters yöne gidiyorsa işareti öbür tekere taşı.
     </div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <div class="lbl" style="margin:0">Kaldırma — L298N aktüatör</div>
+      <span class="muted" id="liftState">duruyor</span>
+    </div>
+    <div id="liftBox"></div>
   </div>
 
   <button id="stopb">STOP · IDLE</button>
   <div class="muted" style="text-align:center">
-    Releasing every key coasts to 0 %. STOP, closing the tab, or switching away
-    also drops ENABLE to 0.
+    Bütün tuşları bırakmak 0 %-e yavaşlatır. STOP, sekmeyi kapatmak ya da başka
+    bir sayfaya geçmek ENABLEı da 0a düşürür.
   </div>
 </div>
 
+<script src="/lift.js"></script>
 <script src="/wheels.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const ROWS = [
-  ['w',  'W · forward'],
-  ['a',  'A · pivot left'],
-  ['d',  'D · pivot right'],
-  ['wa', 'W+A · fwd-left'],
-  ['wd', 'W+D · fwd-right'],
-  ['s',  'S · back'],
+  ['w',  'W · ileri'],
+  ['a',  'A · sola dön'],
+  ['d',  'D · sağa dön'],
+  ['wa', 'W+A · ileri-sol'],
+  ['wd', 'W+D · ileri-sağ'],
+  ['s',  'S · geri'],
 ];
 // Each row is {p: [GPIO25 %, GPIO26 %], r: [GPIO25 rev, GPIO26 rev]}.
 // Reversing one wheel pivots the robot; reversing both backs it up.
@@ -283,7 +292,7 @@ const clone = o => JSON.parse(JSON.stringify(o));
 
 // The two fixed speeds, as [GPIO25, GPIO26] DAC codes. The server owns them —
 // these are only what to draw before the first status arrives.
-const GEARS = [['normal', 'NORMAL'], ['fast', 'SÜRƏT']];
+const GEARS = [['normal', 'NORMAL'], ['fast', 'HIZLI']];
 const GEAR_DEFAULTS = { normal: [124, 126], fast: [241, 241] };
 
 let VMAX = 3.3, IDLE_V = 1.0, VREF = 3.3;
@@ -418,15 +427,15 @@ function paintGears() {
     $(`grow-${g}`).classList.toggle('on', gear === g);
     if (gear === g && (a > ceiling || b > ceiling)) over = label;
   }
-  $('gearState').textContent = !gear ? 'seçilməyib'
-    : armed ? `${gear} — gedir` : `${gear} — ARM gözləyir`;
+  $('gearState').textContent = !gear ? 'seçilmedi'
+    : armed ? `${gear} — gidiyor` : `${gear} — ARM bekleniyor`;
   // A ceiling below the code cannot be met, and a robot running slower than
   // the number on its own button is the kind of wrong you chase for an hour.
   $('gearWarn').hidden = !over;
   if (over) {
     $('gearWarn').textContent =
-      `${over} tavandan yuxarıdır: --v-max ${VMAX.toFixed(2)} V = dac ${ceiling}. `
-      + `Pinə ${ceiling} gedəcək, yazdığın rəqəm yox.`;
+      `${over} tavanın üstünde: --v-max ${VMAX.toFixed(2)} V = dac ${ceiling}. `
+      + `Pine ${ceiling} gidecek, yazdığın sayı değil.`;
   }
 }
 
@@ -442,11 +451,11 @@ function paintLevel() {
   // While a gear is engaged this slider does nothing, and saying so here is
   // the difference between a safe walk-up and a false sense of one.
   $('lvlHint').textContent = gear
-    ? `${gear} sürəti seçilib — master level ona TƏTBİQ OLUNMUR: `
-      + `dac ${gears[gear][0]} / ${gears[gear][1]} olduğu kimi gedir`
-    : `W forward now gives ${Math.round(fwd)} % \u00b7 `
+    ? `${gear} hızı seçili — master level ona UYGULANMAZ: `
+      + `dac ${gears[gear][0]} / ${gears[gear][1]} olduğu gibi gider`
+    : `W ileri şimdi ${Math.round(fwd)} % veriyor \u00b7 `
       + `${voltsFor(presets.w.p[0]).toFixed(2)} V`
-      + (level === 0 ? ' — nothing will move at 0 %' : '');
+      + (level === 0 ? ' — 0 %-de hiçbir şey hareket etmez' : '');
   paintVolts();
 }
 
@@ -537,10 +546,10 @@ $('stopb').addEventListener('click', () => { armed = false; releaseAll(); send({
 
 function paint() {
   $('arm').classList.toggle('on', armed);
-  $('arm').textContent = armed ? 'ARMED — tap to disarm' : 'ARM';
-  $('hint').textContent = armed ? 'Hold W / A / D — S reverses — release to coast'
-                                : 'Arm first, then hold W / A / D';
-  paintGears();     // "ARM gözləyir" is only true until it is not
+  $('arm').textContent = armed ? 'ARM AÇIK — kapatmak için bas' : 'ARM';
+  $('hint').textContent = armed ? 'W / A / D basılı tut — S geri — bırakınca yavaşlar'
+                                : 'Önce ARM, sonra W / A / D basılı tut';
+  paintGears();     // "ARM bekleniyor" is only true until it is not
 }
 
 // ── websocket ──────────────────────────────────────────────────────
@@ -563,7 +572,7 @@ function connect() {
 
   ws.onclose = () => {
     $('dot').className = 'dot bad';
-    $('linktxt').textContent = 'disconnected — output is idle';
+    $('linktxt').textContent = 'bağlantı kesildi — çıkış idle';
     clearInterval(pump); pump = null;
     armed = false; held.clear(); paintKeys(); paint();
     setTimeout(connect, 1000);
@@ -574,6 +583,13 @@ function connect() {
     let s; try { s = JSON.parse(ev.data); } catch (e) { return; }
     if (s.type !== 'status') return;
     if (WT) WT.fromStatus(s);
+    if (LIFT) {
+      LIFT.fromStatus(s);
+      const l = s.lift || {};
+      $('liftState').textContent = l.cut ? 'sınır — bırak ve yeniden bas'
+        : l.dir > 0 ? `kalkıyor · ${l.out}/255`
+        : l.dir < 0 ? `iniyor · ${Math.abs(l.out)}/255` : 'duruyor';
+    }
     if (s.vmax) VMAX = s.vmax;
     if (s.idle_v != null) IDLE_V = s.idle_v;
     if (s.vref) VREF = s.vref;
@@ -629,10 +645,10 @@ function connect() {
     const moving = d[0] || d[1];
     const tag = $('dirTag');
     tag.className = 'dirtag ' + (settling ? 'wait' : (moving ? 'rev' : 'fwd'));
-    tag.textContent = settling ? 'STOPPING…'
-      : (!d[0] && !d[1]) ? 'FORWARD'
-      : (d[0] && d[1]) ? 'BACK'
-      : (d[0] ? 'PIVOT · 25 rev' : 'PIVOT · 26 rev');
+    tag.textContent = settling ? 'DURDURULUYOR…'
+      : (!d[0] && !d[1]) ? 'İLERİ'
+      : (d[0] && d[1]) ? 'GERİ'
+      : (d[0] ? 'DÖNÜŞ · 25 ters' : 'DÖNÜŞ · 26 ters');
 
     // Highlight whichever preset row the server actually resolved.
     for (const [k] of ROWS) {
@@ -641,8 +657,8 @@ function connect() {
 
     $('err').hidden = !s.serial_error;
     $('err').textContent = s.serial_error || '';
-    if (!s.esp_fresh) $('linktxt').textContent = 'no ESP32 telemetry';
-    else if (ws.readyState === 1) $('linktxt').textContent = 'ESP32 linked';
+    if (!s.esp_fresh) $('linktxt').textContent = 'ESP32 telemetrisi yok';
+    else if (ws.readyState === 1) $('linktxt').textContent = 'ESP32 bağlı';
   };
 }
 
@@ -660,6 +676,10 @@ connect();
 // numbers below are not applied here, which is deliberate on the pages
 // where the threshold is measured.
 const WT = wheelsMount({ strip: true, mode: 'raw' });
+
+// The lift's two buttons, shared with /dashboard — see public/lift.js. Mounted
+// after `connect()` so the first status frame has somewhere to land.
+const LIFT = liftMount({ send: (m) => send(m), into: '#liftBox' });
 
 // The ⓘ for the gears comes from the same table as every other explanation,
 // so what the buttons do and what the tooltip says cannot drift apart.
