@@ -23,7 +23,7 @@ GPIO25 (DAC1) → controller throttle signal wire     analog
 GPIO26 (DAC2) → controller throttle signal wire     analog
 GPIO23        → driver enable / brake release       digital: 0 at rest, 1 on START
 GPIO19        → GPIO25 wheel's direction relay       digital: 1 forward, 0 back
-GPIO18        → GPIO26 wheel's direction relay       digital: 1 forward, 0 back
+GPIO5         → GPIO26 wheel's direction relay       digital: 1 forward, 0 back
 GPIO14 / 32   → forward HC-SR04    TRIG / ECHO
 GND           → controller GND        (required, common ground)
 ```
@@ -1105,7 +1105,7 @@ Status comes back at 10 Hz, plus one immediately after each command carrying
     "pL": 60,   "pR": 25,     // the same, as percent
     "dacL": 151, "dacR": 108,  // ...and as the board's own DAC codes
     "en": true, "en_pin": 23, // the digital enable pin
-    "rev": [false,false], "rev_pin": [19,18],         // direction relays
+    "rev": [false,false], "rev_pin": [19,5],          // direction relays
     "rev_wait": false, "dir": "forward",
     "pkt": 482, "bad": 0, "rssi": -52, "uptime": 91234
   },
@@ -1205,7 +1205,18 @@ mention the actuator stops it.
 
 The controllers have no reverse input, so direction is changed by crossing two
 motor phases and the matching two hall lines with relays — one set per wheel,
-driven by `GPIO19` and `GPIO18`.
+driven by `GPIO19` and `GPIO5`.
+
+`GPIO5` used to be `GPIO18`, which sat with two of its four relays latched at
+boot while `GPIO19` drove an identical bank cleanly. Both pins measured a clean
+3.3 V, so the pin was never the likely cause — see the note below on what a
+3.3 V high does to an input stage referenced to 5 V.
+
+`GPIO5` is a **strapping pin**. Its weak pull-up at reset is the right way to
+fail for an active-LOW input — the coil stays off through the boot window with
+no external resistor — but it is sampled at reset and glitches briefly as the
+ROM starts, so nothing may hold it LOW while the board comes up. `GPIO27` and
+`GPIO33` are free if that turns out to bite.
 
 The relay inputs are **active-LOW**: the pin sits **HIGH** for forward and is
 pulled **LOW** to reverse that wheel (`REVERSE_ACTIVE_LOW` at the top of the
@@ -1218,6 +1229,18 @@ input: it is the relay board's own pull-up that holds it off. The sketch drives
 those three pins before it even opens the serial port, so the window is
 microseconds rather than the 200 ms it used to be — but if your board has no
 pull-up on its inputs, add one (10 k to 3V3).
+
+**A 3.3 V high may not release a 5 V relay board at all.** Those inputs let go
+only when IN sits near their own VCC. Run the board on 5 V and drive it from an
+ESP32 and roughly 1.7 V is left across the opto LED and its resistor — enough to
+hold some channels in, with per-channel tolerance deciding which. The symptom is
+relays latched on one bank and not the other from identical drive, and moving to
+a different GPIO does not help because every GPIO is 3.3 V. The fix is to pull
+the board's **JD-VCC jumper**, feed `VCC` from **3V3** and `JD-VCC` from **5 V**:
+the opto then sees 3.3 V on both sides, so off is genuinely off, while the coils
+keep their 5 V. Failing that, a 74HCT125 between the ESP32 and the inputs takes
+3.3 V logic in and gives a real 5 V out. Avoid a transistor per channel — it
+inverts the sense, which would flip the fail-safe direction.
 
 `esp32/ws_dac/ws_dac.ino` owns the interlock: **it will not move either pin
 until both DACs have sat at idle for `REV_SETTLE_MS`.** Crossing phases under
@@ -1317,7 +1340,7 @@ loads, and fails if any name is declared twice. It takes a second and needs no
 browser. It also verifies its own detector against known-good and known-bad
 input first, because a check that cannot fail is not a check.
 
-**272 checks** for the control path, no hardware. It runs `esp32ws_sim.js` — a behavioural mirror of
+**294 checks** for the control path, no hardware. It runs `esp32ws_sim.js` — a behavioural mirror of
 `ws_dac.ino`, including the watchdog, the idle-when-no-clients rule and the direction
 interlock — as a
 real WebSocket server, then drives the real `server.js` against it over a real
@@ -1352,9 +1375,9 @@ between the two thresholds, someone stepping half out of the way during the
 wait, and — the one that matters — the echo dying while stopped in front of
 something soft, which must not read as "the way is clear".
 
-**22 of the 272** are the 30 cm brake, end to end, and they are the ones to read
+**22 of the 294** are the 30 cm brake, end to end, and they are the ones to read
 if you change anything near it. They do not test the state machine — that is the
-54 above. They test that it **cannot be got past**: the robot is driven with a
+29 above. They test that it **cannot be got past**: the robot is driven with a
 typed percentage, which is the path that never had an obstacle check in it, a
 wall appears at 15 cm, and the pins have to go to idle without the browser being
 told anything and without the browser co-operating. Then the things that would
@@ -1433,7 +1456,7 @@ constant comes out the same whether the lap was driven fast or slow.
 | `public/wheels.js` | the shared wheel trim + the ⓘ text, used by every page |
 | `public/setup.html` | the numbered checklist: measure, type, saved everywhere |
 | `test/test_globals.mjs` | no duplicate top-level names on any page, 24 checks |
-| `test/test_bench.mjs` | server + firmware + gears + follow + sonar + the 30 cm brake, 272 checks |
+| `test/test_bench.mjs` | server + firmware + gears + follow + sonar + the 30 cm brake, 294 checks |
 | `test/test_pilot.mjs` | the control law and the speed loop, 85 checks, no browser |
 | `test/test_wheels.mjs` | the shared trim, 55 checks — incl. /manual vs /follow agreement |
 | `test/test_analyse.mjs` | the log analysis, 54 checks, no browser |

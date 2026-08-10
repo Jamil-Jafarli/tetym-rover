@@ -17,7 +17,7 @@ export const STATUS_PERIOD_MS = 100;
 export const V_SLEW_PER_S = 6.0;
 export const PIN_ENABLE = 23;
 export const PIN_REV_25 = 19;
-export const PIN_REV_26 = 18;
+export const PIN_REV_26 = 5;
 export const REV_SETTLE_MS = 1000;
 export const V_STOPPED_EPS = 0.03;
 
@@ -33,7 +33,7 @@ export const PING_PERIOD_MS = 50;
 // the console, 6-11 are the flash chip and 34-39 have no output driver.
 // Only 25 and 26 are real DACs; these are all PWM, and the page says so.
 // 4, 16 and 17 belong to the lift's L298N — see PIN_LIFT_* below.
-export const TEST_PINS = [5, 21, 22, 2, 15, 13, 27, 33];
+export const TEST_PINS = [21, 22, 2, 15, 13, 27, 33, 18];
 
 // The lift: one DC actuator on half an L298N. IN1/IN2 pick the direction, ENA
 // is the PWM. Mirrors PIN_LIFT_* in the sketch.

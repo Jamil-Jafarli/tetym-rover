@@ -102,7 +102,17 @@ const int PIN_DAC_26 = 26;    // DAC2
 // pin, no boot-time constraint, free unless you are using VSPI.
 const int PIN_ENABLE = 23;    // digital: LOW at rest, HIGH while running
 const int PIN_REV_25 = 19;    // direction relay for the GPIO25 wheel
-const int PIN_REV_26 = 18;    // direction relay for the GPIO26 wheel
+// Moved off GPIO18, which sat with two of its four relays latched at boot while
+// GPIO19 drove an identical bank cleanly. Both pins measured a clean 3.3 V, so
+// if the relays still latch here the pin was never the cause — a 3.3 V high is
+// not a reliable "off" for an input stage referenced to 5 V.
+//
+// GPIO5 is a strapping pin. It carries a weak pull-up at reset, which for an
+// active-LOW relay input is the right way to fail — the coil stays off through
+// the boot window without an external resistor. The cost is that it is sampled
+// at reset and glitches briefly as the ROM starts: do not let anything hold it
+// LOW while the board comes up. GPIO27 and GPIO33 are free if that bites.
+const int PIN_REV_26 = 5;     // direction relay for the GPIO26 wheel
 
 // ── the lift, through an L298N ───────────────────────────────────────
 // One DC actuator that raises and lowers the load, on one half of an L298N:
@@ -174,8 +184,9 @@ const uint32_t ECHO_TIMEOUT_US = 25000;
 // raw value on ENA while the lift was running would be a second driver for the
 // same motor, and the two would not agree.
 // 13, 27 and 33 used to be the scanning sensor's servo, trigger and echo. That
-// module is gone, so they are ordinary spare pins now.
-const int TEST_PINS[] = { 5, 21, 22, 2, 15, 13, 27, 33 };
+// module is gone, so they are ordinary spare pins now, and so is 18 — the
+// GPIO26 wheel's direction relay moved off it onto 5, which leaves this list.
+const int TEST_PINS[] = { 21, 22, 2, 15, 13, 27, 33, 18 };
 const int TEST_PIN_COUNT = sizeof(TEST_PINS) / sizeof(TEST_PINS[0]);
 const int TEST_PWM_HZ = 5000;
 

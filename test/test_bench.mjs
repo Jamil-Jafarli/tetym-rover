@@ -602,7 +602,7 @@ async function driveChecks() {
     check('both relays flipped after the settle',
       JSON.stringify(s.esp.rev) === '[true,true]', JSON.stringify(s.esp.rev));
     check('direction pins reported as GPIO19 / GPIO18',
-      JSON.stringify(s.esp.rev_pin) === '[19,18]', JSON.stringify(s.esp.rev_pin));
+      JSON.stringify(s.esp.rev_pin) === '[19,5]', JSON.stringify(s.esp.rev_pin));
     await sleep(600);
     s = inbox[inbox.length - 1];
     check('then it actually drives backwards',
@@ -1190,7 +1190,7 @@ async function pinChecks() {
       !('25' in last().pins) && !('26' in last().pins) && !('23' in last().pins),
       Object.keys(last().pins).join(','));
     check('the sonar and relay pins are not either',
-      !['14', '18', '19', '32'].some((p) => p in last().pins),
+      !['5', '14', '19', '32'].some((p) => p in last().pins),
       Object.keys(last().pins).join(','));
     check('nor the lift\'s L298N pins — one motor, one driver',
       !['4', '16', '17'].some((p) => p in last().pins),
@@ -1198,17 +1198,17 @@ async function pinChecks() {
     check('they all start at zero',
       Object.values(last().pins).every((v) => v === 0));
 
-    await send({ cmd: 'pin', gpio: 5, val: 200 });
+    await send({ cmd: 'pin', gpio: 22, val: 200 });
     check('a raw value lands on the pin the page asked for',
-      last().pins['5'] === 200, `${last().pins['5']}`);
+      last().pins['22'] === 200, `${last().pins['22']}`);
     check('...and only on that one',
-      Object.entries(last().pins).every(([p, v]) => p === '5' || v === 0));
+      Object.entries(last().pins).every(([p, v]) => p === '22' || v === 0));
 
-    await send({ cmd: 'pin', gpio: 5, val: 999 });
-    check('out of range is clamped, not rejected', last().pins['5'] === 255,
-      `${last().pins['5']}`);
-    await send({ cmd: 'pin', gpio: 5, val: -5 });
-    check('...at both ends', last().pins['5'] === 0, `${last().pins['5']}`);
+    await send({ cmd: 'pin', gpio: 22, val: 999 });
+    check('out of range is clamped, not rejected', last().pins['22'] === 255,
+      `${last().pins['22']}`);
+    await send({ cmd: 'pin', gpio: 22, val: -5 });
+    check('...at both ends', last().pins['22'] === 0, `${last().pins['22']}`);
 
     // The whole safety story: a pin the board did not offer is refused, and
     // refusing is counted as a bad packet rather than quietly ignored.
@@ -1224,10 +1224,10 @@ async function pinChecks() {
       Object.values(last().pins).every((v) => v === 0));
 
     // Nothing may be left energised.
-    await send({ cmd: 'pin', gpio: 5, val: 180 });
+    await send({ cmd: 'pin', gpio: 22, val: 180 });
     await send({ cmd: 'pin', gpio: 21, val: 90 });
     check('two pins can be up at once',
-      last().pins['5'] === 180 && last().pins['21'] === 90);
+      last().pins['22'] === 180 && last().pins['21'] === 90);
     await send({ cmd: 'stop' });
     check('STOP clears every spare pin',
       Object.values(last().pins).every((v) => v === 0),
