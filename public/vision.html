@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="az">
+<html lang="tr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -66,11 +66,11 @@
     <div class="row">
       <h1>Kamera — yolu tanı</h1>
       <div class="row" style="gap:7px">
-        <span class="dot" id="dot"></span><span class="muted" id="state">gözləyir</span>
+        <span class="dot" id="dot"></span><span class="muted" id="state">bekleniyor</span>
       </div>
     </div>
     <div class="row" style="margin-top:10px">
-      <span class="muted"><a href="/">&larr; ana səhifə</a></span>
+      <span class="muted"><a href="/">&larr; ana sayfa</a></span>
       <span class="muted"><a href="/drive">sür &rarr;</a></span>
     </div>
     <div class="err" id="err" hidden></div>
@@ -78,13 +78,12 @@
 
   <div class="card" style="padding:10px">
     <canvas id="view" width="480" height="360"></canvas>
-    <video id="cam" playsinline muted></video>
   </div>
 
   <div class="card">
     <div class="read">
       <div><span class="lbl">Sapma</span><b id="rErr">–</b></div>
-      <div><span class="lbl">Zolaq</span><b id="rBands">–</b></div>
+      <div><span class="lbl">Şerit</span><b id="rBands">–</b></div>
       <div><span class="lbl">FPS</span><b id="rFps">–</b></div>
     </div>
     <div class="steer"><i id="steer"></i></div>
@@ -94,29 +93,36 @@
   </div>
 
   <div class="card">
-    <div class="lbl">Kamera</div>
-    <select id="devs"></select>
+    <div class="lbl">Kamera kaynağı</div>
+    <div class="btnrow" style="margin-top:8px">
+      <button id="srcRpi" class="on">RPi veb-kamera</button>
+      <button id="srcBrowser">Bu brauzer</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0">Kamera <b>Raspberry Piye</b>
+    bağlı ve robotun üstünde — telefon gerekmez, izin sorulmaz,
+    https gerekmez. «Bu tarayıcı» yalnızca masa üstünde deneme içindir.</p>
+    <select id="devs" style="margin-top:10px"></select>
     <div class="btnrow">
-      <button id="start">Başlat</button>
+      <button id="start">Dayandır</button>
       <button id="mirror">Güzgü</button>
       <button id="flip">180°</button>
       <button id="mask">Maska</button>
     </div>
     <div class="btnrow">
-      <button id="pick" style="flex:1">Şəkil / video faylı seç</button>
+      <button id="pick" style="flex:1">Resim / video dosyası seç</button>
       <input type="file" id="file" accept="image/*,video/*" hidden>
     </div>
   </div>
 
   <div class="card">
-    <div class="lbl">Trek növü</div>
+    <div class="lbl">Parkur türü</div>
     <div class="btnrow" style="margin-top:0">
       <button id="mAuto" class="on">Avto</button>
       <button id="mDark">Qara yol</button>
       <button id="mWhite">Ağ yol</button>
     </div>
     <div class="row" style="margin-top:12px">
-      <span class="muted">Hazırkı qərar</span>
+      <span class="muted">Mevcut karar</span>
       <b id="vAuto" style="font:600 13px ui-monospace,Menlo,monospace">–</b>
     </div>
     <div class="muted" style="margin-top:8px" id="modeHint"></div>
@@ -125,18 +131,18 @@
   </div>
 
   <div class="card">
-    <div class="lbl" style="margin-bottom:12px">Tənzimləmə</div>
+    <div class="lbl" style="margin-bottom:12px">Ayarlama</div>
 
     <div class="sl">
-      <div class="row"><span class="muted">ROI — yuxarıdan kəs</span><b id="vRoi">45 %</b></div>
+      <div class="row"><span class="muted">ROI — yukarıdan kes</span><b id="vRoi">45 %</b></div>
       <input type="range" id="roi" min="0" max="80" step="1" value="45">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Eşik düzəlişi (avto üstünə)</span><b id="vBias">0</b></div>
+      <div class="row"><span class="muted">Eşik düzeltmesi (otoya ek)</span><b id="vBias">0</b></div>
       <input type="range" id="bias" min="-60" max="60" step="1" value="0">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Rəng toleransı — nə qədər «ağ»</span><b id="vSat">60</b></div>
+      <div class="row"><span class="muted">Renk toleransı — ne kadar «beyaz»</span><b id="vSat">60</b></div>
       <input type="range" id="sat" min="0" max="150" step="1" value="60">
     </div>
     <div class="sl">
@@ -144,55 +150,59 @@
       <input type="range" id="minw" min="1" max="40" step="1" value="6">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Zolaq sayı</span><b id="vBands">8</b></div>
+      <div class="row"><span class="muted">Şerit sayısı</span><b id="vBands">8</b></div>
       <input type="range" id="bands" min="4" max="14" step="1" value="8">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Yan kəsim — kənarları at</span><b id="vSide">18 %</b></div>
+      <div class="row"><span class="muted">Yan kesim — kenarları at</span><b id="vSide">18 %</b></div>
       <input type="range" id="side" min="0" max="45" step="1" value="18">
     </div>
     <div class="sl">
-      <div class="row"><span class="muted">Davamlılıq — zolaqlar arası max sıçrayış</span><b id="vJump">14 %</b></div>
+      <div class="row"><span class="muted">Süreklilik — şeritler arası max sıçrama</span><b id="vJump">14 %</b></div>
       <input type="range" id="jump" min="4" max="50" step="1" value="14">
     </div>
     <div class="muted" style="margin-top:10px">
-      Avtomatik eşik hər kadrda Otsu üsulu ilə hesablanır — işıq dəyişəndə özü uyğunlaşır.
-      Düzəliş onun üstünə əlavə olunur. Hazırkı eşik: <b id="vThr">–</b>
+      Otomatik eşik her karede Otsu yöntemiyle hesaplanır — ışık değişince kendi uyum sağlar.
+      Düzeltme onun üstüne eklenir. Mevcut eşik: <b id="vThr">–</b>
     </div>
   </div>
 
   <div class="card">
-    <div class="lbl">Bu səhifə nə edir</div>
-    <p class="muted" style="margin:8px 0 0">Hər kadrı boz tona çevirir, avtomatik eşiklə
-    ağ pikselləri ayırır, sonra ROI-ni üfüqi zolaqlara bölür. <b>Qara yol</b> rejimində
-    hər zolaqda iki ağ kənar arasındakı ən enli qara dəhlizi tapır.</p>
-    <p class="muted" style="margin:8px 0 0"><b>Avto</b> rejimində trek növünü özü seçir.
-    Kamera yerə yaxın olduğu üçün kadrın alt-ortası (mavi çərçivə) onsuz da yoldur —
-    deməli yolun rəngini təxmin etmək lazım deyil, birbaşa ölçmək olar. Onu iki
-    yan zolaqla (sarı çərçivələr) və görüntüdəki ümumi ağ payı ilə tutuşdurur;
-    üç əlamətdən ikisi razılaşmasa qərarı dəyişmir.</p>
-    <p class="muted" style="margin:8px 0 0">Üç həndəsi qayda saxta tapıntıları atır:
-    axtarış <b>aşağı zolaqdan başlayır və yuxarı dırmaşır</b> — hər zolaq altındakının
-    davamı olmalıdır; yuxarı getdikcə <b>kənarlar kəsilir</b>; və dəhliz
-    <b>hər iki tərəfdən ağ ilə hüdudlanmalıdır</b>. Sağdakı ağ mebel bu üç qaydadan
-    heç birini ödəmir.</p>
-    <p class="muted" style="margin:8px 0 0"><b>Motorlara heç nə göndərmir.</b>
-    Yalnız baxış və tənzimləmə üçündür.</p>
+    <div class="lbl">Bu sayfa ne yapar</div>
+    <p class="muted" style="margin:8px 0 0">Her kareyi griye çevirir, otomatik eşikle
+    beyaz pikselleri ayırır, sonra ROIyi yatay şeritlere böler. <b>Siyah yol</b> modunda
+    her şeritte iki beyaz kenar arasındaki en geniş siyah koridoru bulur.</p>
+    <p class="muted" style="margin:8px 0 0"><b>Oto</b> modunda parkur türünü kendi seçer.
+    Kamera yere yakın olduğu için karenin alt-ortası (mavi çerçeve) zaten yoldur —
+    yani yolun rengini tahmin etmek gerekmez, doğrudan ölçülebilir. Onu iki
+    yan şeritle (sarı çerçeveler) ve görüntüdeki toplam beyaz oranıyla karşılaştırır;
+    üç işaretten ikisi anlaşmazsa kararı değişmez.</p>
+    <p class="muted" style="margin:8px 0 0">Üç geometrik kural sahte bulguları eler:
+    arama <b>alt şeritten başlar ve yukarı tırmanır</b> — her şerit altındakinin
+    devamı olmalı; yukarı gittikçe <b>kenarlar kesilir</b>; ve koridor
+    <b>her iki taraftan beyazla sınırlanmalı</b>. Sağdaki beyaz mobilya bu üç kuraldan
+    hiçbirini karşılamaz.</p>
+    <p class="muted" style="margin:8px 0 0"><b>Motorlara hiçbir şey göndermez.</b>
+    Yalnızca bakış ve ayarlama içindir.</p>
   </div>
 
 </div>
 
 <script src="/road.js"></script>
+<script src="/cam.js"></script>
 <script src="/wheels.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const view = $('view'), vctx = view.getContext('2d', { willReadFrequently: true });
-const cam = $('cam');
 
-let stream = null, running = false, showMask = false;
+let running = true, showMask = false;
 let mirrored = false, flipped = false;
-let source = null;                 // the <video> or an <img>
 let frames = 0, fpsAt = performance.now();
+
+// The picture comes from the Pi's webcam by default — see public/cam.js. The
+// browser camera and a file are still here, but as the exceptions rather than
+// as the only way in.
+const src = camMount({ onState: paintSource });
 
 // ── controls ────────────────────────────────────────────────────────
 const bind = (id, label, apply) => {
@@ -210,12 +220,12 @@ bind('side',  v => $('vSide').textContent = v + ' %',  v => cfg.side = v / 100);
 bind('jump',  v => $('vJump').textContent = v + ' %',  v => cfg.jump = v / 100);
 
 const MODE_HINT = {
-  auto:  'Kadrın aşağısına baxıb özü qərar verir — kamera yerə yaxın olduğu üçün '
-       + 'təkərin qabağındakı sahə onsuz da yoldur, yəni yolun rəngi ölçülür, '
-       + 'təxmin edilmir. Üç əlamətdən ikisi razılaşmalıdır.',
-  dark:  'Qara zolağı iki ağ kənar arasında axtarır. Ağ mebel və yerə düşən işıq '
-       + 'kənar sayılır — yol ola bilməz, çünki yol qaradır.',
-  white: 'Ən enli ağ zolağı axtarır. Ətrafda başqa ağ əşyalar varsa çətinləşir.',
+  auto:  'Karenin altına bakıp kendi karar verir — kamera yere yakın olduğu için '
+       + 'tekerin önündeki alan zaten yoldur, yani yolun rengi ölçülür, '
+       + 'tahmin edilmez. Üç işaretten ikisi anlaşmalı.',
+  dark:  'Siyah şeridi iki beyaz kenar arasında arar. Beyaz mobilya ve yere düşen ışık '
+       + 'kenar sayılır — yol olamaz, çünkü yol siyahtır.',
+  white: 'En geniş beyaz şeridi arar. Etrafta başka beyaz nesneler varsa zorlaşır.',
 };
 
 function setMode(m) {
@@ -241,84 +251,46 @@ $('mask').addEventListener('click', () => {
 });
 
 // ── camera ──────────────────────────────────────────────────────────
-function fail(msg) {
-  $('err').hidden = false;
-  $('err').textContent = msg;
-  $('dot').className = 'dot bad';
-  $('state').textContent = 'kamera yoxdur';
+function paintSource(st) {
+  $('srcRpi').classList.toggle('on', st.mode === 'rpi');
+  $('srcBrowser').classList.toggle('on', st.mode === 'browser');
+  $('err').hidden = !st.err;
+  if (st.err) $('err').textContent = st.err;
+  $('dot').className = 'dot ' + (st.err ? 'bad' : st.live ? 'ok' : '');
+  $('state').textContent = !running ? 'durdu'
+    : st.err ? 'kamera yok' : st.live ? st.label : 'bekleniyor';
 }
 
 async function listDevices() {
-  try {
-    const all = await navigator.mediaDevices.enumerateDevices();
-    const cams = all.filter(d => d.kind === 'videoinput');
-    $('devs').innerHTML = cams.length
-      ? cams.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Kamera ' + (i + 1)}</option>`).join('')
-      : '<option value="">kamera tapılmadı</option>';
-  } catch { /* labels need permission first; harmless */ }
+  const cams = await src.devices();
+  $('devs').innerHTML = cams.length
+    ? cams.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Kamera ' + (i + 1)}</option>`).join('')
+    : '<option value="">tarayıcı kamerası bulunamadı</option>';
 }
 
-async function startCam() {
-  // getUserMedia only works on localhost or HTTPS. Opening this page from
-  // another machine over plain http:// silently has no camera — say so
-  // instead of leaving a black rectangle.
-  if (!navigator.mediaDevices?.getUserMedia) {
-    fail('Bu ünvanda kameraya icazə yoxdur. Brauzer yalnız localhost və ya '
-       + 'https üzərində kamera verir. Bu səhifəni həmin kompüterdə '
-       + 'http://localhost:8090/vision ilə aç, ya da aşağıdan fayl seç.');
-    return;
-  }
-  try {
-    if (stream) stream.getTracks().forEach(t => t.stop());
-    const id = $('devs').value;
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: id ? { deviceId: { exact: id } }
-                : { facingMode: { ideal: 'environment' } },
-      audio: false,
-    });
-    cam.srcObject = stream;
-    await cam.play();
-    source = cam;
-    running = true;
-    $('err').hidden = true;
-    $('dot').className = 'dot ok';
-    $('state').textContent = 'işləyir';
-    $('start').textContent = 'Dayandır';
-    listDevices();
-  } catch (e) {
-    fail('Kamera açılmadı: ' + e.message);
-  }
-}
+$('srcRpi').addEventListener('click', () => { running = true; src.useRpi(); });
+$('srcBrowser').addEventListener('click', async () => {
+  running = true;
+  await src.useBrowser($('devs').value);
+  listDevices();                      // labels only appear after permission
+});
+$('devs').addEventListener('change', () => {
+  if (src.mode === 'browser') src.useBrowser($('devs').value);
+});
 
 $('start').addEventListener('click', () => {
-  if (running) {
-    running = false;
-    if (stream) stream.getTracks().forEach(t => t.stop());
-    $('start').textContent = 'Başlat';
-    $('state').textContent = 'dayandı';
-    $('dot').className = 'dot';
-  } else startCam();
+  if (running) { running = false; src.stop(); $('start').textContent = 'Başlat'; }
+  else { running = true; src.useRpi(); $('start').textContent = 'Dayandır'; }
 });
-$('devs').addEventListener('change', () => { if (running) startCam(); });
 
-// ── file fallback: works everywhere, no permissions ─────────────────
+// ── file: a recording of the track, for tuning away from the robot ──
 $('pick').addEventListener('click', () => $('file').click());
 $('file').addEventListener('change', () => {
   const f = $('file').files[0];
   if (!f) return;
-  const url = URL.createObjectURL(f);
-  if (f.type.startsWith('video')) {
-    cam.srcObject = null; cam.src = url; cam.loop = true;
-    cam.play(); source = cam;
-  } else {
-    const img = new Image();
-    img.onload = () => { source = img; };
-    img.src = url;
-  }
   running = true;
-  $('err').hidden = true;
-  $('dot').className = 'dot ok';
-  $('state').textContent = 'fayl';
+  $('start').textContent = 'Dayandır';
+  src.useFile(f);
 });
 
 // ── draw ────────────────────────────────────────────────────────────
@@ -395,19 +367,14 @@ function paintMask(data, res) {
 }
 
 // ── loop ────────────────────────────────────────────────────────────
-function ready(src) {
-  if (!src) return false;
-  return src.tagName === 'IMG' ? src.complete : src.readyState >= 2;
-}
-
 function loop() {
   requestAnimationFrame(loop);
-  if (!running || !ready(source)) return;
+  if (!running || !src.ready()) return;
 
   vctx.save();
   vctx.translate(mirrored ? W : 0, flipped ? H : 0);
   vctx.scale(mirrored ? -1 : 1, flipped ? -1 : 1);
-  vctx.drawImage(source, 0, 0, W, H);
+  vctx.drawImage(src.el, 0, 0, W, H);
   vctx.restore();
 
   const img = vctx.getImageData(0, 0, W, H);
@@ -421,28 +388,28 @@ function loop() {
   $('rBands').textContent = res.pts.length + '/' + cfg.bands;
   $('vThr').textContent = res.thr;
 
-  $('vAuto').textContent = (res.mode === 'dark' ? 'QARA YOL · ağ kənar' : 'AĞ YOL')
-    + (cfg.mode === 'auto' ? (autoSeen ? '  (avto)' : '  (avto — hələ qərar yoxdur)') : '  (əl ilə)');
+  $('vAuto').textContent = (res.mode === 'dark' ? 'SİYAH YOL · beyaz kenar' : 'AĞ YOL')
+    + (cfg.mode === 'auto' ? (autoSeen ? '  (oto)' : '  (oto — henüz karar yok)') : '  (elle)');
   if (autoWhy) {
     const w = autoWhy;
     const sc = v => (v >= 0 ? '+' : '') + v.toFixed(2);
-    const arrow = v => v > 0.15 ? ' → ağ' : v < -0.15 ? ' → qara' : ' → qərarsız';
+    const arrow = v => v > 0.15 ? ' → beyaz' : v < -0.15 ? ' → siyah' : ' → kararsız';
     $('autoWhy').style.whiteSpace = 'pre';
     $('autoWhy').textContent =
-      `altdakı sahə   ${String(Math.round(w.probe * 100)).padStart(3)} % ağ   ${sc(w.vP)}\n`
-    + `mərkəz − yan   ${String(Math.round(w.contrast * 100)).padStart(3)} %      ${sc(w.vC)}\n`
-    + `hansı rejim yol tapır  ${w.qd} / ${w.qw}   ${sc(w.vQ)}\n`
+      `alttaki alan   ${String(Math.round(w.probe * 100)).padStart(3)} % beyaz ${sc(w.vP)}\n`
+    + `merkez − yan   ${String(Math.round(w.contrast * 100)).padStart(3)} %      ${sc(w.vC)}\n`
+    + `hangi mod yol buluyor  ${w.qd} / ${w.qw}   ${sc(w.vQ)}\n`
     + `───────────────────────────\n`
-    + `cəmi ${sc(w.sum)}${arrow(Math.abs(w.sum) >= 1.2 ? w.sum : 0)}   (həddi ±1.20)`;
+    + `toplam ${sc(w.sum)}${arrow(Math.abs(w.sum) >= 1.2 ? w.sum : 0)}   (eşik ±1.20)`;
   }
   $('rErr').textContent = eNear == null ? '–'
     : (eNear >= 0 ? '+' : '') + eNear.toFixed(2);
   $('steer').style.left = (50 + (eNear ?? 0) * 48) + '%';
 
   $('hint').textContent = res.pts.length < 2
-    ? 'Yol tapılmır — eşiyi və ya rəng toleransını dəyiş'
+    ? 'Yol bulunamıyor — eşiği ya da renk toleransını değiştir'
     : eNear == null ? '—'
-    : Math.abs(eNear) < 0.08 ? 'Mərkəzdə'
+    : Math.abs(eNear) < 0.08 ? 'Merkezde'
     : eNear < 0 ? 'Yol solda — sola dön' : 'Yol sağda — sağa dön';
 
   frames++;
@@ -454,7 +421,7 @@ function loop() {
 }
 
 setMode('auto');
-listDevices();
+src.useRpi();               // the robot's own eye, straight away and by default
 loop();
 
 // The wheel trim, shown the same way on every page — see public/wheels.js.

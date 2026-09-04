@@ -7,19 +7,25 @@
   "scripts": {
     "start": "node server.js",
     "serve": "node server.js --no-connect",
+    "fake": "node server.js --fake",
     "list": "node server.js --list",
-    "test": "node test/test_marlin.mjs && node test/test_globals.mjs && node test/test_wheels.mjs && node test/test_pilot.mjs && node test/test_analyse.mjs && node test/test_sonar.mjs && node test/test_vision.mjs && node test/test_serial.mjs && node test/test_pages.mjs",
+    "test": "node test/test_marlin.mjs && node test/test_globals.mjs && node test/test_bench.mjs && node test/test_wheels.mjs && node test/test_pilot.mjs && node test/test_analyse.mjs && node test/test_sonar.mjs && node test/test_route.mjs && node test/test_field.mjs && node test/test_camera.mjs && node test/test_vision.mjs && node test/test_serial.mjs && node test/test_pages.mjs",
     "test:marlin": "node test/test_marlin.mjs",
     "test:serial": "node test/test_serial.mjs",
+    "test:bench": "node test/test_bench.mjs",
     "test:globals": "node test/test_globals.mjs",
     "test:wheels": "node test/test_wheels.mjs",
     "test:pilot": "node test/test_pilot.mjs",
     "test:analyse": "node test/test_analyse.mjs",
     "test:sonar": "node test/test_sonar.mjs",
+    "test:route": "node test/test_route.mjs",
+    "test:field": "node test/test_field.mjs",
+    "test:camera": "node test/test_camera.mjs",
     "test:vision": "node test/test_vision.mjs",
     "test:pages": "node test/test_pages.mjs"
   },
   "dependencies": {
+    "jsqr": "^1.4.0",
     "serialport": "^12.0.0",
     "ws": "^8.21.3"
   },

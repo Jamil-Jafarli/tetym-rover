@@ -1,8 +1,8 @@
 /**
- * The two HC-SR04s: the one looking forward, and the one going sround.
+ * The forward HC-SR04, the one bolted to the front of the chassis.
  *
- * Pure, like pilot.js — no DOM, no clock of its own. /obstacle and /sonar draw
- * it, /follow gates its throttle with it, test/test_sonar.mjs runs it in node.
+ * Pure, like pilot.js — no DOM, no clock of its own. /obstacle draws it,
+ * /follow gates its throttle with it, test/test_sonar.mjs runs it in node.
  *
  * An HC-SR04 is a cheap sensor and it lies in specific, known ways, so most of
  * this file is about not believing it too quickly:
@@ -16,7 +16,6 @@
  *     not "something at this angle".
  */
 
-const sclamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 const sround = (v, n = 1) => Math.round(v * 10 ** n) / 10 ** n;
 
 // Outside this the sensor is not measuring, it is guessing. Below the floor an
@@ -26,12 +25,24 @@ const MIN_CM = 2;
 const MAX_CM = 400;
 
 const OBSTACLE_DEFAULTS = {
-  stopCm:   25,   // closer than this and the robot stops
-  clearCm:  35,   // and it may not move again until this far — hysteresis
+  stopCm:   30,   // closer than this and the robot stops
+  clearCm:  40,   // and it may not move again until this far — hysteresis
   confirm:  3,    // readings in a row before believing either of those
   waitMs:   1200, // once clear, how long to wait before rolling again
   creep:    12,   // demand while driving on the test page
 };
+
+// 30 cm is the stopping distance the robot is built around, and it is not an
+// arbitrary round number: at the speeds this thing drives, 30 cm in front of
+// the sensor is roughly where the *robot* is by the time three readings have
+// agreed and the next 20 Hz packet has gone out. Under about 20 cm the sensor's
+// own beam starts seeing the robot's own bumper; much over 40 and it stops for
+// doorways.
+//
+// `clearCm` is deliberately 10 cm further out, and the gap is the whole reason
+// a robot parked at exactly the threshold does not buzz between stopped and
+// going. Both are editable on /obstacle and both are obeyed by the server, so
+// changing them changes the robot rather than one page.
 
 /** A reading is usable, or it is not. Say which rather than substituting zero. */
 function valid(cm) {
@@ -72,8 +83,8 @@ function obstacleStep(st, cm, cfg, now) {
   if (v === null) {
     return {
       blocked: st.phase !== 'go', phase: st.phase, cm: null,
-      reason: st.phase === 'go' ? 'əks-səda yoxdur — yol açıq sayılır'
-                                : 'əks-səda yoxdur — yerində qalır',
+      reason: st.phase === 'go' ? 'yankı yok — yol açık sayılıyor'
+                                : 'yankı yok — yerinde kalıyor',
       waitLeft: st.phase === 'wait' ? Math.max(0, c.waitMs - (now - st.clearedAt)) : 0,
     };
   }
@@ -106,83 +117,13 @@ function obstacleStep(st, cm, cfg, now) {
     phase: st.phase,
     cm: sround(v),
     waitLeft: Math.round(waitLeft),
-    reason: st.phase === 'stop' ? `maneə ${sround(v)} sm — dayanıb`
-      : st.phase === 'wait' ? `yol açıldı — ${(waitLeft / 1000).toFixed(1)} s gözləyir`
-      : `açıq · ${sround(v)} sm`,
+    reason: st.phase === 'stop' ? `engel ${sround(v)} sm — durdu`
+      : st.phase === 'wait' ? `yol açıldı — ${(waitLeft / 1000).toFixed(1)} s bekliyor`
+      : `açık · ${sround(v)} sm`,
   };
-}
-
-/**
- * Where the spinning sensor was pointing when a reading came back.
- *
- * The servo runs continuously, so nothing measures the angle — it is inferred
- * from time, and the whole map is therefore only as good as one number: how
- * long a full turn takes. Measure it once (mark the sensor, time ten turns,
- * divide) and everything else follows.
- *
- * The reading is stamped by the board with the milliseconds since the spin
- * started, so a browser frame arriving late does not smear the map.
- */
-function scanAngle(sinceMs, periodMs, offsetDeg = 0) {
-  const p = Number(periodMs);
-  if (!(p > 0)) return null;                    // not calibrated: no angle, no map
-  const turns = (Number(sinceMs) || 0) / p;
-  return ((turns * 360 + offsetDeg) % 360 + 360) % 360;
-}
-
-/**
- * Fold a stream of (angle, distance) readings into one map.
- *
- * Bins are `binDeg` wide — 6° by default, which is narrower than the sensor's
- * own ~15° beam, so neighbouring bins are not independent. That is fine for
- * looking at; it is not fine for calling two bins two objects.
- *
- * Each bin keeps the NEAREST reading it saw, not the mean. A mean across a
- * doorway averages the door frame with the room beyond it and invents a wall
- * halfway between; the nearest is at least a thing that was really there.
- */
-function scanMap(samples, binDeg = 6) {
-  const step = sclamp(Number(binDeg) || 6, 1, 45);
-  const n = Math.ceil(360 / step);
-  const bins = new Array(n).fill(null);
-  let hits = 0;
-
-  for (const s of samples || []) {
-    const cm = valid(s && s.cm);
-    const a = s && s.ang;
-    if (cm === null || !Number.isFinite(a)) continue;
-    const i = Math.floor((((a % 360) + 360) % 360) / step) % n;
-    hits++;
-    if (bins[i] === null || cm < bins[i].cm) {
-      bins[i] = { ang: i * step + step / 2, cm: sround(cm), at: s.at ?? null };
-    }
-  }
-
-  const seen = bins.filter(Boolean);
-  const nearest = seen.reduce((a, b) => (a === null || b.cm < a.cm ? b : a), null);
-  return {
-    bins,
-    points: seen,
-    hits,
-    covered: sround(seen.length / n, 3),   // how much of the circle has any answer
-    nearest,
-  };
-}
-
-/**
- * How long one revolution took, from the readings themselves.
- *
- * Not implemented as a guess: if you do not know the period you do not get a
- * map. This exists only to turn "I timed ten turns and it took 24 seconds" into
- * the number the rest of the code wants.
- */
-function spinPeriod(seconds, turns) {
-  const s = Number(seconds), t = Number(turns);
-  if (!(s > 0) || !(t > 0)) return null;
-  return Math.round((s * 1000) / t);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { OBSTACLE_DEFAULTS, MIN_CM, MAX_CM, valid,
-                     obstacleState, obstacleStep, scanAngle, scanMap, spinPeriod };
+                     obstacleState, obstacleStep };
 }

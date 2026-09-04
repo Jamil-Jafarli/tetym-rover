@@ -31,6 +31,11 @@ try {
 const here = dirname(fileURLToPath(import.meta.url));
 const PAGE = join(here, '..', 'public', 'vision.html');
 const ROAD = join(here, '..', 'public', 'road.js');
+// The page's picture source. Loaded because the page loads it: the script
+// lifted below calls camMount() near the top, and a missing dependency there
+// leaves every `const` after it in the temporal dead zone — which shows up as
+// a baffling error about an unrelated name.
+const CAM = join(here, '..', 'public', 'cam.js');
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`  [${c ? 'PASS' : 'FAIL'}] ${m}`); };
@@ -103,6 +108,7 @@ await page.evaluate(() => {
 // the tests can call detect() / setMode() exactly as the page does. road.js
 // first: it is what the page itself loads first.
 await page.addScriptTag({ content: readFileSync(ROAD, 'utf8') });
+await page.addScriptTag({ content: readFileSync(CAM, 'utf8') });
 await page.addScriptTag({ content: script });
 
 // `from` seeds the auto decision with a *wrong* answer, so a pass can only

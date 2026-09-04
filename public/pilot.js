@@ -110,7 +110,7 @@ function pilotStep(st, obs, cfg, now) {
       st.steer = near >= 0 ? 1 : -1;      // inner wheel to zero: pivot, slowly
       st.err = near;
       target = clamp(c.crawl, 0, c.max);
-      reason = near >= 0 ? 'yol çox sağda — çevrilir' : 'yol çox solda — çevrilir';
+      reason = near >= 0 ? 'yol çok sağda — dönüyor' : 'yol çok solda — dönüyor';
     } else {
       // PD, with the D term expressed as a look-ahead time rather than a raw
       // gain: `kP * (e + kD * de/dt)` is "where the error will be kD seconds
@@ -128,7 +128,7 @@ function pilotStep(st, obs, cfg, now) {
       const seenFrac = clamp(obs.bands / Math.max(1, obs.want || 8), 0, 1);
       const limit = c.base * (1 - c.curve * bend) * (1 - c.short * (1 - seenFrac));
       target = clamp(limit, Math.min(c.min, c.max), c.max);
-      reason = bend > 0.35 ? 'döngə' : 'düz yol';
+      reason = bend > 0.35 ? 'viraj' : 'düz yol';
     }
   } else {
     if (!st.lostAt) st.lostAt = now;
@@ -138,12 +138,12 @@ function pilotStep(st, obs, cfg, now) {
       // corner drops the chain for a few frames and this is what carries the
       // robot through it.
       target = st.speed * (c.holdCut / 100);
-      reason = 'yol görünmür — son istiqamətlə';
+      reason = 'yol görünmüyor — son yönle';
     } else {
       target = 0;
       st.steer = 0;
       st.recover = false;
-      reason = lost > c.hold + c.give ? 'yol yoxdur — dayandı' : 'yol yoxdur — dayanır';
+      reason = lost > c.hold + c.give ? 'yol yok — durdu' : 'yol yok — duruyor';
       // Past the grace period, ask the caller to drop ENABLE as well. Coasting
       // at 0 % with the driver live is not a resting state to leave a robot in.
       stop = lost > c.hold + c.give;
@@ -284,13 +284,13 @@ function speedStep(st, demand, ff, hz, cfg, now) {
     st.i = 0;
     st.movingSince = 0;
     st.ok = true;
-    return { pin: 0, target: 0, trim: 0, closed: false, ok: true, reason: 'dayanıb' };
+    return { pin: 0, target: 0, trim: 0, closed: false, ok: true, reason: 'durdu' };
   }
 
   if (!c.closed || !(c.hzFull > 0)) {
     st.i = 0;
     return { pin: ff, target: 0, trim: 0, closed: false, ok: true,
-             reason: c.closed ? 'kalibrasiya yoxdur' : 'açıq dövrə' };
+             reason: c.closed ? 'kalibrasyon yok' : 'açık çevrim' };
   }
 
   const target = (demand / 100) * c.hzFull;
@@ -309,7 +309,7 @@ function speedStep(st, demand, ff, hz, cfg, now) {
     st.i = 0;
     st.ok = false;
     return { pin: ff, target, trim: 0, closed: false, ok: false,
-             reason: 'impuls gəlmir — açıq dövrəyə keçdi' };
+             reason: 'darbe gelmiyor — açık çevrime geçti' };
   }
   st.ok = true;
 
@@ -336,7 +336,7 @@ function speedStep(st, demand, ff, hz, cfg, now) {
     trim: Math.round(trim * 10) / 10,
     closed: true,
     ok: true,
-    reason: `hədəf ${Math.round(target)} Hz · ölçülən ${Math.round(meas)} Hz`,
+    reason: `hedef ${Math.round(target)} Hz · ölçülen ${Math.round(meas)} Hz`,
   };
 }
 

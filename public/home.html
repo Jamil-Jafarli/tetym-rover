@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot · ana sayfa</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
+    --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:20px 16px 40px;background:var(--bg);color:var(--ink);
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  .wrap{max-width:660px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+  h1{font-size:24px;margin:0;font-weight:600;letter-spacing:-.3px}
+  .sub{color:var(--dim);font-size:14px;margin:4px 0 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none}
+  .dot.ok{background:var(--accent)} .dot.bad{background:var(--stop)}
+  .muted{color:var(--dim);font-size:13px}
+  .lbl{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim)}
+
+  /* ── nav tiles ─────────────────────────────────────────────── */
+  a.tile{
+    display:block;text-decoration:none;color:inherit;
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:18px;transition:border-color .12s, transform .12s;
+  }
+  a.tile:hover{border-color:var(--idle);transform:translateY(-1px)}
+  .tile .t{display:flex;align-items:center;gap:12px}
+  .tile h2{font-size:17px;margin:0;font-weight:600}
+  .tile p{margin:8px 0 0;color:var(--dim);font-size:13.5px;line-height:1.5}
+  .ico{width:38px;height:38px;border-radius:10px;flex:none;
+    display:flex;align-items:center;justify-content:center}
+  .ico svg{width:20px;height:20px}
+  .arrow{margin-left:auto;color:var(--dim);font-size:20px}
+
+  .stat{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;text-align:center}
+  .stat b{display:block;font:600 20px/1.2 ui-monospace,Menlo,monospace;
+    font-variant-numeric:tabular-nums;margin-top:3px}
+  .warn{border-color:var(--warn);background:color-mix(in srgb,var(--warn) 8%,transparent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div>
+    <h1>Robot kontrol</h1>
+    <p class="sub">ESP32 · iki DAC kanalı · iki yön rölesi</p>
+  </div>
+
+  <!-- live status -->
+  <div class="card" id="statCard">
+    <div class="row">
+      <span class="lbl">Durum</span>
+      <span class="row" style="gap:7px">
+        <span class="dot" id="dot"></span><span class="muted" id="linktxt">bağlanıyor</span>
+      </span>
+    </div>
+    <div class="stat" style="margin-top:14px">
+      <div><span class="lbl">GPIO25</span><b id="pL">–</b></div>
+      <div><span class="lbl">GPIO26</span><b id="pR">–</b></div>
+      <div><span class="lbl">Yön</span><b id="dir" style="font-size:14px">–</b></div>
+    </div>
+    <div class="muted" id="reason" style="margin-top:12px;text-align:center">–</div>
+  </div>
+
+  <a class="tile" href="/dashboard">
+    <div class="t">
+      <span class="ico" style="background:#1e3350">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="9" rx="1"/>
+          <rect x="14" y="3" width="7" height="5" rx="1"/>
+          <rect x="14" y="12" width="7" height="9" rx="1"/>
+          <rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+      </span>
+      <h2>Kontrol paneli — hepsi tek ekranda</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p>Hız, gerilim, ESP32 ve Raspberry Pinin durumu (CPU, sıcaklık,
+       bellek), canlı kamera, öndeki engele mesafe, son okunan QR ve
+       yarışma alanının haritası.</p>
+  </a>
+
+  <a class="tile" href="/setup" id="tSetup">
+    <div class="t">
+      <span class="ico" style="background:#3a3320">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#d29922" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      </span>
+      <h2>Kurulum — ne yapmalıyım</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p id="setupHint">Adım adım liste: her tekerin dönme eşiğini ölç, güç
+       düzeltmesini bul, yaz. Buradaki sayılar bütün sayfalarda kullanılır.</p>
+  </a>
+
+  <a class="tile" href="/drive">
+    <div class="t">
+      <span class="ico" style="background:#1f3a2a">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 5v14M5 12h14"/></svg>
+      </span>
+      <h2>Klavyeyle sür</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p>W ileri · A / D yerinde dönme · S geri. Her tuşun değerleri
+       düzenlenebilir, master seviye ile hepsi birden ölçeklenir.</p>
+  </a>
+
+  <a class="tile" href="/vision">
+    <div class="t">
+      <span class="ico" style="background:#1e3350">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/>
+          <circle cx="12" cy="12" r="3"/></svg>
+      </span>
+      <h2>Kamera — yolu tanı</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p>Siyah yol · beyaz kenar (varsayılan) ya da beyaz yol — canlı bulur,
+       merkezden sapmayı ölçer. Yol aşağıdan, tekerin önünden yakalanır ve
+       şerit şerit yukarı izlenir, bu yüzden yandaki beyaz mobilya ve ışık
+       lekesi seçilmez. Motorlara hiçbir şey göndermez — yalnızca bakış.</p>
+  </a>
+
+  <a class="tile" href="/follow">
+    <div class="t">
+      <span class="ico" style="background:#3a1f2a">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#f85149" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 21c0-6 3-9 7-12M19 3c0 6-3 9-7 12"/>
+          <circle cx="12" cy="12" r="1.5"/></svg>
+      </span>
+      <h2>Yolu takip et — otomatik</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p>Aynı kamera, ama motorlara bağlı: sapmaya göre direksiyon, virajdan önce
+       yavaşlama, her turun kaydı JSON dosyasına. <b>Tekerleri yerden kaldırıp
+       başla.</b></p>
+  </a>
+
+  <a class="tile" href="/tune">
+    <div class="t">
+      <span class="ico" style="background:#1f3340">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 17l5-6 4 3 4-7 5 5"/><path d="M3 21h18"/></svg>
+      </span>
+      <h2>Kaydı oku — ne değişmeli</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p>Sürüşün JSON dosyasını aç: sapma ve hız grafiği, turun hareketleri,
+       ve hangi sayıyı hangi sebeple değiştirmek gerektiği. Turun uzunluğunu
+       yazarsan mesafe kalibrasyonunu kendi hesaplar.</p>
+  </a>
+
+  <a class="tile" href="/obstacle">
+    <div class="t">
+      <span class="ico" style="background:#3d2418">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#d29922" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12h5"/><rect x="14" y="6" width="7" height="12" rx="1"/>
+          <path d="M9.5 10.5l2 1.5-2 1.5"/></svg>
+      </span>
+      <h2>Engelde dur — sonar testi</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p>Öne bakan HC-SR04. Robot düz sürünür, önüne bir şey çıkınca durur,
+       geçtikten sonra bekleyip devam eder. Eşikler burada ayarlanır ve
+       <b>/follow</b>ta da geçerlidir.</p>
+  </a>
+
+  <a class="tile" href="/pins">
+    <div class="t">
+      <span class="ico" style="background:#2b2b3a">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <rect x="7" y="4" width="10" height="16" rx="2"/>
+          <path d="M4 8h3M4 12h3M4 16h3M17 8h3M17 12h3M17 16h3"/></svg>
+      </span>
+      <h2>Boş pinler — 0-255 elle</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p>Robotun kullanmadığı her pine elle değer ver, ne olduğunu yaz.
+       Dikkat: <b>yalnızca GPIO25/26 analogdur</b>, kalanlar PWMdir.</p>
+  </a>
+
+  <a class="tile" href="/manual">
+    <div class="t">
+      <span class="ico" style="background:#3d3218">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#d29922" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/>
+          <path d="M1 14h6M9 8h6M17 16h6"/></svg>
+      </span>
+      <h2>Manual — yüzdeyi elle yaz</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p>Her kanala ayrı yüzde. Motorun hangi gerilimde dönmeye başladığını
+       bulmak ve kabloları kontrol etmek için.</p>
+  </a>
+
+  <div class="card warn">
+    <div class="lbl" style="color:var(--warn)">İlk çalıştırmadan önce</div>
+    <p class="muted" style="margin:8px 0 0">Tekerler yerden kalkmış olsun ve master
+    seviye 15–25 % arasında olsun. Yön değişince robot önce durur —
+    bu bir saniyelik duraklama kasıtlıdır, röleler yalnızca teker durunca geçer.</p>
+  </div>
+
+</div>
+
+<script src="/wheels.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let ws = null;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/`);
+
+  ws.onclose = () => {
+    $('dot').className = 'dot bad';
+    $('linktxt').textContent = 'sunucu erişilemiyor';
+    setTimeout(connect, 1000);
+  };
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = ev => {
+    let s; try { s = JSON.parse(ev.data); } catch (e) { return; }
+    if (s.type !== 'status') return;
+    if (WT) paintSetupTile(WT.fromStatus(s));
+    const e = s.esp || {};
+
+    $('pL').textContent = e.pL != null ? Math.round(e.pL) + ' %' : '–';
+    $('pR').textContent = e.pR != null ? Math.round(e.pR) + ' %' : '–';
+
+    const d = Array.isArray(e.rev) ? e.rev : (s.dir || [false, false]);
+    $('dir').textContent = s.dir_settling ? 'DURUYOR…'
+      : (!d[0] && !d[1]) ? 'İLERİ'
+      : (d[0] && d[1]) ? 'GERİ' : 'FIRLANMA';
+
+    $('reason').textContent = s.reason || '';
+    const ok = s.esp_fresh && !s.serial_error;
+    $('dot').className = 'dot ' + (ok ? 'ok' : 'bad');
+    $('linktxt').textContent = s.serial_error ? 'seri port hatası'
+      : s.esp_fresh ? 'ESP32 bağlı' : 'ESP32den telemetri yok';
+  };
+}
+connect();
+
+// The wheel trim, shown the same way on every page — see public/wheels.js.
+// `mode` is a promise to the reader about THIS page: 'raw' means the
+// numbers below are not applied here, which is deliberate on the pages
+// where the threshold is measured.
+const WT = wheelsMount({ strip: true, mode: 'applied' });
+
+// Say it on the hub, not only inside /setup: an unmeasured robot drives well
+// enough to make you blame the steering gains instead.
+function paintSetupTile(cfg) {
+  const el = document.getElementById('setupHint');
+  if (!el) return;
+  const done = wheelsMeasured(cfg);
+  el.textContent = done
+    ? 'Teker eşikleri ölçüldü. Sayıları değiştirmek ya da mesafe kalibrasyonunu '
+      + 'yapmak için buraya gir.'
+    : '⚠ Tekerlerin dönme eşiği henüz ölçülmedi — robot düşük hızda sapacak. '
+      + 'Adım adım liste burada.';
+}
+</script>
+</body>
+</html>

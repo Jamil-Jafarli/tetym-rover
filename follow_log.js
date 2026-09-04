@@ -30,7 +30,7 @@ const MAX_ROWS = 12000;
 /**
  * public/analyse.js is a plain browser script; evaluate it and take the one
  * function we need. Doing it this way rather than duplicating the logic means
- * "sağ döngə" means the same thing in the file as it does on the page.
+ * "sağ viraj" means the same thing in the file as it does on the page.
  */
 function loadSegments() {
   try {
@@ -82,15 +82,15 @@ export class FollowLog {
         calib: meta.calib ?? null,       // % ↔ m/s, measured by hand
         // Field notes for whoever reads this file cold — including me, later.
         units: {
-          t: 'ms since the run started',
-          err: 'steering error, -1 (road hard left) … +1 (road hard right)',
-          far: 'the same, averaged over the upper half of the chain',
-          bands: 'how many of the requested bands found road',
-          speed: 'commanded speed before the master level, %',
-          p25: 'GPIO25 wheel, % before the master level',
-          p26: 'GPIO26 wheel, %',
-          v25: 'volts the board says it put on GPIO25',
-          dist: 'metres, integrated from `speed` via `calib` — modelled, not measured',
+          t: 'sürüş başladığından beri ms',
+          err: 'direksiyon hatası, -1 (yol tam solda) … +1 (yol tam sağda)',
+          far: 'aynısı, zincirin üst yarısının ortalaması',
+          bands: 'istenen şeritlerden kaçı yol buldu',
+          speed: 'master seviyeden önce komut edilen hız, %',
+          p25: 'GPIO25 tekeri, master seviyeden önce %',
+          p26: 'GPIO26 tekeri, %',
+          v25: 'kartın GPIO25e verdiğini söylediği volt',
+          dist: 'metre, `calib` üzerinden `speed`ten integre — modellendi, ölçülmedi',
         },
         summary: null,
         rows: [],
