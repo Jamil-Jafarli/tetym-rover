@@ -1,21 +1,22 @@
 {
-  "name": "esp32-dac-bench",
-  "version": "1.0.0",
-  "description": "Manual two-channel throttle DAC bench for the ESP32 (GPIO25 / GPIO26) over WebSocket",
+  "name": "ender-gantry",
+  "version": "2.0.0",
+  "description": "Differential-drive rover on a Creality mainboard: hold WASD for manual G-code, or follow a line with the camera",
   "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "fake": "node server.js --fake",
+    "serve": "node server.js --no-connect",
     "list": "node server.js --list",
-    "test": "node test/test_globals.mjs && node test/test_bench.mjs && node test/test_pilot.mjs && node test/test_wheels.mjs && node test/test_analyse.mjs && node test/test_sonar.mjs && node test/test_vision.mjs && node test/test_pages.mjs",
-    "test:bench": "node test/test_bench.mjs",
+    "test": "node test/test_marlin.mjs && node test/test_globals.mjs && node test/test_wheels.mjs && node test/test_pilot.mjs && node test/test_analyse.mjs && node test/test_sonar.mjs && node test/test_vision.mjs && node test/test_serial.mjs && node test/test_pages.mjs",
+    "test:marlin": "node test/test_marlin.mjs",
+    "test:serial": "node test/test_serial.mjs",
+    "test:globals": "node test/test_globals.mjs",
+    "test:wheels": "node test/test_wheels.mjs",
     "test:pilot": "node test/test_pilot.mjs",
     "test:analyse": "node test/test_analyse.mjs",
     "test:sonar": "node test/test_sonar.mjs",
     "test:vision": "node test/test_vision.mjs",
-    "test:globals": "node test/test_globals.mjs",
-    "test:wheels": "node test/test_wheels.mjs",
     "test:pages": "node test/test_pages.mjs"
   },
   "dependencies": {
@@ -24,5 +25,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
   }
 }
