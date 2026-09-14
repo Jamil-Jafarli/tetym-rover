@@ -76,9 +76,23 @@
   .phase>div.on.wait{border-color:var(--warn);color:var(--warn)}
   .phase>div.on.go{border-color:var(--accent);color:var(--accent)}
 
-  /* map */
-  #map{width:100%;display:block;border-radius:10px;background:#0a0d12;aspect-ratio:62/35}
+  /* map — the LiDAR radar, see public/lidarmap.js */
+  .mapwrap{position:relative}
+  #map{width:100%;display:block;border-radius:10px;background:#0a0d12;aspect-ratio:62/35;
+    cursor:grab}
+  #map:active{cursor:grabbing}
   @media (prefers-color-scheme: light){ #map{background:#f7f9fc} }
+  @media (max-width:640px){ #map{aspect-ratio:1/1} }
+  .mapwait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    pointer-events:none;padding:18px;text-align:center}
+  .mapwait>div{background:color-mix(in srgb,var(--panel) 92%,transparent);border:1px solid var(--line);
+    border-radius:12px;padding:14px 18px;max-width:440px;font-size:13.5px}
+  .mapwait[hidden]{display:none}
+  .mapwait code{color:var(--ink)}
+  .maptools button.on{border-color:var(--idle);color:var(--idle)}
+  /* the legend follows LIDAR_COLORS in public/lidar.js, per theme */
+  :root{--lz-occ:#38bdf8;--lz-free:#182a3c}
+  @media (prefers-color-scheme: light){ :root{--lz-occ:#1f6fb4;--lz-free:#d7e2ee} }
   .maplegend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px}
   .maplegend span{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
   .sw{width:10px;height:10px;border-radius:3px;flex:none}
@@ -193,36 +207,44 @@
       <div class="muted" id="oWhy" style="margin-top:10px">–</div>
     </div>
 
-    <!-- the field -->
-    <div class="card wide">
-      <div class="row" style="margin-bottom:12px">
-        <h2 style="margin:0">Yarışma alanı — robot nerede</h2>
+    <!-- the map: the LiDAR occupancy grid, streamed by a webscan scanner -->
+    <div class="card wide" id="lidarCard">
+      <div class="row" style="margin-bottom:12px;flex-wrap:wrap">
+        <h2 style="margin:0">LiDAR haritası — çevre</h2>
         <div class="maptools">
-          <select id="tgtA">
-            <option value="">alma noktası —</option>
-            <option>A1</option><option>A2</option><option>A3</option>
-          </select>
-          <select id="tgtB">
-            <option value="">bırakma noktası —</option>
-            <option>B1</option><option>B2</option><option>B3</option>
-          </select>
-          <button id="planBtn">Rotayı planla</button>
-          <button id="clearPlan">Temizle</button>
+          <span class="dot" id="lzDot"></span><span class="muted" id="lzState">bağlanıyor</span>
+          <button id="lzFollow" class="on">Takip</button>
+          <button id="lzRings" class="on">Halkalar</button>
+          <button id="lzIn" aria-label="yakınlaştır">+</button>
+          <button id="lzOut" aria-label="uzaklaştır">−</button>
+          <button id="lzClear">Haritayı temizle</button>
+          <button id="lzPng">PNG</button>
+          <a class="muted" href="/lidar">tam ekran</a>
         </div>
       </div>
-      <canvas id="map" width="1240" height="700"></canvas>
-      <div class="row" style="margin-top:10px;align-items:flex-start">
-        <div class="maplegend">
-          <span><i class="sw" style="background:#d29922"></i>planlanan rota</span>
-          <span><i class="sw" style="background:#58a6ff"></i>son koddan beri gidilen yol</span>
-          <span><i class="sw" style="background:#ffa657"></i>robot</span>
-          <span><i class="sw" style="background:#a371f7"></i>QR</span>
-          <span><i class="sw" style="background:#f85149"></i>engelde durdu</span>
-        </div>
-        <div class="maptools">
-          <label><input type="checkbox" id="qrTap"> test: QR'a dokunarak okut</label>
-          <button id="resetRoute">Yolu sıfırla</button>
-        </div>
+      <div class="mapwrap">
+        <canvas id="map"></canvas>
+        <div class="mapwait" id="lzWait"><div>
+          <b>Tarayıcı bekleniyor</b><br>
+          <span class="muted" id="lzHow">–</span>
+        </div></div>
+      </div>
+      <div class="kv" style="margin-top:12px">
+        <div><span class="lbl">Tarayıcı</span><b id="lzLabel" class="sm">–</b></div>
+        <div><span class="lbl">Tarama/sn</span><b id="lzRate" class="sm">–</b></div>
+        <div><span class="lbl">Konum</span><b id="lzPos" class="sm">–</b></div>
+        <div><span class="lbl">Yön</span><b id="lzYaw" class="sm">–</b></div>
+        <div><span class="lbl">Poz</span><b id="lzLock" class="sm">–</b></div>
+        <div><span class="lbl">Haritalanan</span><b id="lzArea" class="sm">–</b></div>
+        <div><span class="lbl">Gecikme</span><b id="lzLat" class="sm">–</b></div>
+        <div><span class="lbl">Alınan</span><b id="lzRx" class="sm">–</b></div>
+      </div>
+      <div class="maplegend">
+        <span><i class="sw" style="background:var(--lz-occ)"></i>engel (duvar)</span>
+        <span><i class="sw" style="background:var(--lz-free);border:1px solid var(--line)"></i>boş alan</span>
+        <span><i class="sw" style="background:#3fb950"></i>anlık tarama</span>
+        <span><i class="sw" style="background:#58a6ff"></i>tarayıcının yolu</span>
+        <span><i class="sw" style="background:#d29922"></i>poz tahmini</span>
       </div>
       <p class="muted" id="mapNote" style="margin:10px 0 0">–</p>
     </div>
@@ -245,6 +267,24 @@
       </div>
       <div class="chips" id="navPlan"></div>
       <div class="muted" id="navWhy" style="margin-top:10px">–</div>
+      <div class="maptools" style="margin-top:14px">
+        <select id="tgtA">
+          <option value="">alma noktası —</option>
+          <option>A1</option><option>A2</option><option>A3</option>
+        </select>
+        <select id="tgtB">
+          <option value="">bırakma noktası —</option>
+          <option>B1</option><option>B2</option><option>B3</option>
+        </select>
+        <button id="planBtn">Rotayı planla</button>
+        <button id="clearPlan">Temizle</button>
+      </div>
+      <div class="maptools" style="margin-top:8px">
+        <select id="qrTest" title="Kamera gerçek okuyucudur — bu yalnızca prova içindir">
+          <option value="">test: QR okut —</option>
+        </select>
+        <button id="resetRoute">Yolu sıfırla</button>
+      </div>
     </div>
 
     <!-- the lift -->
@@ -323,26 +363,26 @@
 <script src="/lift.js"></script>
 <script src="/cam.js"></script>
 <script src="/wheels.js"></script>
+<script src="/lidar.js"></script>
+<script src="/lidarmap.js"></script>
 <script>
 /**
  * One screen for the whole robot.
  *
- * Everything here is read-only except two buttons, and everything comes from
+ * Everything here is read-only except a few buttons, and everything comes from
  * one WebSocket status frame at 10 Hz plus one <img> streaming MJPEG. There is
  * no logic on this page: the obstacle verdict, the route, the QR history and
  * the Pi's vitals are all decided server-side, so what is drawn is what the
  * robot is doing rather than a second opinion computed in a tab.
  *
- * The one thing the page does compute is the map's *drawing*, from the path it
- * fetched once over HTTP plus the positions arriving in the status stream. See
- * public/route.js for what the route is and — more importantly — is not.
+ * The map is the one thing with a second socket: the LiDAR scans, relayed by
+ * the server from a webscan scanner on /ws and built into an occupancy grid
+ * here. See public/lidarmap.js for what that map is and — more importantly —
+ * is not.
  */
 const $ = id => document.getElementById(id);
 
 let ws = null, status = null;
-let path = [];            // the route so far: [{x, y}]
-let marks = [];           // QR reads and obstacle stops
-let lastSeq = -1;
 
 const fmt = (v, n = 1) => (v == null || !Number.isFinite(Number(v)) ? '–' : Number(v).toFixed(n));
 const mb = (b) => (b == null ? '–' : (b / 1048576).toFixed(0) + ' MB');
@@ -361,7 +401,6 @@ function dur(s) {
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/`);
-  ws.onopen = () => loadRoute();
   ws.onclose = () => {
     $('dot').className = 'dot bad';
     $('state').textContent = 'sunucu erişilemiyor';
@@ -373,51 +412,10 @@ function connect() {
     if (s.type !== 'status') return;
     if (WT) WT.fromStatus(s);
     status = s;
-    trackRoute(s);
     paint(s);
   };
 }
 const sendWs = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
-
-/**
- * The path, in two halves.
- *
- * The whole thing is fetched once — it is thousands of points and does not
- * belong in a frame that goes out ten times a second. After that the status
- * carries only where the robot is now, and the page appends. `seq` going
- * backwards means the server started a new route, so throw the old one away
- * rather than drawing a line from wherever we were to the new origin.
- */
-async function loadRoute() {
-  try {
-    const r = await fetch('/api/route', { cache: 'no-store' });
-    const j = await r.json();
-    path = Array.isArray(j.path) ? j.path.slice() : [];
-    marks = Array.isArray(j.marks) ? j.marks.slice() : [];
-    lastSeq = j.seq ?? -1;
-  } catch { /* the socket will keep the map alive from here on anyway */ }
-}
-
-function trackRoute(s) {
-  const r = s.route;
-  if (!r) return;
-  if (r.seq < lastSeq) { path = []; marks = []; }          // the route was reset
-  lastSeq = r.seq;
-  const last = path[path.length - 1];
-  if (!last || Math.hypot(r.x - last.x, r.y - last.y) >= 0.03) {
-    // Stamped, because the field map draws only the part of the trail that
-    // belongs to the current QR anchor — see drawField().
-    path.push({ x: r.x, y: r.y, at: Date.now() });
-    if (path.length > 4000) path.shift();
-  }
-  if (Array.isArray(r.marks) && r.marks.length) {
-    // The status carries only the last dozen; keep everything we have seen.
-    for (const m of r.marks) {
-      if (!marks.some((k) => k.at === m.at && k.kind === m.kind)) marks.push(m);
-    }
-    while (marks.length > 200) marks.shift();
-  }
-}
 
 // ── paint ───────────────────────────────────────────────────────────
 function paint(s) {
@@ -435,7 +433,7 @@ function paint(s) {
   paintLift(s);
   paintEsp(s);
   paintRpi(s);
-  drawField(s);
+  paintLidar(s);
 }
 
 function paintNow(s) {
@@ -672,251 +670,86 @@ function paintLift(s) {
 
 // ── the map ─────────────────────────────────────────────────────────
 /**
- * The competition field, drawn the way the rule book draws it.
+ * The LiDAR map: webscan's radar, fed by the relay on this same server.
  *
- * Nodes, branches, the gate and the nine codes are the schematic; the robot,
- * the plan and the trail are the run. They are drawn in one picture on purpose:
- * a route map with no field on it cannot tell you the robot is about to miss a
- * turn, and a field with no robot on it is a printout.
+ * What it is: an occupancy grid built from planar scans — walls where beams
+ * ended, free space where they passed, and unknown everywhere nothing looked.
+ * The phone that sends them (the webscan ARKit app on an iPhone with LiDAR, or
+ * the browser scanner) keeps its own pose, from ARKit or from scan matching.
  *
- * North is up and the origin is D1, both of which are properties of the field
- * rather than of the run — unlike the old dead-reckoning-only map, this one
- * does not move when the route is reset.
+ * What it is not: the competition field. The map is in the scanner's own
+ * frame — its origin is wherever the phone started the session — and it is
+ * not rotated onto the field, because nothing measures how the phone sits on
+ * the robot. Where the robot is on the field is the navigation card's job,
+ * from the QR codes; this card is what is physically around it.
+ *
+ * The room comes from ?lidar=<room> in the URL, or from the server's
+ * --lidar-room, so two scanners in two rooms can be watched from two tabs.
  */
-const MAP_PAD = 1.0;                       // metres of margin around the field
-const MAP_BOX = { w: 1.24, h: 1.0 };       // the drawn size of a lettered box
+const LIDAR_URL_ROOM = new URLSearchParams(location.search).get('lidar');
+const LZ = lidarMount({ canvas: $('map'), room: LIDAR_URL_ROOM || 'default' });
 
-function mapView(cv) {
-  const b = fieldBounds(FIELD, MAP_PAD);
-  const sc = Math.min(cv.width / b.w, cv.height / b.h);
-  const ox = (cv.width - b.w * sc) / 2, oy = (cv.height - b.h * sc) / 2;
-  return {
-    sc, b,
-    px: (x) => ox + (x - b.minX) * sc,
-    py: (y) => oy + (b.maxY - y) * sc,
-  };
+function paintLidar(s) {
+  const srv = s.lidar;
+  if (!srv) return;
+  if (!LIDAR_URL_ROOM) LZ.setRoom(srv.room);
+  const st = LZ.stats;
+  const live = LZ.live;
+
+  // Frames arriving decide the headline, not a sender saying it is scanning:
+  // a phone in a pocket with the app open is "active" and sends nothing.
+  $('lzDot').className = 'dot ' + lidarDotClass(st, srv, live);
+  $('lzState').textContent = lidarStateText(st, srv, live);
+  $('lzWait').hidden = st.scans > 0;
+  $('lzHow').innerHTML = lidarHowHtml(st, srv, escapeHtml, 'lidar');
+
+  $('lzLabel').textContent = srv.label || (srv.senders ? 'bağlı' : 'yok');
+  $('lzRate').textContent = lidarRateText(st, live);
+  // Shown with north up: the grid's -Z is forward, so the second number flips.
+  $('lzPos').textContent = st.x == null ? '–' : `${fmt(st.x, 2)}, ${fmt(-st.z, 2)} m`;
+  $('lzYaw').textContent = st.yawDeg == null ? '–' : `${fmt(st.yawDeg, 0)}°`;
+  $('lzLock').textContent = lidarPoseText(st, live);
+  $('lzLock').className = 'sm ' + (live && st.tracking === 'lost' ? 'bad' : '');
+  $('lzArea').textContent = `${fmt(st.area, 1)} m²`;
+  $('lzLat').textContent = st.latencyMs == null ? '–' : `${Math.round(st.latencyMs)} ms`;
+  $('lzRx').textContent = st.bytes < 1048576 ? `${fmt(st.bytes / 1024, 0)} KB`
+                                             : `${fmt(st.bytes / 1048576, 1)} MB`;
+  $('lzFollow').className = LZ.radar.follow ? 'on' : '';
+  $('lzRings').className = LZ.radar.showRings ? 'on' : '';
+
+  const notes = ['Harita tarayıcının kendi koordinatlarındadır: başlangıç noktası telefonun '
+    + 'taramaya başladığı yer, yarışma alanına hizalanmamıştır. Sahadaki konum QR kodlarından gelir.'];
+  if (srv.note) notes.push(`Tarayıcı: ${escapeHtml(srv.note)}.`);
+  if (live && st.tracking === 'lost') notes.push('ARKit telefonun yerini şu an bilmiyor (çok hızlı, karanlık '
+    + 'ya da boş duvar): bu taramalar tahmini pozdan geliyor, harita kayabilir.');
+  if (st.scans && !st.calibrated) notes.push('Tarayıcı ölçek kalibrasyonu yapmadı — mesafeler '
+    + 'yaklaşıktır (tarayıcıdaki derinlik modeli; LiDAR uygulamasında bu olmaz).');
+  if (st.heightM) notes.push(`Kesit yüksekliği ${fmt(st.heightM, 2)} m: bunun altındaki ve `
+    + 'üstündeki engeller haritada yoktur.');
+  $('mapNote').innerHTML = notes.join(' ');
 }
 
-/** A point of the dead-reckoned path, in field metres. */
-function mapAnchored(a, p) {
-  const th = (a.bearing - a.rb) * Math.PI / 180;
-  const dx = p.x - a.rx, dy = p.y - a.ry;
-  const c = Math.cos(th), sn = Math.sin(th);
-  return { x: a.x + dx * c + dy * sn, y: a.y + dy * c - dx * sn };
-}
-
-function drawField(s) {
-  const cv = $('map'), g = cv.getContext('2d');
-  const f = s.field || {};
-  const dark = !matchMedia('(prefers-color-scheme: light)').matches;
-  const ink = dark ? '#e6edf3' : '#1c2128';
-  const line = dark ? '#41556e' : '#1f4e79';
-  const label = dark ? '#f0736a' : '#c0392b';
-  const dim = dark ? '#8b949e' : '#5a6570';
-  const { sc, b, px, py } = mapView(cv);
-  g.clearRect(0, 0, cv.width, cv.height);
-
-  // ── the arena wall ──
-  g.strokeStyle = line; g.lineWidth = 2.5;
-  g.strokeRect(px(b.minX + 0.25), py(b.maxY - 0.25),
-               (b.w - 0.5) * sc, (b.h - 0.5) * sc);
-
-  // ── the plan, under everything, so the field stays readable through it ──
-  const plan = f.plan || [];
-  if (plan.length > 1) {
-    g.strokeStyle = '#d29922';
-    g.lineWidth = 11;
-    g.lineJoin = 'round'; g.lineCap = 'round';
-    g.globalAlpha = 0.32;
-    g.beginPath();
-    plan.forEach((id, i) => {
-      const n = fieldNode(id, FIELD);
-      if (!n) return;
-      i ? g.lineTo(px(n.x), py(n.y)) : g.moveTo(px(n.x), py(n.y));
-    });
-    g.stroke();
-    g.globalAlpha = 1;
-  }
-
-  // ── the corridors: dashed between junctions, solid into a box ──
-  //
-  // Exactly the schematic's own distinction. The dashed part is the line the
-  // robot follows between nodes; the solid stub is the last stretch into a
-  // pick-up, a drop or the start area, which is where the code stands.
-  for (const e of FIELD.edges) {
-    const a = fieldNode(e.a, FIELD), z = fieldNode(e.b, FIELD);
-    const q = e.qr ? fieldQr(e.qr, FIELD) : null;
-    const boxEnd = ['pick', 'drop', 'start'].includes(z.kind) ? z
-                 : ['pick', 'drop', 'start'].includes(a.kind) ? a : null;
-    g.strokeStyle = line; g.lineWidth = 2.5;
-    g.setLineDash([9, 7]);
-    g.beginPath();
-    g.moveTo(px(a.x), py(a.y)); g.lineTo(px(z.x), py(z.y));
-    g.stroke();
-    g.setLineDash([]);
-    if (boxEnd && q) {
-      g.lineWidth = 3;
-      g.beginPath();
-      g.moveTo(px(q.x), py(q.y)); g.lineTo(px(boxEnd.x), py(boxEnd.y));
-      g.stroke();
-    }
-  }
-
-  // ── the boxes and the junctions ──
-  for (const n of FIELD.nodes) {
-    if (n.kind === 'node') {
-      const w = 0.52 * sc, h = 0.3 * sc;
-      g.fillStyle = dark ? '#0e1116' : '#fff';
-      g.strokeStyle = line; g.lineWidth = 2;
-      g.beginPath(); g.rect(px(n.x) - w / 2, py(n.y) - h / 2, w, h);
-      g.fill(); g.stroke();
-      g.fillStyle = ink;
-      g.font = `600 ${Math.round(0.19 * sc)}px ui-sans-serif, system-ui, sans-serif`;
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillText(n.id, px(n.x), py(n.y) + 1);
-    } else if (n.kind === 'gate') {
-      // The door: a bar across the corridor, because that is what it does to
-      // the robot — the corridor is open on both sides of it and shut at it
-      // until the factory automation says otherwise.
-      g.strokeStyle = dark ? '#58a6ff' : '#1f4e79';
-      g.lineWidth = 8; g.lineCap = 'butt';
-      g.beginPath();
-      g.moveTo(px(n.x), py(n.y + 0.62)); g.lineTo(px(n.x), py(n.y - 0.62));
-      g.stroke();
-      const w = MAP_BOX.w * sc, h = 1.35 * sc;
-      const bx = px(n.x) - w / 2, by = py(n.y - 0.9);
-      g.fillStyle = dark ? '#0e1116' : '#fff';
-      g.strokeStyle = line; g.lineWidth = 2;
-      g.beginPath(); g.rect(bx, by, w, h); g.fill(); g.stroke();
-      g.fillStyle = label;
-      g.font = `600 ${Math.round(0.15 * sc)}px ui-sans-serif, system-ui, sans-serif`;
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      const words = ['Fabrika', 'otomasyon', 'sistemi', 'kontrollü', 'kapı'];
-      words.forEach((w2, i) => g.fillText(w2, px(n.x),
-        by + h / 2 + (i - (words.length - 1) / 2) * 0.19 * sc));
-    } else {
-      const w = MAP_BOX.w * sc, h = MAP_BOX.h * sc;
-      const isStop = (f.stops || []).includes(n.id);
-      g.fillStyle = dark ? '#0e1116' : '#fff';
-      g.strokeStyle = isStop ? '#d29922' : line;
-      g.lineWidth = isStop ? 4 : 2;
-      g.beginPath(); g.rect(px(n.x) - w / 2, py(n.y) - h / 2, w, h);
-      g.fill(); g.stroke();
-      g.fillStyle = label;
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      if (n.kind === 'start') {
-        g.font = `600 ${Math.round(0.17 * sc)}px ui-sans-serif, system-ui, sans-serif`;
-        g.fillText('Başlangıç', px(n.x), py(n.y) - 0.1 * sc);
-        g.fillText('alanı', px(n.x), py(n.y) + 0.12 * sc);
-      } else {
-        g.font = `600 ${Math.round(0.33 * sc)}px ui-sans-serif, system-ui, sans-serif`;
-        g.fillText(n.id, px(n.x), py(n.y) + 1);
-      }
-    }
-  }
-
-  // ── the codes ──
-  for (const q of fieldQrs(FIELD)) {
-    const on = f.qr === q.qr;
-    drawQrGlyph(g, px(q.x), py(q.y), 0.30 * sc, on, dark);
-    g.fillStyle = on ? '#a371f7' : dim;
-    g.font = `600 ${Math.round(0.16 * sc)}px ui-monospace, Menlo, monospace`;
-    g.textAlign = 'left'; g.textBaseline = 'middle';
-    g.fillText(q.qr, px(q.x) + 0.2 * sc, py(q.y) + 0.24 * sc);
-  }
-
-  // ── the run: the trail since the last code, and where it stopped ──
-  const a = f.anchor;
-  if (a && a.rx !== null) {
-    const trail = path.filter((p) => !p.at || p.at >= a.at - 500).map((p) => mapAnchored(a, p));
-    if (trail.length > 1) {
-      g.strokeStyle = '#58a6ff'; g.lineWidth = 3;
-      g.lineJoin = 'round'; g.lineCap = 'round';
-      g.beginPath();
-      trail.forEach((p, i) => (i ? g.lineTo(px(p.x), py(p.y)) : g.moveTo(px(p.x), py(p.y))));
-      g.stroke();
-    }
-    for (const m of marks) {
-      if (m.kind !== 'stop' || m.at < a.at) continue;
-      const p = mapAnchored(a, m);
-      g.fillStyle = '#f85149';
-      g.beginPath(); g.arc(px(p.x), py(p.y), 6, 0, 7); g.fill();
-    }
-  }
-
-  // ── the robot ──
-  const pose = f.pose || {};
-  if (pose.known) {
-    g.save();
-    g.translate(px(pose.x), py(pose.y));
-    g.rotate((pose.bearing || 0) * Math.PI / 180);   // bearing is clockwise from north
-    g.fillStyle = '#ffa657';
-    g.beginPath();
-    g.moveTo(0, -17); g.lineTo(11, 13); g.lineTo(0, 7); g.lineTo(-11, 13);
-    g.closePath(); g.fill();
-    g.restore();
-    // A ring on the junction it is driving at, so "turn left at D2" has a D2
-    // you can see without reading the panel.
-    const to = fieldNode(f.to, FIELD);
-    if (to && f.turn) {
-      g.strokeStyle = '#d29922'; g.lineWidth = 3;
-      g.beginPath(); g.arc(px(to.x), py(to.y), 0.34 * sc, 0, 7); g.stroke();
-    }
-  } else {
-    // No robot to draw, and no honest place to draw one. Said in the corner
-    // rather than across the middle, because the middle of this picture is the
-    // gate and the corridor, and covering those to announce an absence is how
-    // a map ends up less useful than no map.
-    g.fillStyle = dim;
-    g.font = '600 20px ui-sans-serif, system-ui, sans-serif';
-    g.textAlign = 'right'; g.textBaseline = 'middle';
-    g.fillText('robot nerede olduğunu bilmiyor — QR bekleniyor', cv.width - 16, 24);
-  }
-
-  // ── scale bar ──
-  g.strokeStyle = ink; g.fillStyle = ink; g.lineWidth = 2;
-  const y0 = cv.height - 20;
-  g.beginPath();
-  g.moveTo(18, y0); g.lineTo(18 + sc, y0);
-  g.moveTo(18, y0 - 6); g.lineTo(18, y0 + 6);
-  g.moveTo(18 + sc, y0 - 6); g.lineTo(18 + sc, y0 + 6);
-  g.stroke();
-  g.font = '600 15px ui-monospace, Menlo, monospace';
-  g.textAlign = 'left'; g.textBaseline = 'middle';
-  g.fillText('1 m', 18 + sc + 9, y0);
-
-  const r = s.route || {};
-  $('mapNote').textContent = (f.qr
-      ? `Konum ${f.qr} kodundan ölçüldü: ${f.from} → ${f.to} etabı, `
-        + `${fmt(f.pose.dead, 1)} m sonrası. `
-      : 'Henüz hiçbir QR okunmadı, bu yüzden robot haritada gösterilmiyor. ')
-    + (r.calibrated
-      ? `Bu turda ${fmt(r.dist, 1)} m gidildi. Kodlar arasındaki yol `
-        + "enkodersiz hesaplanıyor: konum her QR'da düzeliyor, aralarda ise "
-        + 'kaymayı biriktiriyor. '
-      : 'Mesafe kalibrasyonu yok, bu yüzden kodlar arasında hiçbir şey '
-        + "hesaplanmıyor — robot bir sonraki QR'a kadar son kodun üzerinde "
-        + 'kalıyor. /setup → «mesafe kalibrasyonu». ')
-    + `Saha ölçüleri şemadan alındı — düğümler arası `
-    + `${fmt(fieldDist('D1', 'D2', FIELD), 1)} m.`;
-}
-
-/** A QR sticker: a filled square with the three finder eyes, as on the field. */
-function drawQrGlyph(g, x, y, size, active, dark) {
-  const s = Math.max(10, size), h = s / 2;
-  g.fillStyle = active ? '#a371f7' : (dark ? '#c9d1d9' : '#39424e');
-  g.fillRect(x - h, y - h, s, s);
-  g.fillStyle = dark && !active ? '#0e1116' : '#fff';
-  const e = s * 0.26, o = s * 0.12;
-  g.fillRect(x - h + o, y - h + o, e, e);
-  g.fillRect(x + h - o - e, y - h + o, e, e);
-  g.fillRect(x - h + o, y + h - o - e, e, e);
-}
-
-$('resetRoute').addEventListener('click', () => {
-  sendWs({ cmd: 'route_reset' });
-  path = []; marks = []; lastSeq = -1;
+$('lzFollow').addEventListener('click', () => { LZ.radar.follow = !LZ.radar.follow; });
+$('lzRings').addEventListener('click', () => { LZ.radar.showRings = !LZ.radar.showRings; });
+$('lzIn').addEventListener('click', () => LZ.zoom(1.35));
+$('lzOut').addEventListener('click', () => LZ.zoom(1 / 1.35));
+// Cleared on the server too, so a reload does not replay the old map back.
+// The phone keeps its own copy and the next scans rebuild from here.
+$('lzClear').addEventListener('click', () => {
+  sendWs({ cmd: 'lidar_reset', room: LZ.stats.room });
+  LZ.clear();
 });
+$('lzPng').addEventListener('click', async () => {
+  const blob = await LZ.exportPng();
+  if (!blob) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `lidar-${LZ.stats.room}-${Date.now()}.png`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+});
+
+$('resetRoute').addEventListener('click', () => sendWs({ cmd: 'route_reset' }));
 
 // ── the mission ─────────────────────────────────────────────────────
 // Pick a station, pick a drop, and the server plans the junctions in between.
@@ -931,22 +764,18 @@ $('clearPlan').addEventListener('click', () => {
   sendWs({ cmd: 'field_mission', targets: [] });
 });
 
-// Tapping a code on the map reports it as read. This is a rehearsal tool — the
-// camera is the real reader — so it is behind a checkbox and labelled a test:
-// a stray click that moves the robot's idea of where it is would be worse than
-// no map at all.
-$('map').addEventListener('click', (ev) => {
-  if (!$('qrTap').checked) return;
-  const cv = $('map'), rect = cv.getBoundingClientRect();
-  const x = (ev.clientX - rect.left) * cv.width / rect.width;
-  const y = (ev.clientY - rect.top) * cv.height / rect.height;
-  const { px, py } = mapView(cv);
-  let best = null, bestD = 26;
-  for (const q of fieldQrs(FIELD)) {
-    const d = Math.hypot(px(q.x) - x, py(q.y) - y);
-    if (d < bestD) { bestD = d; best = q; }
-  }
-  if (best) sendWs({ cmd: 'field_qr', text: best.qr });
+// Reporting a code by hand. A rehearsal tool — the camera is the real reader —
+// so it is a select labelled test, and it springs back after every use: a
+// stray pick that moves the robot's idea of where it is would be worse than
+// no fix at all.
+for (const q of fieldQrs(FIELD)) {
+  const o = document.createElement('option');
+  o.value = q.qr; o.textContent = `test: ${q.qr} okundu`;
+  $('qrTest').appendChild(o);
+}
+$('qrTest').addEventListener('change', () => {
+  if ($('qrTest').value) sendWs({ cmd: 'field_qr', text: $('qrTest').value });
+  $('qrTest').value = '';
 });
 
 // The camera is an <img> with an MJPEG URL in it — that is the whole client

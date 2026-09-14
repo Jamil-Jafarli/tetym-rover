@@ -142,7 +142,9 @@ One WebSocket, one port:
 | | |
 |---|---|
 | **/** | hub — live status and links to everything |
-| **/dashboard** | everything at once: speed, volts, ESP32 + Pi health, camera, obstacle, QR, map |
+| **/dashboard** | everything at once: speed, volts, ESP32 + Pi health, camera, obstacle, QR, LiDAR map |
+| **/panel** | the big-screen panel: everything on /dashboard plus driving, fixed at 1920 × 1080 — see below |
+| **/lidar** | the LiDAR map full screen — also on the printer machine |
 | **/setup** | what to measure, in order, and where the number goes |
 | **/drive** | hold **W / A / S / D** to drive |
 | **/vision** | camera; finds the road and shows the steering error |
@@ -169,7 +171,8 @@ where the threshold is measured, and measuring through the correction you are
 trying to find gives you a number that is not the number. Each page says which
 it is in the strip at the top: **XAM ÇIXIŞ** (raw) or **TƏKƏR AYARI** (applied).
 
-No board yet? `npm run fake` runs a simulated ESP32 and the full UI.
+No board yet? `npm run fake` runs a simulated ESP32, a simulated LiDAR and the
+full UI.
 
 | Flag | Default | What it does |
 |---|---|---|
@@ -932,7 +935,7 @@ you leave open on a laptop while somebody else drives.
 | the strip along the top | speed, both wheel percentages with their volts and DAC codes, distance to the obstacle, distance travelled, direction and ENABLE |
 | **camera** | the Pi's webcam, live |
 | **maneə** | the forward HC-SR04 as a gauge, with the two thresholds drawn on it and the phase the server is in. The card turns red when the sensor is actually holding the throttle down — not merely when something is in view |
-| **yarışma alanı** | the field map, below: the schematic, the plan, and the robot on it |
+| **LiDAR haritası** | the LiDAR map, below: an occupancy grid streamed by a webscan scanner, with the live scan and the scanner's path |
 | **kaldırma** | the lift's two buttons, what the bridge is doing, and which pins it is on — see §8b |
 | **konum ve sıradaki dönüş** | which leg it is on, which junction is next and what it does there — left, right, straight, turn round, or stop |
 | **QR** | the last code read, how long ago, and the ones before it |
@@ -948,9 +951,138 @@ watch is not CPU, it is **`gərginlik aşağıdır`** — the firmware's undervo
 flag. A powerbank that cannot hold 5 V under the motors throttles the Pi, and
 the symptom is "the camera went choppy", which nobody attributes to the battery.
 
-### The map — the competition field
+### The big screen — `/panel`
 
-The map is the arena, drawn the way the rule book draws it (`Şəkil 1`): the
+`/dashboard` scrolls and reflows, which is right for a phone and wrong for the
+monitor beside the track. `/panel` is the same robot laid out once at exactly
+**1920 × 1080**, no scrolling, nothing moving when a number gets longer:
+
+| | |
+|---|---|
+| header | state, reason, links to every other page, the clock, and a big **STOP** |
+| strip | speed, both wheels (%, V, DAC), distance ahead, distance travelled, direction and ENABLE, where it is on the field, LiDAR rate, the Pi |
+| left | camera · obstacle gauge with the **brake switch** · last QR and its history |
+| centre | the LiDAR map with its tools and room picker · position on the field, the next turn, the plan, mission pickers, test QR, route reset |
+| right | **driving** — ARM, STOP · IDLE, the W A S D pad, NORMAL / SÜRAT, the master level, what the board reports per wheel, the wheel trim · the lift · ESP32 and Pi |
+
+On any other size the whole screen is scaled to fit, keeping its proportions.
+
+It drives with the same commands and the same 400 ms dead-man as `/drive`:
+the held keys or the engaged gear go out at 20 Hz while armed, a lost focus
+releases every key, and **space** is STOP. Switching the brake off asks first,
+and while it is off the obstacle card and the strip say so in colour. Turning
+it off sends the stored obstacle thresholds back with the flag, because the
+config merge is shallow and `{guard}` alone would reset them.
+
+What is deliberately not on it is anything you tune rather than use — the key
+table, the gear codes, the pilot and detector sliders, the spare pins, run
+analysis. Those are one click away in the header. `/follow` is not embedded
+either: the line follower runs its detector in its own tab, and two copies of
+the thing steering the robot is one too many.
+
+### The map — LiDAR, from webscan
+
+The map on the dashboard is **webscan's radar**: a 2D occupancy grid of what is
+physically around the scanner — walls where beams ended, free space where they
+passed, and unknown wherever nothing has looked. `/lidar` is the same map full
+screen, with the room picker and every number.
+
+```
+iPhone (webscan ARKit app, LiDAR)  ──SCN1, ~560 B/scan──▶  this server, /ws  ──▶  /dashboard, /lidar
+   or webscan's browser scanner                             (the relay)
+```
+
+The relay that used to be webscan's own Express server lives inside this one
+now (`lidar_relay.js`), on the same port, speaking the same protocol to the
+byte: `/ws?room=<name>&role=sender|viewer`, binary SCN1 frames, JSON control
+messages. So **nothing in webscan changes.**
+
+**The phone finds the rover by itself.** Like webscan's own relay, this server
+announces `_webscan._tcp` over mDNS (`lidar_discovery.js`) with the same TXT
+keys the app reads — `tls` and `path` — so the app lists it as
+**`tetym-rover on <hostname>`**: open the app, set the room, press Start. That
+matters more on the rover than it did in webscan, because the Pi is usually on
+the ESP32's access point *and* a router, and mDNS answers from every interface
+while a typed address only works from one network. On shutdown it sends
+goodbye packets, so a phone does not keep dialling a server that is gone.
+
+Where multicast is blocked (some guest and corporate wifi), type the address in
+the app's *Enter an address manually* instead — the startup output prints one
+per interface:
+
+| | |
+|---|---|
+| relay URL | `ws://<pi>:8090` (`wss://` with `--https`) |
+| room | `default`, or whatever `--lidar-room` says |
+
+`--no-advertise` turns the announcement off. The app's "viewer" link,
+`/viewer.html?room=…`, opens `/lidar` here.
+
+What the pages say about the scanner comes from the scans themselves:
+
+| shown | meaning |
+|---|---|
+| `canlı` | scans arriving |
+| `sabit · telefon hareketsiz` | the ARKit app sends nothing while the phone is still — one heartbeat every 700 ms — so a slow steady stream is a phone standing still, not a failing link |
+| `ARKit takibi kayboldu` | the scans carry `trackingLost`: ARKit is guessing where the phone is (too fast, too dark, a blank wall). The sensor turns red and the map may smear until it recovers |
+| `durdu — son veri N sn önce` | nothing for 2.5 s |
+
+`metrik` / `yaklaşık` is read from each scan's calibrated flag, not from what
+the sender last announced.
+
+The rest is the webscan viewer ported into plain scripts, so it needs no build:
+`public/lidar.js` is the wire format, the log-odds grid and the motion gate
+(pure — the server and the tests run the same bytes); `public/lidarmap.js` is
+the socket and the canvas renderer. The page rebuilds the same grid the phone
+built, from the same scans behind the same gate.
+
+- **A late viewer gets the whole session.** The relay keeps the last 2 000
+  scans per room — about a megabyte — and replays them, so reloading the
+  dashboard gives the map back rather than an empty room.
+- **Haritayı temizle** clears it on the server (`lidar_reset`) as well as on
+  the page, or the next reload would replay it. The phone keeps its own copy.
+- **Live means frames arriving**, not a sender that says it is scanning. The
+  card says `durdu` and how long ago when they stop, and names the other room
+  if a scanner is streaming somewhere this page is not looking.
+
+What it is not: **the competition field.** The map is in the scanner's own
+frame — its origin is wherever the phone started its session — and it is not
+rotated onto the field, because nothing measures how the phone is mounted on
+the robot. A map shifted by a guessed offset would be a confident lie. Where
+the robot is on the field still comes from the QR codes, below, and is shown
+in the navigation card.
+
+How good it is depends on the scanner, and the card says which:
+
+| scanner | depth | scale | walking |
+|---|---|---|---|
+| webscan ARKit app (iPhone Pro) | LiDAR, ±1–2 cm | metric | no drift |
+| webscan browser scanner | neural network | calibrated by hand, approximate (`yaklaşık`) | drifts metres |
+
+The browser scanner can be served from here too: build webscan (`pnpm build`)
+and start with `--webscan ../webscan/apps/web/dist --https`; then
+`/sender.html?room=default` on the phone streams straight to this server. It
+needs HTTPS because it is the phone's own camera.
+
+No phone at all: `--lidar-sim` (and `npm run fake`) streams a simulated LiDAR
+round a made-up 10 × 6 m room, labelled `SIMULATED lidar` everywhere it
+appears — it is not the robot, and the map says so.
+
+| Flag | Default | |
+|---|---|---|
+| `--lidar-room <name>` | `default` | the room the pages show |
+| `--lidar-sim` | off | simulated scanner in that room |
+| `--webscan <dir>` | — | also serve a built webscan web app |
+| `--no-advertise` | off | do not announce the relay over mDNS |
+
+### Where it is — the competition field
+
+The field is no longer drawn on the dashboard — the LiDAR map took its place —
+but everything below still runs: the localiser, the planner and the turn at
+the next node, shown in the **konum ve sıradaki dönüş** card, which also holds
+the mission pickers, the test QR selector and **Yolu sıfırla**.
+
+The field is the arena, as the rule book draws it (`Şəkil 1`): the
 three pick-up points **A1–A3** along the top, the three drop points **B1–B3**
 down the right, the junctions **D1–D6** and the start area joined by the
 corridors between them, the factory-automation gate across the middle, and the
@@ -1103,7 +1235,11 @@ is the board's own. Just keep something sending at ~20 Hz.
 {"cmd": "route_reset"}                          // the map starts again from here
 {"cmd": "field_mission", "targets": ["A2", "B3"]}  // the stops to call at, in order
 {"cmd": "field_qr",      "text": "q5"}          // a code read by hand — rehearsal only
+{"cmd": "lidar_reset",   "room": "default"}     // forget the LiDAR map, relay and pages
 ```
+
+`/ws` on the same port is not this socket: it is the LiDAR relay, webscan's
+protocol unchanged — see [the LiDAR map](#the-map--lidar-from-webscan).
 
 Five things are readable over plain HTTP, all read-only:
 
@@ -1115,6 +1251,7 @@ Five things are readable over plain HTTP, all read-only:
 | `GET /api/route` | the whole path and its marks, once — see the map, above |
 | `GET /api/field` | the competition field: nodes, edges and where each QR stands. Static for a whole competition, so it is fetched once rather than repeated ten times a second |
 | `GET /api/wheels` | the wheel trim, for the two pages with no socket |
+| `GET /api/lidar` | every LiDAR relay room: senders, viewers, frames, fps, how stale. The status frame carries the default room as `lidar` |
 
 `follow` and `gear` are held to the same dead-man as `keys`: 400 ms of silence
 and the throttle is zero, `reason` becomes `kadr gəlmir`, and ENABLE stays up so a
@@ -1825,6 +1962,13 @@ printer's, and the third is what both machines run.
 | File | What it is |
 |---|---|
 | `server.js` | HTTP + the browser WebSocket + the CLI, for both machines. `--marlin` splits at one `if`, near the top of `main()` |
+| `lidar_relay.js` | the LiDAR relay on `/ws` — webscan's rooms, history replay and backpressure — and the upgrade routing that shares the port |
+| `lidar_sim.js` | a simulated LiDAR in a made-up room; powers `--lidar-sim` |
+| `lidar_discovery.js` | the mDNS announcement (`_webscan._tcp`) the phone app finds the rover by |
+| `public/lidar.js` | SCN1 wire format, log-odds occupancy grid, motion gate. Pure |
+| `public/lidarmap.js` | the relay viewer and the radar renderer, shared by /dashboard and /lidar |
+| `public/lidar.html` | the LiDAR map full screen; `/viewer.html` too |
+| `public/panel.html` | the 1920 × 1080 panel: every system and the drive controls on one screen |
 | `shared.js` | loads the pages' pure modules into Node — see the note at its top |
 | `follow_log.js` | writes `logs/follow-*.json` and its summary |
 | `public/road.js` | the road detector, shared by `/vision` and `/follow` |
@@ -1851,6 +1995,7 @@ npm run test:bench   # server + firmware + follow path
 npm run test:route   # dead reckoning — the map's arithmetic
 npm run test:field   # the field graph, QR localisation, and the turns it hands out
 npm run test:camera  # JPEG framing, QR counting, and the Pi's own numbers
+npm run test:lidar   # SCN1 against webscan's golden bytes, the grid, the relay on both machines
 
 # the printer
 npm run test:marlin  # the direction table, the jogger's pacing, the HTTP surface
@@ -1883,6 +2028,7 @@ worth running without them.
 | `test/test_route.mjs` | dead reckoning, 43 checks, no browser |
 | `test/test_field.mjs` | the field graph, QR localisation and the turns, 105 checks, no browser |
 | `test/test_camera.mjs` | JPEG framing, a real QR decode, the Pi stats — 45 checks |
+| `test/test_lidar.mjs` | the SCN1 encoder byte-for-byte against the vector webscan's Swift test pins, the grid and motion gate, the simulator's map against its true walls, the relay end to end on both machines, ARKit's tracking flags, and the mDNS announcement appearing and withdrawing — 94 checks |
 | `test/test_vision.mjs` | vision suite, 28 checks — real browser, synthetic tracks |
 | `test/test_pages.mjs` | every page of both machines opens clean, and the printer's keyboard drive asserted on the requests that left the browser — real browser, two servers |
 

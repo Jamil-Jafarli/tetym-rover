@@ -1,0 +1,968 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot · 1920×1080 panel</title>
+<style>
+  :root{
+    --bg:#0b0e13; --panel:#141920; --panel2:#0f1318; --line:#262e39; --ink:#e6edf3; --dim:#8b949e;
+    --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
+    --lz-occ:#38bdf8; --lz-free:#182a3c;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#e9edf2; --panel:#fff; --panel2:#f5f7fa; --line:#d3dae3; --ink:#1c2128; --dim:#5a6570;
+           --lz-occ:#1f6fb4; --lz-free:#d7e2ee; }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+    font:14px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  a{color:var(--idle);text-decoration:none}
+  button,select,input{font:600 13px/1 inherit;color:var(--ink);background:transparent;
+    border:1px solid var(--line);border-radius:9px;padding:8px 11px}
+  button{cursor:pointer;-webkit-user-select:none;user-select:none}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.on{border-color:var(--idle);color:var(--idle)}
+  select{background:var(--panel);font-weight:500}
+
+  /*
+   * The screen is laid out at exactly 1920 × 1080 and never reflows: a control
+   * panel whose buttons move when the window is a little narrower is a panel
+   * you cannot drive from by feel. On any other size the whole thing is
+   * scaled to fit, letterboxed, and keeps its proportions.
+   */
+  #screen{position:absolute;left:50%;top:50%;width:1920px;height:1080px;
+    transform:translate(-50%,-50%) scale(var(--k,1));transform-origin:center;
+    display:grid;grid-template-rows:56px 88px 1fr;gap:10px;padding:12px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:12px 14px;
+    min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+  h2{font-size:11.5px;margin:0;font-weight:650;letter-spacing:.7px;text-transform:uppercase;color:var(--dim);
+    white-space:nowrap}
+  .head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px;min-height:24px}
+  .tools{display:flex;align-items:center;gap:6px;flex-wrap:nowrap}
+  .tools button{padding:6px 9px;font-size:12px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--dim);flex:none}
+  .dot.ok{background:var(--accent)} .dot.bad{background:var(--stop)} .dot.go{background:var(--warn)}
+  .muted{color:var(--dim);font-size:12.5px}
+  .ell{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .lbl{font-size:10px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);white-space:nowrap}
+  .mono{font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+  .ok{color:var(--accent)} .bad{color:var(--stop)} .warnc{color:var(--warn)}
+  .kv{display:grid;gap:8px 12px}
+  .kv>div{min-width:0}
+  .kv b{display:block;font:600 13.5px/1.3 ui-monospace,Menlo,monospace;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+  .bad-card{border-color:var(--stop);background:color-mix(in srgb,var(--stop) 10%,var(--panel))}
+  .warn-card{border-color:var(--warn)}
+
+  /* ── header ───────────────────────────────────────────────────── */
+  #top{display:grid;grid-template-columns:auto 1fr auto auto;align-items:center;gap:18px;
+    padding:0 6px 0 4px}
+  #top h1{font-size:20px;margin:0;font-weight:650;letter-spacing:-.2px;white-space:nowrap}
+  #stateBox{display:flex;align-items:center;gap:10px;min-width:0}
+  #state{font:700 15px ui-monospace,Menlo,monospace;letter-spacing:.8px;white-space:nowrap}
+  #reason{font-size:13px;color:var(--dim)}
+  nav{display:flex;gap:4px;align-items:center}
+  nav a{padding:7px 10px;border-radius:8px;font-size:13px;color:var(--dim);border:1px solid transparent}
+  nav a:hover{border-color:var(--line);color:var(--ink)}
+  #clock{font:600 15px ui-monospace,Menlo,monospace;color:var(--dim);margin-right:8px}
+  #estop{background:var(--stop);border-color:var(--stop);color:#fff;font-size:16px;letter-spacing:1.4px;
+    padding:12px 22px;border-radius:11px}
+
+  /* ── the strip ────────────────────────────────────────────────── */
+  #kpis{display:grid;grid-template-columns:repeat(9,1fr);gap:10px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:10px 14px;
+    min-width:0;overflow:hidden;display:flex;flex-direction:column;justify-content:center}
+  .kpi b{display:block;font:650 25px/1.15 ui-monospace,Menlo,monospace;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;margin:3px 0 1px}
+  .kpi .muted{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+  .kpi.alarm{border-color:var(--stop);background:color-mix(in srgb,var(--stop) 12%,var(--panel))}
+  .kpi.alarm b{color:var(--stop)}
+
+  /* ── three columns ────────────────────────────────────────────── */
+  #main{display:grid;grid-template-columns:450px 1fr 470px;gap:10px;min-height:0}
+  .col{display:grid;gap:10px;min-height:0}
+  #left{grid-template-rows:392px 222px 1fr}
+  #center{grid-template-rows:1fr 262px}
+  #right{grid-template-rows:auto 146px 1fr}
+
+  /* camera */
+  .camwrap{position:relative;flex:1;min-height:0}
+  #cam{width:100%;height:100%;display:block;border-radius:9px;background:#000;object-fit:contain}
+  .camtag{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.62);color:#fff;
+    font:600 11px ui-monospace,Menlo,monospace;padding:4px 7px;border-radius:6px}
+
+  /* obstacle */
+  .gauge{position:relative;height:44px;border-radius:10px;background:var(--line);overflow:hidden;flex:none}
+  .gauge>i{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--accent);transition:width .12s linear}
+  .gauge.stop>i{background:var(--stop)} .gauge.wait>i{background:var(--warn)}
+  .gauge>.mark{position:absolute;top:0;bottom:0;width:2px;background:var(--ink);opacity:.5}
+  .gauge>.mark>span{position:absolute;top:2px;left:4px;font-size:10px;opacity:.85;white-space:nowrap}
+  .gauge>.cm{position:absolute;right:10px;top:50%;transform:translateY(-50%);font:650 19px ui-monospace,Menlo,monospace}
+  .phase{display:flex;gap:6px;margin-top:8px}
+  .phase>div{flex:1;text-align:center;padding:6px 3px;border-radius:8px;border:1px solid var(--line);
+    font-size:11px;color:var(--dim)}
+  .phase>div.on{font-weight:650}
+  .phase>div.on.stop{border-color:var(--stop);color:var(--stop)}
+  .phase>div.on.wait{border-color:var(--warn);color:var(--warn)}
+  .phase>div.on.go{border-color:var(--accent);color:var(--accent)}
+
+  /* qr */
+  .qrtext{font:650 17px/1.35 ui-monospace,Menlo,monospace;word-break:break-all;max-height:48px;overflow:hidden}
+  .qrlist{margin-top:8px;border-top:1px solid var(--line);padding-top:6px;flex:1;min-height:0;overflow:hidden}
+  .qrlist div{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--dim);padding:2px 0}
+  .qrlist code{color:var(--ink);font:12px ui-monospace,Menlo,monospace;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis}
+
+  /* lidar */
+  .mapwrap{position:relative;flex:1;min-height:0}
+  #map{width:100%;height:100%;display:block;border-radius:9px;background:#0a0d12;cursor:grab}
+  #map:active{cursor:grabbing}
+  @media (prefers-color-scheme: light){ #map{background:#f7f9fc} }
+  .mapwait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    pointer-events:none;padding:18px;text-align:center}
+  .mapwait[hidden]{display:none}
+  .mapwait>div{background:color-mix(in srgb,var(--panel) 93%,transparent);border:1px solid var(--line);
+    border-radius:12px;padding:14px 18px;max-width:460px;font-size:13.5px}
+  .mapwait code{font:12px ui-monospace,Menlo,monospace}
+  .legend{display:flex;gap:14px;align-items:center;min-width:0;overflow:hidden}
+  .legend span{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--dim);white-space:nowrap}
+  .sw{width:10px;height:10px;border-radius:3px;flex:none}
+
+  /* navigation */
+  #navGrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;flex:1;min-height:0}
+  .turn{display:flex;align-items:center;gap:12px;min-width:0}
+  .arrow{width:62px;height:62px;flex:none;border-radius:14px;border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;font-size:30px;line-height:1}
+  .arrow.left{border-color:var(--idle);color:var(--idle)}
+  .arrow.right{border-color:var(--warn);color:var(--warn)}
+  .arrow.straight{border-color:var(--accent);color:var(--accent)}
+  .arrow.back,.arrow.arrive{border-color:var(--stop);color:var(--stop)}
+  .turn b{display:block;font-size:19px;font-weight:650;line-height:1.25}
+  .chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:9px;max-height:52px;overflow:hidden}
+  .chips i{font-style:normal;font:600 11px ui-monospace,Menlo,monospace;border:1px solid var(--line);
+    border-radius:6px;padding:3px 6px;color:var(--dim)}
+  .chips i.done{opacity:.45} .chips i.now{border-color:var(--warn);color:var(--warn)}
+  .chips i.stop{border-color:var(--accent);color:var(--accent)}
+  #navWhy{font-size:12px;color:var(--dim);margin-top:8px;overflow:hidden;
+    display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+  .ctl{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:9px}
+  .ctl select,.ctl button{width:100%;min-width:0}
+
+  /* drive */
+  #driveTop{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  #arm{padding:15px;font-size:15px;letter-spacing:1px}
+  #arm.on{background:var(--warn);border-color:var(--warn);color:#1c1300}
+  #stopb{padding:15px;font-size:15px;letter-spacing:1px;background:var(--stop);border-color:var(--stop);color:#fff}
+  #driveBody{display:grid;grid-template-columns:196px 1fr;gap:12px;margin-top:10px}
+  .pad{display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:58px 58px;gap:6px}
+  .key{border:1px solid var(--line);border-radius:10px;background:var(--panel2);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:2px;cursor:pointer;touch-action:none;
+    -webkit-user-select:none;user-select:none}
+  .key b{font:650 20px/1 ui-monospace,Menlo,monospace}
+  .key span{font-size:10px;color:var(--dim)}
+  .key.on{background:var(--accent);border-color:var(--accent);color:#04220c}
+  .key.on span{color:#04220c}
+  .seg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .gear{display:flex;flex-direction:column;align-items:center;gap:4px;padding:9px 4px}
+  .gear span{font:10.5px/1.25 ui-monospace,Menlo,monospace;color:var(--dim);white-space:pre-line}
+  .gear.on{background:var(--idle);border-color:var(--idle);color:#04182e}
+  .gear.on span{color:#04182e}
+  #g-fast.on{background:var(--stop);border-color:var(--stop);color:#fff}
+  #g-fast.on span{color:#fff}
+  .lvl{display:flex;align-items:center;gap:8px;margin-top:8px}
+  #lvlRange{flex:1;accent-color:var(--idle);padding:0;border:0;height:28px}
+  #lvlNum{width:62px;font:650 15px ui-monospace,Menlo,monospace;text-align:center;padding:6px 4px;background:var(--panel2)}
+  .lvlchips{display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:6px}
+  .lvlchips button{padding:6px 0;font-size:12px}
+  .wheels{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+  .wheel b{font:650 22px/1.1 ui-monospace,Menlo,monospace}
+  .meter{height:7px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:5px}
+  .meter>i{display:block;height:100%;width:0;background:var(--accent);transition:width .1s linear}
+  .meter>i.hot{background:var(--warn)} .meter>i.crit{background:var(--stop)}
+  .dirtag{padding:3px 9px;border-radius:6px;font:650 11.5px ui-monospace,Menlo,monospace;letter-spacing:.5px;
+    background:var(--line);color:var(--ink);white-space:nowrap}
+  .dirtag.fwd{background:var(--idle);color:#04182e} .dirtag.rev{background:var(--warn);color:#1c1300}
+  .dirtag.wait{background:var(--stop);color:#fff}
+  #trimHost .wtrim{padding:6px 10px;margin-top:9px;flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
+
+  /* lift — lift.js brings its own CSS; this only makes it fit */
+  #liftBox .lift button{padding:13px 6px}
+  #liftBox .liftnote{margin-top:6px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* system */
+  #sysGrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;flex:1;min-height:0}
+  #sysGrid>div{min-width:0}
+  .mrow{margin-bottom:9px}
+</style>
+</head>
+<body>
+<div id="screen">
+
+  <!-- ══ header ══ -->
+  <header id="top">
+    <h1>TETYM · Robot paneli</h1>
+    <div id="stateBox">
+      <span class="dot" id="dot"></span>
+      <span id="state">bağlanıyor</span>
+      <span id="reason" class="ell">–</span>
+    </div>
+    <nav>
+      <a href="/">ana sayfa</a><a href="/dashboard">panel (mobil)</a><a href="/drive">sür</a>
+      <a href="/follow">takip</a><a href="/vision">kamera</a><a href="/tune">analiz</a>
+      <a href="/obstacle">engel</a><a href="/setup">kurulum</a><a href="/pins">pinler</a>
+      <a href="/manual">manual</a><a href="/lidar">lidar</a>
+    </nav>
+    <div class="row" style="gap:10px">
+      <span id="clock">--:--:--</span>
+      <button id="estop" title="Boşluk tuşu da aynı şeyi yapar">■ STOP</button>
+    </div>
+  </header>
+
+  <!-- ══ the moment, in nine numbers ══ -->
+  <section id="kpis">
+    <div class="kpi"><span class="lbl">Hız</span><b id="kSpeed">–</b><span class="muted" id="kSpeedSub">–</span></div>
+    <div class="kpi"><span class="lbl">GPIO25</span><b id="k25">–</b><span class="muted" id="k25v">–</span></div>
+    <div class="kpi"><span class="lbl">GPIO26</span><b id="k26">–</b><span class="muted" id="k26v">–</span></div>
+    <div class="kpi" id="kCmBox"><span class="lbl">Önde</span><b id="kCm">–</b><span class="muted" id="kPhase">–</span></div>
+    <div class="kpi"><span class="lbl">Mesafe</span><b id="kDist">–</b><span class="muted" id="kBearing">–</span></div>
+    <div class="kpi"><span class="lbl">Yön · Enable</span><b id="kDir">–</b><span class="muted" id="kEnable">–</span></div>
+    <div class="kpi"><span class="lbl">Sahada</span><b id="kField">–</b><span class="muted" id="kFieldSub">–</span></div>
+    <div class="kpi"><span class="lbl">LiDAR</span><b id="kLidar">–</b><span class="muted" id="kLidarSub">–</span></div>
+    <div class="kpi" id="kPiBox"><span class="lbl">Raspberry Pi</span><b id="kPi">–</b><span class="muted" id="kPiSub">–</span></div>
+  </section>
+
+  <main id="main">
+
+    <!-- ══ left: what the robot sees ══ -->
+    <div class="col" id="left">
+      <div class="card">
+        <div class="head"><h2>Kamera — RPi</h2><a class="muted" href="/camera/frame.jpg" target="_blank">tek kare</a></div>
+        <div class="camwrap">
+          <img id="cam" alt="canlı görüntü">
+          <div class="camtag" id="camTag">–</div>
+        </div>
+        <div class="muted ell" id="camState" style="margin-top:6px">–</div>
+      </div>
+
+      <div class="card" id="obsCard">
+        <div class="head">
+          <h2>Engel — HC-SR04</h2>
+          <div class="tools">
+            <span class="muted">fren</span>
+            <button id="guardOn">AÇIK</button><button id="guardOff">KAPALI</button>
+          </div>
+        </div>
+        <div class="gauge" id="gauge">
+          <i id="gfill"></i>
+          <div class="mark" id="mStop"><span>dur</span></div>
+          <div class="mark" id="mClear"><span>açık</span></div>
+          <div class="cm" id="gcm">–</div>
+        </div>
+        <div class="phase"><div id="pGo">GİDİYOR</div><div id="pStop">DURDU</div><div id="pWait">BEKLİYOR</div></div>
+        <div class="kv" style="grid-template-columns:repeat(3,1fr);margin-top:9px">
+          <div><span class="lbl">Eşik / açık</span><b id="oCfg">–</b></div>
+          <div><span class="lbl">Durma</span><b id="oStops">0</b></div>
+          <div><span class="lbl">Fren</span><b id="oGuard">–</b></div>
+        </div>
+        <div class="muted ell" id="oWhy" style="margin-top:6px">–</div>
+      </div>
+
+      <div class="card">
+        <div class="head"><h2>Son okunan QR</h2><span class="muted" id="qrStats">–</span></div>
+        <div class="qrtext" id="qrText">—</div>
+        <div class="muted" id="qrAge" style="margin-top:4px">hiçbir şey okunmadı</div>
+        <div class="qrlist" id="qrList"></div>
+      </div>
+    </div>
+
+    <!-- ══ centre: where it is ══ -->
+    <div class="col" id="center">
+      <div class="card" id="lidarCard">
+        <div class="head">
+          <div class="row" style="gap:10px;justify-content:flex-start">
+            <h2>LiDAR haritası — çevre</h2>
+            <span class="dot" id="lzDot"></span><span class="muted ell" id="lzState">bağlanıyor</span>
+          </div>
+          <div class="tools">
+            <button id="lzFollow" class="on">Takip</button>
+            <button id="lzRings" class="on">Halkalar</button>
+            <button id="lzIn" aria-label="yakınlaştır">+</button>
+            <button id="lzOut" aria-label="uzaklaştır">−</button>
+            <button id="lzClear">Temizle</button>
+            <button id="lzPng">PNG</button>
+            <select id="lzRoom" title="LiDAR odası"></select>
+          </div>
+        </div>
+        <div class="mapwrap">
+          <canvas id="map"></canvas>
+          <div class="mapwait" id="lzWait"><div>
+            <b>Tarayıcı bekleniyor</b><br><span class="muted" id="lzHow">–</span>
+          </div></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <div class="kv" style="grid-template-columns:repeat(8,auto);gap:4px 22px">
+            <div><span class="lbl">Tarayıcı</span><b id="lzLabel">–</b></div>
+            <div><span class="lbl">Tarama/sn</span><b id="lzRate">–</b></div>
+            <div><span class="lbl">Konum</span><b id="lzPos">–</b></div>
+            <div><span class="lbl">Yön</span><b id="lzYaw">–</b></div>
+            <div><span class="lbl">Poz</span><b id="lzLock">–</b></div>
+            <div><span class="lbl">Alan</span><b id="lzArea">–</b></div>
+            <div><span class="lbl">Gecikme</span><b id="lzLat">–</b></div>
+            <div><span class="lbl">Ölçek</span><b id="lzCal">–</b></div>
+          </div>
+          <div class="legend">
+            <span><i class="sw" style="background:var(--lz-occ)"></i>engel</span>
+            <span><i class="sw" style="background:var(--lz-free);border:1px solid var(--line)"></i>boş</span>
+            <span><i class="sw" style="background:#3fb950"></i>tarama</span>
+            <span><i class="sw" style="background:#58a6ff"></i>yol</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="navCard">
+        <div class="head"><h2>Sahada konum ve sıradaki dönüş</h2><span class="muted ell" id="navLeg">–</span></div>
+        <div id="navGrid">
+          <div style="min-width:0">
+            <div class="turn">
+              <div class="arrow" id="navArrow">·</div>
+              <div style="min-width:0">
+                <b id="navTurn" class="ell">QR bekleniyor</b>
+                <span class="muted ell" id="navWhere" style="display:block">henüz kod okunmadı — konum bilinmiyor</span>
+              </div>
+            </div>
+            <div class="kv" style="grid-template-columns:repeat(3,1fr);margin-top:10px">
+              <div><span class="lbl">Saha x, y</span><b id="navXY">–</b></div>
+              <div><span class="lbl">Yön</span><b id="navBearing">–</b></div>
+              <div><span class="lbl">Koddan beri</span><b id="navDead">–</b></div>
+            </div>
+            <div class="chips" id="navPlan"></div>
+          </div>
+          <div style="min-width:0;display:flex;flex-direction:column">
+            <div class="ctl" style="margin-top:0">
+              <select id="tgtA"><option value="">alma noktası —</option>
+                <option>A1</option><option>A2</option><option>A3</option></select>
+              <select id="tgtB"><option value="">bırakma noktası —</option>
+                <option>B1</option><option>B2</option><option>B3</option></select>
+              <button id="planBtn">Rotayı planla</button>
+              <button id="clearPlan">Rotayı temizle</button>
+              <select id="qrTest" title="Kamera gerçek okuyucudur — bu yalnızca prova içindir">
+                <option value="">test: QR okut —</option></select>
+              <button id="resetRoute">Yolu sıfırla</button>
+            </div>
+            <div id="navWhy">–</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ right: what it does ══ -->
+    <div class="col" id="right">
+      <div class="card" id="driveCard">
+        <div class="head">
+          <h2>Sürüş</h2>
+          <div class="tools"><span class="dirtag" id="dirTag">–</span><span class="muted" id="held">–</span></div>
+        </div>
+        <div id="driveTop">
+          <button id="arm">ARM</button>
+          <button id="stopb">STOP · IDLE</button>
+        </div>
+        <div id="driveBody">
+          <div>
+            <div class="pad">
+              <div></div>
+              <div class="key" data-k="w"><b>W</b><span>ileri</span></div>
+              <div></div>
+              <div class="key" data-k="a"><b>A</b><span>sol</span></div>
+              <div class="key" data-k="s"><b>S</b><span>geri</span></div>
+              <div class="key" data-k="d"><b>D</b><span>sağ</span></div>
+            </div>
+            <div class="muted" id="hint" style="margin-top:6px;font-size:11.5px">Önce ARM, sonra W A S D</div>
+          </div>
+          <div style="min-width:0">
+            <div class="seg">
+              <button class="gear" id="g-normal">NORMAL<span id="gs-normal">–</span></button>
+              <button class="gear" id="g-fast">SÜRAT<span id="gs-fast">–</span></button>
+            </div>
+            <div class="lvl">
+              <span class="lbl">Seviye</span>
+              <input type="range" id="lvlRange" min="0" max="100" step="1" value="100">
+              <input type="number" id="lvlNum" min="0" max="100" step="1" value="100">
+            </div>
+            <div class="lvlchips">
+              <button data-lvl="25">25</button><button data-lvl="50">50</button>
+              <button data-lvl="75">75</button><button data-lvl="100">100</button>
+            </div>
+          </div>
+        </div>
+        <div class="wheels">
+          <div class="wheel">
+            <div class="row"><span class="lbl">GPIO25 · board</span><span class="muted mono" id="w25v">–</span></div>
+            <b id="w25">–</b><div class="meter"><i id="w25bar"></i></div>
+          </div>
+          <div class="wheel">
+            <div class="row"><span class="lbl">GPIO26 · board</span><span class="muted mono" id="w26v">–</span></div>
+            <b id="w26">–</b><div class="meter"><i id="w26bar"></i></div>
+          </div>
+        </div>
+        <div class="muted ell" id="gearNote" style="margin-top:7px">–</div>
+        <div id="trimHost"></div>
+      </div>
+
+      <div class="card" id="liftCard">
+        <div class="head"><h2>Kaldırma — L298N</h2><span class="muted mono" id="liftState">–</span></div>
+        <div id="liftBox"></div>
+      </div>
+
+      <div class="card">
+        <div class="head"><h2>ESP32 ve Raspberry Pi</h2><span class="muted ell" id="transport">–</span></div>
+        <div id="sysGrid">
+          <div>
+            <div class="kv" style="grid-template-columns:1fr 1fr">
+              <div><span class="lbl">Bağlantı</span><b id="eLink">–</b></div>
+              <div><span class="lbl">Sinyal</span><b id="eRssi">–</b></div>
+              <div><span class="lbl">Çalışma</span><b id="eUp">–</b></div>
+              <div><span class="lbl">Paket / bozuk</span><b id="ePkt">–</b></div>
+              <div><span class="lbl">Pin volt</span><b id="eVolt">–</b></div>
+              <div><span class="lbl">DAC</span><b id="eDac">–</b></div>
+              <div><span class="lbl">Röleler</span><b id="eRev">–</b></div>
+              <div><span class="lbl">ENABLE</span><b id="eEn">–</b></div>
+            </div>
+            <div class="muted bad" id="eErr" style="margin-top:6px" hidden></div>
+          </div>
+          <div>
+            <div class="mrow">
+              <div class="row"><span class="muted">CPU</span><span class="muted mono" id="rCpuT">–</span></div>
+              <div class="meter"><i id="rCpuBar"></i></div>
+            </div>
+            <div class="mrow">
+              <div class="row"><span class="muted">Sıcaklık</span><span class="muted mono" id="rTempT">–</span></div>
+              <div class="meter"><i id="rTempBar"></i></div>
+            </div>
+            <div class="mrow">
+              <div class="row"><span class="muted">Bellek</span><span class="muted mono" id="rMemT">–</span></div>
+              <div class="meter"><i id="rMemBar"></i></div>
+            </div>
+            <div class="kv" style="grid-template-columns:1fr 1fr">
+              <div><span class="lbl">Yük</span><b id="rLoad">–</b></div>
+              <div><span class="lbl">Disk</span><b id="rDisk">–</b></div>
+              <div><span class="lbl">Server</span><b id="rProc">–</b></div>
+              <div><span class="lbl">Pi çalışıyor</span><b id="rUp">–</b></div>
+            </div>
+            <div class="muted ell" id="rThrottle" style="margin-top:7px">–</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script src="/field.js"></script>
+<script src="/lift.js"></script>
+<script src="/cam.js"></script>
+<script src="/wheels.js"></script>
+<script src="/lidar.js"></script>
+<script src="/lidarmap.js"></script>
+<script>
+/**
+ * The whole robot on one 1920 × 1080 screen — the panel you leave on the big
+ * monitor at the side of the track.
+ *
+ * It is /dashboard and /drive on one surface, laid out once at a fixed size:
+ * every reading the robot has, and every control that makes sense to reach for
+ * during a run — ARM, STOP, the keys, the two speeds, the level, the lift, the
+ * brake switch, the mission and the LiDAR map. What is NOT here is anything
+ * you tune rather than use (the key table, the gear codes, the pilot, the
+ * detector's sliders, the spare pins); those are a click away in the header,
+ * on the pages that explain them.
+ *
+ * No logic of its own. Everything is the server's status frame at 10 Hz, the
+ * Pi's MJPEG, and the LiDAR relay; the commands are the same ones /drive and
+ * /dashboard send, held to the same 400 ms dead-man.
+ */
+const $ = (id) => document.getElementById(id);
+const fmt = (v, n = 1) => (v == null || !Number.isFinite(Number(v)) ? '–' : Number(v).toFixed(n));
+const mbytes = (b) => (b == null ? '–' : (b / 1048576).toFixed(0) + ' MB');
+const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;',
+                                                          '"': '&quot;', "'": '&#39;' }[c]));
+function dur(s) {
+  if (s == null) return '–';
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  if (d) return `${d} g ${h} s`;
+  if (h) return `${h} s ${m} d`;
+  return `${m} d ${Math.floor(s % 60)} sn`;
+}
+function meter(el, pct, hot, crit) {
+  el.style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
+  el.className = pct >= crit ? 'crit' : pct >= hot ? 'hot' : '';
+}
+
+// ── fit 1920 × 1080 into whatever this window is ─────────────────────
+function fitScreen() {
+  const k = Math.min(innerWidth / 1920, innerHeight / 1080);
+  document.getElementById('screen').style.setProperty('--k', String(k));
+}
+addEventListener('resize', fitScreen);
+fitScreen();
+setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString('tr-TR'); }, 1000);
+
+// ── the socket ───────────────────────────────────────────────────────
+let ws = null, pump = null;
+let armed = false, gear = null, gearAt = 0, level = 100, editing = false;
+const held = new Set();
+let lastCfg = {};
+
+function sendWs(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/`);
+  ws.onopen = () => {
+    // The dead-man: while armed the page keeps saying what it wants at 20 Hz.
+    // Stop saying it — frozen tab, pulled cable — and the server coasts to 0 %
+    // within 400 ms, whichever of keys or a gear was driving.
+    clearInterval(pump);
+    pump = setInterval(() => {
+      if (!armed) return;
+      if (gear) sendWs({ cmd: 'gear', gear }); else sendWs({ cmd: 'keys', keys: [...held] });
+    }, 50);
+  };
+  ws.onclose = () => {
+    clearInterval(pump); pump = null;
+    armed = false; held.clear(); paintKeys(); paintArm();
+    $('dot').className = 'dot bad';
+    $('state').textContent = 'SUNUCU YOK';
+    $('reason').textContent = 'bağlantı kesildi — robot kendini idle yapar';
+    setTimeout(connect, 1000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (ev) => {
+    let s; try { s = JSON.parse(ev.data); } catch { return; }
+    if (s.type !== 'status') return;
+    if (s.follow_cfg) lastCfg = s.follow_cfg;
+    WT.fromStatus(s);
+    paint(s);
+  };
+}
+
+function paint(s) {
+  const espOk = s.esp_fresh && !s.serial_error;
+  $('dot').className = 'dot ' + (s.running ? 'go' : espOk ? 'ok' : 'bad');
+  $('state').textContent = s.serial_error ? 'SERİ PORT HATASI' : !espOk ? 'ESP32 YOK'
+    : s.running ? 'SÜRÜYOR' : 'HAZIR';
+  $('state').className = s.running ? 'warnc' : espOk ? 'ok' : 'bad';
+  $('reason').textContent = s.reason || '';
+  for (const f of [paintKpis, paintCamera, paintObstacle, paintQr, paintNav, paintDrive,
+                   paintLift, paintSystem, paintLidar]) {
+    try { f(s); } catch (err) { console.warn(f.name, err); }
+  }
+}
+
+// ── the strip ────────────────────────────────────────────────────────
+function paintKpis(s) {
+  const r = s.route || {}, out = s.out || [0, 0], v = s.out_v || [], dac = s.out_dac || [];
+  $('kSpeed').textContent = r.calibrated ? `${fmt(Math.abs(r.v), 2)} m/s` : `${fmt((out[0] + out[1]) / 2, 0)} %`;
+  $('kSpeedSub').textContent = r.calibrated ? `${Math.round((out[0] + out[1]) / 2)} % ortalama` : 'kalibrasyon yok';
+  $('k25').textContent = `${fmt(out[0], 0)} %`;
+  $('k26').textContent = `${fmt(out[1], 0)} %`;
+  $('k25v').textContent = `${fmt(v[0], 2)} V · dac ${dac[0] ?? '–'}`;
+  $('k26v').textContent = `${fmt(v[1], 2)} V · dac ${dac[1] ?? '–'}`;
+
+  const o = s.obstacle || {};
+  $('kCm').textContent = o.cm == null ? 'yankı yok' : `${fmt(o.cm)} sm`;
+  $('kPhase').textContent = o.guard === false ? 'FREN KAPALI'
+    : o.phase === 'stop' ? 'DURDU' : o.phase === 'wait' ? 'bekliyor' : 'yol açık';
+  $('kCmBox').className = 'kpi' + (o.blocking || o.guard === false ? ' alarm' : '');
+
+  $('kDist').textContent = r.calibrated ? `${fmt(r.dist, 1)} m` : '–';
+  $('kBearing').textContent = r.calibrated ? `${fmt(r.bearing, 0)}° · ${fmt(r.x, 1)}, ${fmt(r.y, 1)} m` : 'ölçülmedi';
+  $('kDir').textContent = s.dir_settling ? 'DURUYOR…' : (s.dir_name || '–');
+  $('kEnable').textContent = s.enable ? 'ENABLE 1' : 'ENABLE 0';
+  $('kEnable').className = 'muted ' + (s.enable ? 'ok' : '');
+
+  const f = s.field || {};
+  $('kField').textContent = f.qr ? `${f.from}→${f.to}` : 'bilinmiyor';
+  $('kFieldSub').textContent = f.turn ? `${f.turn.node}: ${f.turn.label}` : f.qr ? `son kod ${f.qr}` : 'QR bekleniyor';
+
+  const l = s.lidar || {};
+  // Under 2 Hz while live is the ARKit app's still-phone heartbeat, not a slow link.
+  $('kLidar').textContent = !l.live ? (l.senders ? 'veri yok' : 'yok')
+    : l.tracking === 'lost' ? 'TAKİP YOK' : l.fps < 2 ? 'sabit' : `${fmt(l.fps, 0)} Hz`;
+  $('kLidarSub').textContent = l.label ? `${l.label} · ${l.room}`
+    : l.announced ? `uygulama bulur: ${l.announced}` : `oda ${l.room || '–'}`;
+  $('kLidar').parentElement.className = 'kpi' + (l.live && l.tracking === 'lost' ? ' alarm' : '');
+
+  const p = s.rpi || {};
+  $('kPi').textContent = p.temp_c != null ? `${fmt(p.temp_c, 0)} °C`
+    : p.cpu != null ? `${fmt(p.cpu, 0)} %` : '–';
+  const t = p.throttled;
+  $('kPiSub').textContent = t && t.under_voltage ? 'GERİLİM DÜŞÜK'
+    : p.cpu != null ? `CPU ${fmt(p.cpu, 0)} %` : 'ölçüm yok';
+  $('kPiBox').className = 'kpi' + (t && (t.under_voltage || t.throttled) ? ' alarm' : '');
+}
+
+// ── camera ───────────────────────────────────────────────────────────
+function paintCamera(s) {
+  const c = s.cam || {};
+  $('camTag').textContent = c.live ? `${c.w}×${c.h} · ${c.fps} fps` : 'kare yok';
+  $('camState').textContent = c.err ? c.err : !c.on ? 'kamera kapalı'
+    : c.live ? `${c.device} · ${c.frames} kare · ${c.viewers} izleyen` : 'kamera açılıyor…';
+  $('camState').className = 'muted ell ' + (c.err ? 'bad' : '');
+}
+const camStream = () => { $('cam').src = `/camera/stream.mjpg?t=${Date.now()}`; };
+$('cam').onerror = () => setTimeout(camStream, 1500);
+camAfterLoad(camStream);
+
+// ── obstacle ─────────────────────────────────────────────────────────
+function paintObstacle(s) {
+  const o = s.obstacle || {}, cfg = o.cfg || { stopCm: 30, clearCm: 40 };
+  const span = Math.max(cfg.clearCm * 2, 60);
+  $('gauge').className = 'gauge ' + (o.phase === 'stop' ? 'stop' : o.phase === 'wait' ? 'wait' : '');
+  $('gfill').style.width = o.cm == null ? '0%' : `${Math.min(100, (o.cm / span) * 100)}%`;
+  $('gcm').textContent = o.cm == null ? 'yankı yok' : `${fmt(o.cm)} sm`;
+  $('mStop').style.left = `${(cfg.stopCm / span) * 100}%`;
+  $('mClear').style.left = `${(cfg.clearCm / span) * 100}%`;
+  for (const [id, ph] of [['pGo', 'go'], ['pStop', 'stop'], ['pWait', 'wait']]) {
+    $(id).className = o.phase === ph ? `on ${ph}` : '';
+  }
+  $('oCfg').textContent = `${cfg.stopCm} / ${cfg.clearCm} sm`;
+  $('oStops').textContent = o.stops ?? 0;
+  $('oGuard').textContent = o.guard === false ? 'KAPALI' : 'çalışıyor';
+  $('oGuard').className = o.guard === false ? 'bad' : 'ok';
+  $('guardOn').className = o.guard !== false ? 'on' : '';
+  $('guardOff').className = o.guard === false ? 'on' : '';
+  $('oWhy').textContent = o.reason || '–';
+  // Red when the sensor is actually holding the throttle down, and amber when
+  // the brake is off — a safety control that is off must look off.
+  $('obsCard').className = 'card' + (o.blocking ? ' bad-card' : o.guard === false ? ' warn-card' : '');
+}
+// The brake is the server's, so the switch writes the server's flag. The rest
+// of the obstacle settings go back with it: the config merge is shallow, and a
+// write of `{guard}` alone would reset the thresholds to their defaults.
+function setGuard(on) {
+  if (!on && !confirm('Fren kapatılsın mı? Robot önündeki engelde DURMAYACAK.')) return;
+  sendWs({ cmd: 'follow_cfg', cfg: { obstacle: { ...(lastCfg.obstacle || {}), guard: on } } });
+}
+$('guardOn').addEventListener('click', () => setGuard(true));
+$('guardOff').addEventListener('click', () => setGuard(false));
+
+// ── QR ───────────────────────────────────────────────────────────────
+function paintQr(s) {
+  const q = s.qr || {};
+  $('qrText').textContent = q.text || '—';
+  $('qrAge').textContent = !q.available ? (q.err || 'QR okuyucu yok')
+    : q.text == null ? 'hiçbir şey okunmadı' : `${fmt(q.age_s, 1)} sn önce · toplam ${q.count}`;
+  $('qrStats').textContent = q.available ? `${q.decodes ?? 0} çözüm · ${q.ms ?? 0} ms` : '';
+  const hist = (q.history || []).slice().reverse().slice(0, 8);
+  $('qrList').innerHTML = hist.length
+    ? hist.map((h) => `<div><code>${esc(String(h.text).slice(0, 48))}</code>`
+        + `<span>${new Date(h.at).toLocaleTimeString('tr-TR')}</span></div>`).join('')
+    : '<div><span>geçmiş boş</span></div>';
+}
+
+// ── the field ────────────────────────────────────────────────────────
+function paintNav(s) {
+  const f = s.field || {}, t = f.turn;
+  const glyph = { left: '↰', right: '↱', straight: '↑', back: '↓', arrive: '◉' };
+  $('navArrow').className = 'arrow ' + (t ? t.dir : '');
+  $('navArrow').textContent = t ? glyph[t.dir] || '·' : '·';
+  if (!f.qr) {
+    $('navTurn').textContent = 'QR bekleniyor';
+    $('navWhere').textContent = 'henüz kod okunmadı — konum bilinmiyor';
+  } else if (t) {
+    $('navTurn').textContent = t.dir === 'arrive' ? `${t.node} — varış` : `${t.node}: ${t.label}`;
+    $('navWhere').textContent = t.dir === 'arrive' ? `${f.from} → ${f.to}, son etap`
+      : `${f.from} → ${f.to} etabında, sonra ${t.then}` + (t.dist != null ? ` · ${fmt(t.dist, 1)} m` : '');
+  } else {
+    $('navTurn').textContent = `${f.to} yönünde`;
+    $('navWhere').textContent = f.plan && f.plan.length ? 'rotanın dışında — yeniden planla'
+      : 'rota planlanmadı: yalnızca konum biliniyor';
+  }
+  $('navLeg').textContent = f.from ? `etap ${f.from} → ${f.to} · ${f.reads ?? 0} okuma` : '–';
+  const p = f.pose || {};
+  $('navXY').textContent = p.known ? `${fmt(p.x, 2)}, ${fmt(p.y, 2)}` : 'bilinmiyor';
+  $('navBearing').textContent = p.known ? `${fmt(p.bearing, 0)}°` : '–';
+  $('navDead').textContent = p.known ? `${fmt(p.dead, 2)} m` : '–';
+  const plan = f.plan || [];
+  $('navPlan').innerHTML = plan.map((n, i) => {
+    const cls = i < f.step ? 'done' : i === f.step ? 'now' : (f.stops || []).includes(n) ? 'stop' : '';
+    return `<i class="${cls}">${esc(n)}</i>`;
+  }).join('');
+
+  const why = [];
+  if (!f.qr) why.push('Konum bir QR okununca bilinir: kodlar sahaya sabittir, tekerlekler değil.');
+  if (f.qr && !f.sure) why.push('Yön tahminidir — rota planla ya da ikinci kodu okut.');
+  if (f.qr && plan.length && !f.on_plan) why.push('Son kod rotada değildi — robot planın dışına çıktı.');
+  if (p.known && p.dead > 2) why.push(`Son koddan beri ${fmt(p.dead, 1)} m hesaplandı, ölçülmedi.`);
+  if (f.strays) why.push(`${f.strays} kod bu sahaya ait değildi.`);
+  $('navWhy').textContent = why.join(' ') || "Konum son QR'dan ölçüldü, aradaki yol hesaplandı.";
+  $('navCard').className = 'card' + (f.qr && plan.length && !f.on_plan ? ' warn-card' : '');
+}
+$('planBtn').addEventListener('click', () => {
+  const targets = [$('tgtA').value, $('tgtB').value].filter(Boolean);
+  if (targets.length) sendWs({ cmd: 'field_mission', targets });
+});
+$('clearPlan').addEventListener('click', () => {
+  $('tgtA').value = ''; $('tgtB').value = '';
+  sendWs({ cmd: 'field_mission', targets: [] });
+});
+$('resetRoute').addEventListener('click', () => sendWs({ cmd: 'route_reset' }));
+for (const q of fieldQrs(FIELD)) {
+  const o = document.createElement('option');
+  o.value = q.qr; o.textContent = `test: ${q.qr} okundu`;
+  $('qrTest').appendChild(o);
+}
+// A rehearsal tool, so it springs back after every pick.
+$('qrTest').addEventListener('change', () => {
+  if ($('qrTest').value) sendWs({ cmd: 'field_qr', text: $('qrTest').value });
+  $('qrTest').value = '';
+});
+
+// ── driving ──────────────────────────────────────────────────────────
+function paintKeys() {
+  for (const el of document.querySelectorAll('.key')) el.classList.toggle('on', held.has(el.dataset.k));
+  $('held').textContent = held.size ? [...held].join('+').toUpperCase() : '';
+}
+function paintArm() {
+  $('arm').classList.toggle('on', armed);
+  $('arm').textContent = armed ? 'ARM AÇIK' : 'ARM';
+  $('hint').textContent = armed ? 'W A D basılı tut · S geri · boşluk = STOP' : 'Önce ARM, sonra W A S D';
+}
+function keyDown(k) {
+  if (!armed || held.has(k)) return;
+  // A hand on the keys wins over a gear, here as on the server.
+  if (gear) { gear = null; gearAt = Date.now(); }
+  held.add(k); paintKeys(); sendWs({ cmd: 'keys', keys: [...held] });
+}
+function keyUp(k) {
+  if (!held.delete(k)) return;
+  paintKeys(); sendWs({ cmd: 'keys', keys: [...held] });
+}
+function releaseAll() {
+  if (!held.size) return;
+  held.clear(); paintKeys(); sendWs({ cmd: 'keys', keys: [] });
+}
+function stopAll() {
+  armed = false; gear = null; gearAt = Date.now();
+  releaseAll(); LIFT.release();
+  sendWs({ cmd: 'idle' });
+  paintArm();
+}
+function setArmed(on) {
+  armed = on;
+  releaseAll();
+  sendWs(on ? { cmd: 'start' } : { cmd: 'stop' });
+  paintArm();
+}
+$('arm').addEventListener('click', () => setArmed(!armed));
+$('stopb').addEventListener('click', stopAll);
+$('estop').addEventListener('click', stopAll);
+
+addEventListener('keydown', (e) => {
+  if (editing || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if ('wasd'.includes(k) && k.length === 1) { e.preventDefault(); keyDown(k); }
+  else if (e.code === 'Space') { e.preventDefault(); stopAll(); }
+});
+addEventListener('keyup', (e) => {
+  const k = e.key.toLowerCase();
+  if ('wasd'.includes(k) && k.length === 1) { e.preventDefault(); keyUp(k); }
+});
+// Anything that could swallow a keyup releases everything instead.
+addEventListener('blur', releaseAll);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+addEventListener('pagehide', () => sendWs({ cmd: 'idle' }));
+for (const el of document.querySelectorAll('.key')) {
+  const k = el.dataset.k;
+  el.addEventListener('pointerdown', (e) => { e.preventDefault(); keyDown(k); });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) el.addEventListener(ev, () => keyUp(k));
+}
+
+// Exclusive: one gear or none, and tapping the lit one releases it.
+function selectGear(g) {
+  gear = gear === g ? null : g;
+  gearAt = Date.now();
+  sendWs({ cmd: 'gear', gear });
+}
+$('g-normal').addEventListener('click', () => selectGear('normal'));
+$('g-fast').addEventListener('click', () => selectGear('fast'));
+
+function setLevel(v, push = true) {
+  level = Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
+  if (document.activeElement !== $('lvlNum')) $('lvlNum').value = level;
+  if (document.activeElement !== $('lvlRange')) $('lvlRange').value = level;
+  if (push) sendWs({ cmd: 'level', level });
+}
+$('lvlRange').addEventListener('input', () => setLevel($('lvlRange').value));
+$('lvlNum').addEventListener('focus', () => { editing = true; });
+$('lvlNum').addEventListener('blur', () => { editing = false; });
+$('lvlNum').addEventListener('input', () => {
+  const v = parseFloat($('lvlNum').value);
+  if (Number.isFinite(v)) setLevel(v);
+});
+for (const b of document.querySelectorAll('.lvlchips button')) {
+  b.addEventListener('click', () => setLevel(b.dataset.lvl));
+}
+
+function paintDrive(s) {
+  // The server is the authority on whether the robot is running.
+  if (armed !== !!s.running) { armed = !!s.running; if (!armed) held.clear(); paintKeys(); paintArm(); }
+  // ...and on the gear, except for the moment right after a tap, when a frame
+  // already in flight would otherwise undo it.
+  if (Date.now() - gearAt > 400) gear = s.gear || null;
+  const gs = s.gears || {}, vref = s.vref || 3.3, vmax = s.vmax || 3.3;
+  const dv = (d) => ((Math.max(0, Math.min(255, d)) / 255) * vref).toFixed(2);
+  for (const g of ['normal', 'fast']) {
+    $(`g-${g}`).classList.toggle('on', gear === g);
+    const c = gs[g];
+    $(`gs-${g}`).textContent = c ? `dac ${c[0]} / ${c[1]}\n${dv(c[0])} / ${dv(c[1])} V` : '–';
+  }
+  if (typeof s.level === 'number' && !editing && s.level !== level) setLevel(s.level, false);
+
+  const ceiling = Math.round((vmax / vref) * 255);
+  $('gearNote').textContent = gear
+    ? (s.gear_clamped ? `${gear} tavanın üstünde: --v-max ${vmax} V = dac ${ceiling} gidiyor`
+                      : `${gear} hızı seçili — seviye ona uygulanmaz` + (armed ? '' : ' · ARM bekleniyor'))
+    : `seviye ${level} % · ${s.combo ? `satır ${s.combo}` : 'tuş basılı değil'}`;
+  $('gearNote').className = 'muted ell ' + (s.gear_clamped ? 'warnc' : '');
+
+  const e = s.esp || {};
+  for (const [id, p, v] of [['25', e.pL, e.vL], ['26', e.pR, e.vR]]) {
+    $(`w${id}`).textContent = p == null ? '–' : `${Math.round(p)} %`;
+    $(`w${id}v`).textContent = v == null ? '–' : `${v.toFixed(2)} V`;
+    meter($(`w${id}bar`), p, 60, 90);
+  }
+  const settling = s.dir_settling || e.rev_wait;
+  const d = Array.isArray(e.rev) ? e.rev : (s.dir || [false, false]);
+  $('dirTag').className = 'dirtag ' + (settling ? 'wait' : (d[0] || d[1]) ? 'rev' : 'fwd');
+  $('dirTag').textContent = settling ? 'DURDURULUYOR…' : (!d[0] && !d[1]) ? 'İLERİ'
+    : (d[0] && d[1]) ? 'GERİ' : (d[0] ? 'DÖNÜŞ · 25 ters' : 'DÖNÜŞ · 26 ters');
+}
+
+// ── lift ─────────────────────────────────────────────────────────────
+const LIFT = liftMount({ send: sendWs, into: '#liftBox' });
+function paintLift(s) {
+  LIFT.fromStatus(s);
+  const l = s.lift || {};
+  $('liftState').textContent = l.cut ? 'SINIR — bırak' : l.dir > 0 ? `kalkıyor ${l.out}/255`
+    : l.dir < 0 ? `iniyor ${Math.abs(l.out)}/255` : 'duruyor';
+  $('liftCard').className = 'card' + (l.cut ? ' warn-card' : '');
+}
+
+// ── ESP32 + Pi ───────────────────────────────────────────────────────
+function paintSystem(s) {
+  const e = s.esp || {}, ok = s.esp_fresh && !s.serial_error;
+  $('transport').textContent = s.transport || '–';
+  $('eLink').textContent = ok ? 'bağlı' : 'yok';
+  $('eLink').className = ok ? 'ok' : 'bad';
+  $('eRssi').textContent = e.rssi == null ? '–' : `${e.rssi} dBm`;
+  $('eUp').textContent = e.uptime == null ? '–' : dur(Math.round(e.uptime / 1000));
+  $('ePkt').textContent = `${e.pkt ?? '–'} / ${e.bad ?? '–'}`;
+  $('ePkt').className = e.bad > 0 ? 'warnc' : '';
+  $('eVolt').textContent = e.vL == null ? '–' : `${fmt(e.vL, 2)} / ${fmt(e.vR, 2)}`;
+  $('eDac').textContent = e.dacL == null ? '–' : `${e.dacL} / ${e.dacR}`;
+  $('eRev').textContent = Array.isArray(e.rev) ? `${e.rev[0] ? 'geri' : 'ileri'} / ${e.rev[1] ? 'geri' : 'ileri'}` : '–';
+  $('eEn').textContent = e.en ? '1' : '0';
+  $('eEn').className = e.en ? 'ok' : '';
+  $('eErr').hidden = !s.serial_error;
+  $('eErr').textContent = s.serial_error || '';
+
+  const r = s.rpi;
+  if (!r) return;
+  $('rCpuT').textContent = r.cpu == null ? '–' : `${fmt(r.cpu, 0)} %`
+    + ((r.cores || []).length ? ` (${r.cores.map((c) => Math.round(c ?? 0)).join('·')})` : '');
+  meter($('rCpuBar'), r.cpu, 70, 90);
+  // Scaled to 85 °C: 80 is where a Pi 4 starts throttling itself.
+  $('rTempT').textContent = r.temp_c == null ? '–' : `${fmt(r.temp_c)} °C`;
+  meter($('rTempBar'), r.temp_c == null ? 0 : (r.temp_c / 85) * 100, 70, 88);
+  const m = r.mem || {};
+  $('rMemT').textContent = `${mbytes(m.used)} / ${mbytes(m.total)}`;
+  meter($('rMemBar'), m.pct, 75, 90);
+  $('rLoad').textContent = (r.load || []).map((v) => fmt(v, 2)).join(' ');
+  $('rDisk').textContent = r.disk ? `${(r.disk.free / 1073741824).toFixed(1)} GB boş` : '–';
+  $('rProc').textContent = r.proc ? `${fmt(r.proc.cpu, 0)} % · ${mbytes(r.proc.rss)}` : '–';
+  $('rUp').textContent = dur(r.uptime_s);
+  const t = r.throttled;
+  $('rThrottle').textContent = !t ? 'throttle durumu bilinmiyor'
+    : t.under_voltage ? '⚠ GERİLİM DÜŞÜK — powerbank motorların altında çöküyor'
+    : t.throttled ? '⚠ sıcaklıktan yavaşlatıldı'
+    : t.ever_under_voltage ? 'şimdi normal (daha önce gerilim düştü)' : 'gerilim ve sıcaklık normal';
+  $('rThrottle').className = 'muted ell ' + (t && (t.under_voltage || t.throttled) ? 'bad'
+    : t && t.ever_under_voltage ? 'warnc' : '');
+}
+
+// ── the LiDAR map ────────────────────────────────────────────────────
+// In the scanner's own frame, not the field's — see public/lidarmap.js. The
+// room follows ?lidar=<room>, then the picker, then the server's default.
+let lidarRoomChosen = new URLSearchParams(location.search).get('lidar');
+const LZ = lidarMount({ canvas: $('map'), room: lidarRoomChosen || 'default' });
+
+function paintLidar(s) {
+  const srv = s.lidar;
+  if (!srv) return;
+  if (!lidarRoomChosen) LZ.setRoom(srv.room);
+  const st = LZ.stats, live = LZ.live;
+  $('lzDot').className = 'dot ' + lidarDotClass(st, srv, live);
+  $('lzState').textContent = lidarStateText(st, srv, live);
+  $('lzWait').hidden = st.scans > 0;
+  $('lzHow').innerHTML = lidarHowHtml(st, srv, esc, 'lidar');
+
+  // The room picker: the server's default, this page's room, and any room a
+  // scanner is streaming into right now.
+  const rooms = [...new Set([srv.room, st.room, ...(srv.elsewhere || []).map((r) => r.id)])];
+  const want = rooms.join(',');
+  if ($('lzRoom').dataset.want !== want) {
+    $('lzRoom').dataset.want = want;
+    $('lzRoom').innerHTML = rooms.map((r) => {
+      const other = (srv.elsewhere || []).find((x) => x.id === r);
+      return `<option value="${esc(r)}">oda ${esc(r)}${other ? ' · canlı' : ''}</option>`;
+    }).join('');
+  }
+  if (document.activeElement !== $('lzRoom')) $('lzRoom').value = st.room;
+
+  const sameRoom = srv.room === st.room;
+  $('lzLabel').textContent = sameRoom ? (srv.label || (srv.senders ? 'bağlı' : 'yok')) : (st.senders ? 'bağlı' : 'yok');
+  $('lzRate').textContent = lidarRateText(st, live);
+  $('lzPos').textContent = st.x == null ? '–' : `${fmt(st.x, 2)}, ${fmt(-st.z, 2)} m`;
+  $('lzYaw').textContent = st.yawDeg == null ? '–' : `${fmt(st.yawDeg, 0)}°`;
+  $('lzLock').textContent = lidarPoseText(st, live);
+  $('lzLock').className = live && st.tracking === 'lost' ? 'bad' : '';
+  $('lzArea').textContent = `${fmt(st.area, 1)} m²`;
+  $('lzLat').textContent = st.latencyMs == null ? '–' : `${Math.round(st.latencyMs)} ms`;
+  $('lzCal').textContent = !st.scans ? '–' : st.calibrated ? 'metrik' : 'yaklaşık';
+  $('lzCal').className = !st.scans ? '' : st.calibrated ? 'ok' : 'warnc';
+  $('lzFollow').className = LZ.radar.follow ? 'on' : '';
+  $('lzRings').className = LZ.radar.showRings ? 'on' : '';
+}
+$('lzRoom').addEventListener('change', () => { lidarRoomChosen = $('lzRoom').value; LZ.setRoom(lidarRoomChosen); });
+$('lzFollow').addEventListener('click', () => { LZ.radar.follow = !LZ.radar.follow; });
+$('lzRings').addEventListener('click', () => { LZ.radar.showRings = !LZ.radar.showRings; });
+$('lzIn').addEventListener('click', () => LZ.zoom(1.35));
+$('lzOut').addEventListener('click', () => LZ.zoom(1 / 1.35));
+$('lzClear').addEventListener('click', () => {
+  sendWs({ cmd: 'lidar_reset', room: LZ.stats.room });
+  LZ.clear();
+});
+$('lzPng').addEventListener('click', async () => {
+  const blob = await LZ.exportPng();
+  if (!blob) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `lidar-${LZ.stats.room}-${Date.now()}.png`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+});
+
+// The wheel trim, as on every page. 'raw' because the only drive paths on this
+// screen are the keys and the gears, and neither applies it.
+const WT = wheelsMount({ strip: true, mode: 'raw', into: '#trimHost' });
+
+paintArm();
+paintKeys();
+connect();
+</script>
+</body>
+</html>

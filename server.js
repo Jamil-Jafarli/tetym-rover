@@ -78,6 +78,9 @@ import { MarlinLink, Jogger, bestPort, explainSerialError,
          DEFAULT_BAUD } from './marlin.js';
 import { marlinApi } from './marlin_http.js';
 import { Rover } from './rover.js';
+import { LidarRelay, routeUpgrades } from './lidar_relay.js';
+import { LidarSim } from './lidar_sim.js';
+import { advertise } from './lidar_discovery.js';
 
 // The competition field, straight out of the module the pages load — one copy
 // of the graph, served to anything that asks for it. See public/field.js.
@@ -122,7 +125,13 @@ function parseArgs(argv) {
                  camWidth: CAMERA_DEFAULTS.width,
                  camHeight: CAMERA_DEFAULTS.height,
                  camFps: CAMERA_DEFAULTS.fps,
-                 qr: true };
+                 qr: true,
+                 // The LiDAR map. The scanner is a phone running webscan, and it
+                 // finds this server the way it used to find the webscan relay.
+                 lidarRoom: 'default', lidarSim: false, webscan: null,
+                 // Announce the relay over mDNS so the phone app lists it
+                 // without an address being typed.
+                 advertise: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--fake') args.fake = true;
@@ -145,6 +154,10 @@ function parseArgs(argv) {
       const [w, h] = String(argv[++i] || '').split(/[x×*]/);
       if (w && h) { args.camWidth = parseInt(w, 10); args.camHeight = parseInt(h, 10); }
     }
+    else if (a === '--lidar-room') args.lidarRoom = argv[++i];
+    else if (a === '--lidar-sim') args.lidarSim = true;
+    else if (a === '--webscan') args.webscan = argv[++i];
+    else if (a === '--no-advertise') args.advertise = false;
     else if (a === '--https') args.https = true;
     else if (a === '--cert') { args.cert = argv[++i]; args.https = true; }
     else if (a === '--key') { args.key = argv[++i]; args.https = true; }
@@ -184,6 +197,15 @@ function parseArgs(argv) {
   --cam-fps <n>     capture rate (default ${CAMERA_DEFAULTS.fps})
   --no-camera       do not open a camera at all
   --no-qr           camera on, QR reader off
+  --lidar-room <r>  the LiDAR relay room the pages show (default "default").
+                    A scanner connects to ws://<this machine>:<port>/ws with
+                    any room name; this only picks which one /dashboard draws
+  --lidar-sim       stream a simulated LiDAR into that room — no phone needed
+  --no-advertise    do not announce the relay over mDNS (_webscan._tcp). With it
+                    on, the webscan phone app finds this server by itself
+  --webscan <dir>   also serve a built webscan web app (apps/web/dist), so its
+                    browser scanner streams straight here. The phone's camera
+                    needs --https for that page
   --list            list serial ports and exit`);
       process.exit(0);
     }
@@ -430,6 +452,102 @@ function serveLogs(res, url) {
   }
 }
 
+const WEBSCAN_TYPES = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json', '.map': 'application/json', '.wasm': 'application/wasm',
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon',
+};
+
+/**
+ * The LiDAR map over HTTP.
+ *
+ * `GET /api/lidar` is every relay room: who is sending, how fast, how stale.
+ *
+ * With --webscan, the files of a built webscan web app too — its browser
+ * scanner then comes from the same origin whose /ws it streams to, which is the
+ * whole integration: nothing in webscan is edited. Tried only after the rover's
+ * own pages, so `/` is still the hub rather than webscan's index.
+ *
+ * Streamed, not read whole: the depth model's wasm is tens of megabytes, and a
+ * synchronous read that size is a stall in the 20 Hz stream to the motors.
+ */
+function serveLidar(lidar, dist, res, url) {
+  if (url === '/api/lidar') {
+    const b = Buffer.from(JSON.stringify(lidar.info()));
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
+                         'Content-Length': b.length, 'Cache-Control': 'no-store' });
+    res.end(b);
+    return true;
+  }
+  if (!dist || url === '/') return false;
+  let file;
+  try { file = path.resolve(dist, '.' + decodeURIComponent(url)); } catch { return false; }
+  // No authentication and a shared wifi: the name is resolved and then checked
+  // to still be inside the directory, never joined and trusted.
+  if (!file.startsWith(path.resolve(dist) + path.sep)) return false;
+  let st;
+  try { st = fs.statSync(file); } catch { return false; }
+  if (!st.isFile()) return false;
+  res.writeHead(200, {
+    'Content-Type': WEBSCAN_TYPES[path.extname(file)] || 'application/octet-stream',
+    'Content-Length': st.size,
+    'Cache-Control': file.endsWith('.html') ? 'no-cache' : 'public, max-age=3600',
+    // webscan's own headers. The depth model runs multi-threaded wasm, which
+    // only exists in a cross-origin-isolated document; `credentialless` still
+    // lets it pull the model weights from a CDN.
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Embedder-Policy': 'credentialless',
+    'Cross-Origin-Resource-Policy': 'cross-origin',
+    'Permissions-Policy': 'camera=(self), gyroscope=(self), accelerometer=(self)',
+  });
+  fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
+  return true;
+}
+
+/**
+ * Where a scanner should point, for the startup banner.
+ *
+ * Every address, not the first one: the Pi is normally on the ESP32's access
+ * point and on a router at once, and the first interface is the right answer
+ * only for phones that happen to be on that network. With mDNS on, the app
+ * does not need any of them.
+ */
+function lidarBanner(lidar, args, scheme) {
+  const ws = scheme === 'https' ? 'wss' : 'ws';
+  const nets = args.host === '0.0.0.0' ? localAddresses()
+    : [{ name: 'bind', address: args.host }];
+  console.log(`lidar: relay on /ws, room "${lidar.room}"`
+    + (args.advertise ? ' — the webscan app finds it by itself (mDNS _webscan._tcp)' : ''));
+  for (const n of nets.length ? nets : [{ name: 'local', address: 'localhost' }]) {
+    console.log(`   app relay URL, if typed:  ${ws}://${n.address}:${args.http}`.padEnd(52)
+      + `(${n.name})`);
+  }
+  if (args.lidarSim) console.log(`   simulated LiDAR streaming into room "${lidar.room}"`);
+  if (!args.advertise) console.log('   mDNS announcement off (--no-advertise) — type the URL in the app');
+  if (args.webscan) {
+    console.log(`   webscan web app from ${args.webscan}  ->  `
+      + `${scheme}://${host}:${args.http}/sender.html?room=${lidar.room}`);
+    if (!fs.existsSync(path.join(args.webscan, 'sender.html'))) {
+      console.log('   ...but there is no sender.html in it — build webscan first (pnpm build)');
+    }
+  }
+}
+
+/**
+ * Start the mDNS announcement, once the port is actually listening — a phone
+ * that finds the service before then dials a port that refuses it. Its name
+ * goes on the relay, so the pages can say what the app will list.
+ */
+async function announceLidar(lidar, args) {
+  if (!args.advertise) return null;
+  const handle = await advertise({ port: args.http, tls: !!args.https, path: '/ws' });
+  lidar.announced = handle.name;
+  if (handle.name) console.log(`lidar: announced as "${handle.name}" (_webscan._tcp)`);
+  else console.log(`lidar: mDNS announcement unavailable — ${handle.error}`);
+  return handle;
+}
+
 /**
  * The other machine: a differential drive on a Creality mainboard.
  *
@@ -470,6 +588,10 @@ async function runMarlin(args) {
     '/vision': 'vision.html',  // camera -> line detection, look and tune
     '/follow': 'follow.html',  // the same detector, driving
     '/tune':   'tune.html',    // read a run back and say what to change
+    // The LiDAR map is about the robot, not the board, so it is on both.
+    // /viewer.html is where the webscan phone app tells you to look.
+    '/lidar':  'lidar.html',
+    '/viewer.html': 'lidar.html',
   };
 
   // The road pages are shared with the ESP32 half, so they load what those
@@ -478,7 +600,11 @@ async function runMarlin(args) {
   // that renders and then does nothing.
   const SCRIPTS = { '/road.js': 'road.js', '/pilot.js': 'pilot.js',
                     '/analyse.js': 'analyse.js', '/wheels.js': 'wheels.js',
-                    '/sonar.js': 'sonar.js', '/cam.js': 'cam.js' };
+                    '/sonar.js': 'sonar.js', '/cam.js': 'cam.js',
+                    '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js' };
+
+  const lidar = new LidarRelay({ room: args.lidarRoom });
+  const lidarSim = args.lidarSim ? new LidarSim({ relay: lidar }).start() : null;
 
   let followCfg = loadFollowCfg();
   const runLog = new FollowLog();
@@ -524,6 +650,7 @@ async function runMarlin(args) {
 
     const page = PAGES[url], script = SCRIPTS[url];
     if (!page && !script) {
+      if (serveLidar(lidar, args.webscan, res, url)) return;
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('not found');
       return;
@@ -549,9 +676,10 @@ async function runMarlin(args) {
   // ── the road-following pages' socket ──────────────────────────────
   // /vision needs nothing but the page and /api/wheels; /follow drives, so it
   // gets a socket. Same port as the page, so there is nothing to configure in
-  // the browser.
+  // the browser. `/ws` on the same port is the LiDAR relay — see lidar_relay.js.
   const rover = new Rover({ link, jog });
-  const wss = new WebSocketServer({ server });
+  const wss = new WebSocketServer({ noServer: true });
+  routeUpgrades(server, { relay: lidar, wss });
 
   wss.on('connection', (ws, req) => {
     const peer = req.socket.remoteAddress;
@@ -565,6 +693,7 @@ async function runMarlin(args) {
         follow_cfg: followCfg,
         log: { active: runLog.active, file: runLog.file, rows: runLog.rows },
         cam: camera.status(),
+        lidar: lidar.status(),
       }));
     };
     const pusher = setInterval(send, 100);
@@ -612,6 +741,9 @@ async function runMarlin(args) {
           }
           break;
         }
+        case 'lidar_reset':
+          if (lidar.reset(msg.room || lidar.room)) console.log('lidar map cleared');
+          break;
         default:
           return;
       }
@@ -639,6 +771,9 @@ async function runMarlin(args) {
   console.log(`  camera / line:  ${base}/vision`);
   console.log(`  follow a line:  ${base}/follow`);
   console.log(`  read a run back:${base}/tune`);
+  console.log(`  lidar map:      ${base}/lidar`);
+  lidarBanner(lidar, args, 'http');
+  const lidarAd = await announceLidar(lidar, args);
   if (!camera.enabled) {
     console.log('camera: off (--no-camera)');
   } else {
@@ -699,6 +834,11 @@ async function runMarlin(args) {
     jog.stop();
     rover.stop('shutting down');
     for (const c of wss.clients) c.close();
+    if (lidarSim) lidarSim.stop();
+    // Goodbye packets before the socket goes, so a phone browsing right now
+    // does not latch onto a relay that is already gone.
+    if (lidarAd) await lidarAd.stop();
+    lidar.close();
     await camera.close();
     if (link.connected) {
       link.drain();
@@ -784,6 +924,9 @@ async function main() {
     '/pins':   'pins.html',    // the spare pins, by hand
     '/setup':  'setup.html',   // what to measure, in order, and where it goes
     '/dashboard': 'dashboard.html',  // everything at once, on one screen
+    '/panel':  'panel.html',   // the same, plus driving, fixed at 1920 × 1080
+    '/lidar':  'lidar.html',   // the LiDAR map, full screen
+    '/viewer.html': 'lidar.html',    // where the webscan phone app says to look
   };
 
   // The two pages that see the road share their code rather than each keeping
@@ -796,7 +939,13 @@ async function main() {
                     '/analyse.js': 'analyse.js', '/sonar.js': 'sonar.js',
                     '/wheels.js': 'wheels.js', '/route.js': 'route.js',
                     '/cam.js': 'cam.js', '/field.js': 'field.js',
-                    '/lift.js': 'lift.js' };
+                    '/lift.js': 'lift.js',
+                    '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js' };
+
+  // The LiDAR relay: scanners stream to /ws, pages draw what they stream. The
+  // map lives on the scanner and in the pages; the server only passes it on.
+  const lidar = new LidarRelay({ room: args.lidarRoom });
+  const lidarSim = args.lidarSim ? new LidarSim({ relay: lidar }).start() : null;
 
   const onRequest = (req, res) => {
     const url = (req.url || '/').split('?')[0];
@@ -847,6 +996,7 @@ async function main() {
 
     const page = PAGES[url], script = SCRIPTS[url];
     if (!page && !script) {
+      if (serveLidar(lidar, args.webscan, res, url)) return;
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('not found');
       return;
@@ -877,7 +1027,9 @@ async function main() {
     : http.createServer(onRequest);
 
   // ── browser websocket, same port ──────────────────────────────────
-  const wss = new WebSocketServer({ server });
+  // Every path but /ws, which is the LiDAR relay.
+  const wss = new WebSocketServer({ noServer: true });
+  routeUpgrades(server, { relay: lidar, wss });
   const runLog = new FollowLog();
 
   wss.on('connection', (ws, req) => {
@@ -895,6 +1047,7 @@ async function main() {
           cam: camera.status(),
           qr: qr.status(),
           rpi: sysSnap,
+          lidar: lidar.status(),
         }));
       }
     };
@@ -982,6 +1135,11 @@ async function main() {
           bench.resetRoute();
           console.log('route reset — map starts here');
           break;
+        // Forget the LiDAR map — on the server and on every page drawing it.
+        // The phone keeps its own copy; the next scans rebuild from here.
+        case 'lidar_reset':
+          if (lidar.reset(msg.room || lidar.room)) console.log('lidar map cleared');
+          break;
 
         // ── the field ──
         // Where to go: a list of stops, in order, e.g. ['A2', 'B3']. The
@@ -1051,6 +1209,7 @@ async function main() {
     const base = `${scheme}://${shown}:${args.http}`;
     console.log(`\nESP32 DAC bench:  ${base}/`);
     console.log(`  dashboard:      ${base}/dashboard`);
+    console.log(`  1920x1080 panel:${base}/panel`);
     console.log(`  manual page:    ${base}/manual`);
     console.log(`  keyboard drive: ${base}/drive`);
     console.log(`  camera / road:  ${base}/vision`);
@@ -1058,6 +1217,7 @@ async function main() {
     console.log(`  read a run back:${base}/tune`);
     console.log(`  obstacle stop:  ${base}/obstacle`);
     console.log(`  spare pins:     ${base}/pins`);
+    console.log(`  lidar map:      ${base}/lidar`);
 
     // "0.0.0.0" is not something anyone can type into a phone, so print what
     // they can. Every interface, every address, ready to copy.
@@ -1088,11 +1248,14 @@ async function main() {
     }
     console.log(`obstacle: stop under ${bench.obsCfg.stopCm} cm, clear over `
       + `${bench.obsCfg.clearCm} cm — enforced for every drive path`);
+    lidarBanner(lidar, args, scheme);
+    lidarAd = announceLidar(lidar, args);
 
     if (args.host === '0.0.0.0') {
       console.log('NOTE: reachable by anyone on this network, with no authentication.');
     }
   });
+  let lidarAd = null;           // a promise of the mDNS handle, once listening
 
   // ── shutdown ──────────────────────────────────────────────────────
   let closing = false;
@@ -1102,6 +1265,11 @@ async function main() {
     console.log('\nshutting down — outputs to idle');
     clearInterval(sysTimer);
     for (const c of wss.clients) c.close();
+    if (lidarSim) lidarSim.stop();
+    // Goodbye packets first — see announceLidar.
+    const ad = await lidarAd;
+    if (ad) await ad.stop();
+    lidar.close();
     await camera.close();
     await bench.close();
     if (transport._sim) await transport._sim.close();
