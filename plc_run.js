@@ -9,7 +9,8 @@
  *   robot.field()               the field state (public/field.js) to read the pose from
  *   robot.route()               dead reckoning for fieldPose(), or null
  *   robot.setMission(stops)     plan a list of stops from START
- *   robot.hold(reason|null)     stop the wheels and keep them stopped, or release
+ *   robot.hold(reason|null, all)  stop the wheels and keep them stopped, or release;
+ *                               `all` (emergency stop) holds the fork too
  *   robot.armed()               the pages' START is on
  *   robot.fault()               why the robot cannot drive right now, or null
  *
@@ -59,9 +60,10 @@ export function startCompetition(args, robot) {
       else say(`rota: ${plan.nodes.join(' > ')}`);
     }
     const hold = P.plcMissionHold(ms);
-    if (hold !== lastHold) {
-      lastHold = hold;
-      robot.hold(hold);
+    const key = `${hold}|${ms.estop}`;
+    if (key !== lastHold) {
+      lastHold = key;
+      robot.hold(hold, ms.estop);
     }
     flushLog();
   };

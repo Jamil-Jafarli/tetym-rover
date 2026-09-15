@@ -224,8 +224,15 @@ export class Bench {
     return { x: this.route.x, y: this.route.y, bearing: routeBearing(this.route) };
   }
 
-  /** The PLC mission's brake. Wheels only: the lift is not in the way of a door. */
-  hold(reason) { this.plcHold = reason || null; }
+  /**
+   * The PLC mission's brake. Wheels only while waiting — the lift is not in the
+   * way of a door — and the lift too on an emergency stop (`all`).
+   */
+  hold(reason, all = false) {
+    this.plcHold = reason || null;
+    this.plcHoldAll = !!(this.plcHold && all);
+    if (this.plcHoldAll) this.lift = 0;
+  }
 
   /**
    * Take the persisted tuning: obstacle thresholds, wheelbase, distance
@@ -644,7 +651,7 @@ export class Bench {
    * the same answer.
    */
   get liftOut() {
-    if (!this.lift) return 0;
+    if (!this.lift || this.plcHoldAll) return 0;
     if (Date.now() - this.lastLiftAt > KEYS_STALE_MS) return 0;
     const pct = Math.max(0, Math.min(100, Number(this.liftPct) || 0));
     return Math.round(this.lift * (pct / 100) * 255);

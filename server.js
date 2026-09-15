@@ -740,13 +740,14 @@ async function runMarlin(args) {
   // gets a socket. Same port as the page, so there is nothing to configure in
   // the browser. `/ws` on the same port is the LiDAR relay — see lidar_relay.js.
   const rover = new Rover({ link, jog });
+  rover.setCfg(followCfg);
 
   competition = startCompetition(args, {
     map: fieldMap,
     field: () => fieldSt,
     route: () => null,
     setMission: (stops) => fieldMission(fieldSt, stops, fieldMap, 'START'),
-    hold: (reason) => rover.hold(reason),
+    hold: (reason, all) => rover.hold(reason, all),
     armed: () => rover.running,
     fault: () => (link.connected ? null : 'motor kartı bağlı değil'),
     estop: () => rover.stop('acil stop'),
@@ -763,6 +764,7 @@ async function runMarlin(args) {
       if (ws.readyState !== ws.OPEN) return;
       ws.send(JSON.stringify({
         type: 'status', ...extra, ...rover.snapshot(),
+        machine: 'marlin',
         follow_cfg: followCfg,
         log: { active: runLog.active, file: runLog.file, rows: runLog.rows },
         cam: camera.status(),
@@ -797,7 +799,27 @@ async function runMarlin(args) {
 
         case 'follow_cfg':
           followCfg = saveFollowCfg({ ...followCfg, ...(msg.cfg || {}) });
+          rover.setCfg(followCfg);
           break;
+
+        // /follow by hand: W A S D and the fork, both repeated at 20 Hz while
+        // held and let go by the rover's own 400 ms dead-man when they stop.
+        case 'keys': {
+          const had = rover.keys.join('');
+          rover.setKeys(msg.keys, msg.pct, msg.swap === true);
+          if (rover.keys.join('') !== had) {
+            console.log(rover.keys.length ? `keys ${rover.keys.join('+').toUpperCase()}` : 'keys released');
+          }
+          break;
+        }
+        case 'lift': {
+          const before = rover.lift;
+          rover.setLift(msg.dir);
+          if (rover.lift !== before) {
+            console.log(rover.lift ? `fork ${rover.lift > 0 ? 'up' : 'down'} (Z, ${rover.liftFeed} mm/min)` : 'fork released');
+          }
+          break;
+        }
 
         case 'log_start': {
           const file = runLog.start({ ...(msg.meta || {}),
@@ -935,6 +957,7 @@ async function runMarlin(args) {
     closing = true;
     console.log('\nshutting down — letting the last move finish');
     competition.close();
+    rover.close();
     jog.stop();
     rover.stop('shutting down');
     for (const c of wss.clients) c.close();
@@ -982,7 +1005,7 @@ async function main() {
     field: () => bench.field,
     route: () => bench.routePose(),
     setMission: (stops) => bench.setMission(stops, 'START'),
-    hold: (reason) => bench.hold(reason),
+    hold: (reason, all) => bench.hold(reason, all),
     armed: () => bench.running,
     fault: () => (bench.tx.fresh ? null : 'esp32 erişilemiyor'),
     estop: () => bench.stop(),
@@ -1160,6 +1183,7 @@ async function main() {
       if (ws.readyState === ws.OPEN) {
         ws.send(JSON.stringify({
           type: 'status', ...extra, ...bench.snapshot(),
+          machine: 'esp32',
           follow_cfg: followCfg,
           log: { active: runLog.active, file: runLog.file, rows: runLog.rows },
           // The three things that are the Pi's rather than the ESP32's.

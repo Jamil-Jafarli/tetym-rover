@@ -16,6 +16,8 @@ import path from 'node:path';
 import { DIRECTIONS, Jogger, MarlinLink, parseParams, SETTABLE,
          DEFAULT_FEED, DEFAULT_STEP_MM, explainSerialError } from '../marlin.js';
 import { resolveVector } from '../marlin_http.js';
+import { Rover, keysDemand, HELD_STALE_MS, LIFT_FEED } from '../rover.js';
+import WebSocket from 'ws';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -326,6 +328,101 @@ console.log('\nReading the board back');
   ok(SETTABLE.M906.max === 1200, 'motor current is clamped well under a hot coil');
 }
 
+// ── /follow by hand: W A S D and the fork on Z ───────────────────────
+console.log('\nW A S D → the two wheels');
+{
+  eq(keysDemand(['w'], 50), [50, 50], 'W: both wheels forward');
+  eq(keysDemand(['s'], 50), [-50, -50], 'S: both wheels back');
+  eq(keysDemand(['w', 'd'], 50), [50, 20], 'W+D: an arc right, the right wheel slower');
+  eq(keysDemand(['w', 'a'], 50), [20, 50], 'W+A: an arc left');
+  eq(keysDemand(['d'], 50), [30, -30], 'D alone: pivot right on the spot');
+  eq(keysDemand(['a'], 50), [-30, 30], 'A alone: pivot left');
+  eq(keysDemand(['w', 's'], 50), [0, 0], 'W+S cancel — standing still, not the last one pressed');
+  eq(keysDemand(['W'], 500), [100, 100], 'upper case, and the speed is capped at 100 %');
+  eq(keysDemand(['x', 'q'], 50), [0, 0], 'anything else is ignored');
+}
+
+/** A Jogger stand-in that records what it was asked for. */
+function stubJog() {
+  return {
+    calls: [],
+    startWheels(l, r, feed, lift = 0) { this.calls.push({ l, r, feed, lift }); },
+    stop() { this.calls.push('stop'); },
+    get last() { return this.calls[this.calls.length - 1]; },
+  };
+}
+
+console.log('\nThe fork rides on Z, in the same G1 as the wheels');
+{
+  const link = stubLink();
+  const jog = new Jogger(link);
+  eq(jog.lineFor({ X: -1, Y: 1, Z: 0.6 }, 2000), 'G1 X-1.00 Y1.00 Z0.60 F2000',
+     'Z joins X and Y in one line');
+  eq(jog.lineFor({ X: 0, Y: 0, Z: -0.6 }, 240), 'G1 Z-0.60 F240', 'the fork alone is a Z-only line');
+  eq(jog.lineFor({ X: -1, Y: 1 }, 2000), 'G1 X-1.00 Y1.00 F2000', 'no Z, no Z word — the wheels are unchanged');
+  ok(jog.chunkSeconds(Math.hypot(3, 4, 12), 600) > jog.chunkSeconds(5, 600),
+     'the pacing counts the Z distance too');
+
+  const stub = stubJog();
+  const rover = new Rover({ link: { connected: true }, jog: stub, maxFeed: 6000 });
+  rover.setLift(1);
+  const up = stub.last;
+  ok(up !== 'stop' && up.l === 0 && up.r === 0 && up.lift > 0,
+     `E with the rover not armed: the fork moves, the wheels do not  (Z ${up.lift.toFixed(3)} mm)`);
+  ok(Math.abs(up.lift - LIFT_FEED * rover.chunkMs / 60000) < 1e-9 && up.feed === LIFT_FEED,
+     `one chunk of fork is ${LIFT_FEED} mm/min × ${rover.chunkMs} ms, at ${LIFT_FEED} mm/min`);
+  ok(LIFT_FEED <= 300, 'the fork speed stays under the Ender 3 Pro Z limit (5 mm/s), so driving is not slowed');
+
+  rover.setKeys(['w'], 40);
+  ok(stub.last.lift > 0 && stub.last.l === 0, 'W while not armed does not drive — START comes first');
+  rover.start();
+  rover.setKeys(['w'], 40);
+  const both = stub.last;
+  ok(both.l > 0 && both.r > 0 && both.lift > 0, 'armed: W and E together are one chunk');
+  ok(Math.abs(both.feed - Math.hypot(0.4 * 6000, 0.4 * 6000, LIFT_FEED)) < 1e-6,
+     'the feed is the three speeds combined, so the chunk still takes its 150 ms');
+
+  rover.setKeys(['w', 'd'], 50);
+  ok(rover.demand[0] > rover.demand[1], 'W+D: the left wheel faster — the pilot turns right the same way');
+  rover.setKeys(['w', 'd'], 50, true);
+  ok(rover.demand[0] < rover.demand[1], 'with /follow\'s wheel swap on, the keys swap too');
+
+  rover.hold('kapı: PLC devam komutu bekleniyor');
+  rover.setKeys(['w'], 40);
+  ok(stub.last !== 'stop' && stub.last.l === 0 && stub.last.lift > 0,
+     'a PLC hold stops the wheels, not the fork');
+  rover.hold('acil stop', true);
+  rover.setLift(1);
+  ok(rover.lift === 0 && (stub.last === 'stop' || stub.last.lift === 0),
+     'an emergency stop holds the fork as well — E held does nothing');
+  rover.hold(null);
+
+  rover.setLift(-1);
+  ok(stub.last.lift < 0, 'Q: the fork goes down');
+  rover.setCfg({ lift: { invert: true, feed: 120 } });
+  rover.setLift(-1);
+  ok(stub.last.lift > 0 && rover.liftFeed === 120, 'inverted in follow.json: Q drives Z the other way, at the saved speed');
+  rover.setCfg({ lift: { feed: 99999 } });
+  ok(rover.liftFeed === 600, 'a fork speed out of range is clamped');
+
+  rover.stop('DUR');
+  ok(stub.last === 'stop' && rover.lift === 0 && rover.keys.length === 0, 'STOP lets go of the fork and the keys too');
+
+  // The dead-man: nothing repeated for longer than HELD_STALE_MS is let go.
+  rover.start();
+  rover.setKeys(['w'], 40);
+  rover.setLift(1);
+  rover._expire(Date.now() + HELD_STALE_MS + 1);
+  ok(stub.last === 'stop' && rover.lift === 0 && rover.keys.length === 0,
+     `keys and fork not repeated for ${HELD_STALE_MS} ms stop by themselves`);
+
+  rover.setAuto(30, 30, 'takip');
+  rover.setLift(1);
+  // (still inverted from above, so E is negative Z here)
+  ok(stub.last.l > 0 && stub.last.lift !== 0, 'the fork works while the pilot is driving');
+  rover.close();
+}
+
 // ── the HTTP surface, against the real server ────────────────────────
 console.log('\n/api/marlin over HTTP, with no printer attached');
 const server = spawn('node',
@@ -404,6 +501,27 @@ try {
 
   // ...and the page is still served after all of that.
   ok((await fetch(`${BASE}/`)).ok, 'the page still serves');
+
+  // /follow's keys and fork over the socket, and the server's own dead-man.
+  const ws = new WebSocket('ws://127.0.0.1:8198/');
+  let st = null;
+  ws.on('message', (d) => { try { const m = JSON.parse(d); if (m.type === 'status') st = m; } catch { /* */ } });
+  await new Promise((res, rej) => { ws.once('open', res); ws.once('error', rej); });
+  ws.send(JSON.stringify({ cmd: 'lift', dir: 1 }));
+  ws.send(JSON.stringify({ cmd: 'start' }));
+  ws.send(JSON.stringify({ cmd: 'keys', keys: ['w', 'd'], pct: 50 }));
+  await sleep(250);
+  ok(st && st.machine === 'marlin', 'the status says which machine this is');
+  ok(st && st.lift && st.lift.dir === 1, 'the fork command reached the rover  (E held)');
+  eq(st && st.keys, ['w', 'd'], 'the keys reached the rover');
+  eq(st && st.set, [50, 20], '...as the two wheel demands');
+  await sleep(HELD_STALE_MS + 300);
+  ok(st && st.lift.dir === 0 && st.keys.length === 0,
+     'no repeats from the page: the server lets go of both within half a second');
+  ws.close();
+  const follow = await (await fetch(`${BASE}/follow`)).text();
+  ok(/KeyF/.test(follow) && /KeyQ/.test(follow) && /cmd: 'lift'/.test(follow),
+     '/follow has the F, W A S D and Q / E shortcuts');
 } finally {
   server.kill();
 }

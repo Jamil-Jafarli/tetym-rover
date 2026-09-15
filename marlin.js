@@ -649,7 +649,7 @@ export class Jogger {
 
   /** The line a set of per-driver distances would produce, without sending it. */
   lineFor(axis, feed = this._feed) {
-    const parts = ['X', 'Y']
+    const parts = ['X', 'Y', 'Z']
       .filter((a) => Math.abs(axis?.[a] || 0) > 1e-6)
       .map((a) => `${a}${(axis[a] * this.link.sign(a)).toFixed(2)}`);
     return parts.length ? `G1 ${parts.join(' ')} F${Math.round(feed)}` : null;
@@ -678,8 +678,11 @@ export class Jogger {
    * signs. Their mean is how far the rover advances; their difference, over
    * the track width, is how much it turns.
    */
-  startWheels(left, right, feed) {
-    this._axis = { X: -left, Y: right };
+  startWheels(left, right, feed, lift = 0) {
+    // Z is the fork, on the board's Z driver. It rides in the same G1 as the
+    // wheels, so lifting while driving is one move and not two streams
+    // fighting over one planner.
+    this._axis = lift ? { X: -left, Y: right, Z: lift } : { X: -left, Y: right };
     this._feed = feed;
     this._wake.set();
   }
@@ -707,7 +710,7 @@ export class Jogger {
 
       // The distance Marlin will plan and time the move by, which for two
       // unequal wheel distances is neither of them.
-      const seconds = this.chunkSeconds(Math.hypot(axis.X || 0, axis.Y || 0), feed);
+      const seconds = this.chunkSeconds(Math.hypot(axis.X || 0, axis.Y || 0, axis.Z || 0), feed);
       const startedAt = Date.now();
 
       try {

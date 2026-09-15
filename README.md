@@ -1170,6 +1170,28 @@ The path is fetched once over HTTP (`GET /api/route`) and appended to from the
 status stream, because sending 1 500 points ten times a second to say the last
 one moved 5 cm is how a dashboard becomes the reason the robot stutters.
 
+### Keys on /follow — following, hand driving and the fork
+
+| key | what it does |
+|---|---|
+| **F** | start following / stop following (a toggle) |
+| **Space**, **Esc** | stop — always, from anywhere on the page; never starts anything |
+| **W A S D** | drive by hand while held. W / S forward and back, A / D alone pivot, with W or S an arc. Pressing one while the pilot is driving stops the pilot — **F** starts it again |
+| **Q** / **E** | the fork down / up while held. Works while following, too |
+
+The same keys are on screen for touch. Held keys and the fork are repeated at
+20 Hz and let go by the server 400 ms after the repeats stop, so a lost focus or
+a frozen tab is a stop. On the Ender rover the fork is the board's **Z** driver,
+riding in the same G1 line as the wheels (`G1 X… Y… Z… F…`) at 240 mm/min by
+default — under the Ender 3 Pro's 5 mm/s Z limit, so lifting while driving does
+not slow the wheels. Its speed and direction are set on /follow and saved in
+`follow.json` as `lift.feed` / `lift.invert`. The hand-drive speed is the
+slider on the same card. On the ESP32 bench the keys are the existing `keys`
+and `lift` commands, at /drive's speeds and level.
+
+If Z refuses to move down before the fork has been homed, it is Marlin's soft
+endstop: turn it off on /gcode (M211 S0).
+
 ### The factory automation system — PLC (`/plc`)
 
 The ek şartname's second half is a protocol: the robot talks to the

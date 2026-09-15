@@ -38,6 +38,15 @@
 
   #arm{padding:20px;font-size:17px;border-width:2px}
   #arm.live{background:var(--accent);border-color:var(--accent);color:#04220c}
+  kbd{display:inline-block;min-width:22px;padding:2px 6px;border:1px solid var(--line);border-bottom-width:2px;
+    border-radius:6px;font:600 12px/1.3 ui-monospace,Menlo,monospace;text-align:center;background:var(--panel)}
+  .keys{display:grid;grid-template-columns:repeat(3,48px);gap:6px;justify-content:center}
+  .keys kbd{min-width:0;padding:10px 0;font-size:15px}
+  .keys kbd.on,.forkbtn.on{background:var(--accent);border-color:var(--accent);color:#04220c}
+  .handgrid{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:center}
+  .forkbtn{touch-action:none;-webkit-user-select:none;user-select:none}
+  .shortcuts{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;font-size:13px;color:var(--dim)}
+  @media (max-width:520px){ .handgrid{grid-template-columns:1fr} }
   #kill{padding:20px;font-size:17px;border-width:2px;
     background:var(--stop);border-color:var(--stop);color:#2b0705}
 
@@ -97,7 +106,7 @@
     <b>/vision</b> sayfasında ayarla, sonra buraya dön. İlk seferde
     <b>tekerleri yerden kaldır</b>, «düz yolda hız»ı 20 % yap ve bir tur
     izle. Burada ana seviye yok: sürgüde yazan yüzde doğrudan pine giden
-    yüzdedir. <b>Boşluk tuşu</b> her an durdurur.</p>
+    yüzdedir. <b>F</b> takibi başlatır / durdurur, <b>boşluk tuşu</b> her an durdurur.</p>
   </div>
 
   <div class="card" style="padding:10px">
@@ -112,6 +121,49 @@
     </div>
     <div class="muted" style="margin-top:10px;text-align:center" id="why">
       önce kamerayı başlat
+    </div>
+    <div class="shortcuts" style="justify-content:center">
+      <span><kbd>F</kbd> takibi başlat / durdur</span>
+      <span><kbd>Boşluk</kbd> <kbd>Esc</kbd> hemen dur</span>
+      <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> elle sür</span>
+      <span><kbd>Q</kbd> fork aşağı · <kbd>E</kbd> fork yukarı</span>
+    </div>
+  </div>
+
+  <!-- ── by hand: W A S D and the fork ── -->
+  <div class="card" id="handCard">
+    <div class="lbl">Elle sürüş ve fork</div>
+    <div class="handgrid">
+      <div>
+        <div class="keys">
+          <kbd id="kQ" class="forkbtn" data-lift="-1" title="basılı tut: fork aşağı">Q</kbd>
+          <kbd id="kW" data-key="w">W</kbd>
+          <kbd id="kE" class="forkbtn" data-lift="1" title="basılı tut: fork yukarı">E</kbd>
+          <kbd id="kA" data-key="a">A</kbd>
+          <kbd id="kS" data-key="s">S</kbd>
+          <kbd id="kD" data-key="d">D</kbd>
+        </div>
+      </div>
+      <div style="min-width:0">
+        <div class="muted" id="handState">tuş basılı değil</div>
+        <p class="muted" style="margin:8px 0 0;font-size:13px">
+          Tuşlar basılı tutulduğu sürece çalışır, bırakınca durur. Takip sürerken
+          <b>W A S D</b>'ye basmak pilotu durdurur ve sürüşü ele alır — tekrar
+          başlatmak için <b>F</b>. Fork (<b>Q / E</b>) takip sürerken de çalışır.</p>
+        <div id="handMarlin" hidden>
+          <label class="lbl" style="display:block;margin-top:10px">Elle sürüş hızı · <span id="handPctV">40</span> %</label>
+          <input type="range" id="handPct" min="5" max="100" step="5" value="40">
+          <div class="btnrow">
+            <label class="muted" style="display:flex;align-items:center;gap:8px;flex:1;min-width:150px">
+              Fork hızı (Z, mm/dk)
+              <input type="number" id="liftFeed" min="10" max="600" step="10" value="240" style="width:90px"></label>
+            <label class="muted" style="display:flex;align-items:center;gap:8px">
+              <input type="checkbox" id="liftInvert"> yönü ters çevir</label>
+          </div>
+        </div>
+        <p class="muted" id="handEsp" hidden style="margin:8px 0 0;font-size:13px">
+          ESP32 kartında elle hız, <b>/drive</b> sayfasındaki tuş hızları ve ana seviyedir.</p>
+      </div>
     </div>
   </div>
 
@@ -391,6 +443,7 @@ function connect() {
     wsOpen = false;
     // The server already drops to idle when the socket dies; disarming here is
     // so the page cannot look like it is still driving.
+    HAND.clear(); liftDir = 0; handDriving = false; paintHand();
     disarm('bağlantı kesildi');
     setTimeout(connect, 1000);
   };
@@ -401,11 +454,19 @@ function connect() {
     if (WT) WT.fromStatus(s);
     status = s;
     paintLink(s);
+    $('handMarlin').hidden = s.machine !== 'marlin';
+    $('handEsp').hidden = s.machine !== 'esp32';
+    if (!sawLift && s.machine === 'marlin' && s.lift) {
+      sawLift = true;
+      $('liftFeed').value = s.lift.feed;
+      $('liftInvert').checked = !!s.lift.invert;
+    }
     if (!armed && s.follow_cfg) applySaved(s.follow_cfg);
     if (armed && !s.running) disarm('sunucu durdurdu');
   };
 }
 
+let sawLift = false;
 let sawCfg = false;
 function applySaved(c) {
   if (sawCfg) return;                    // only on the first status
@@ -653,22 +714,132 @@ function disarm(why) {
 $('arm').addEventListener('click', () => armed ? disarm('elle durduruldu') : arm());
 $('kill').addEventListener('click', () => disarm('DUR düğmesi'));
 
-// Space is the panic key, and it must work with the focus anywhere on the page.
-addEventListener('keydown', (e) => {
-  if (e.code !== 'Space' && e.key !== 'Escape') return;
-  // Typing a note must not stop the robot; a slider having focus must not
-  // stop it from stopping. So the exemption is for text fields only.
+// ── the keyboard ────────────────────────────────────────────────────
+//
+//   F           start / stop following — a toggle
+//   Space, Esc  stop, always; never starts anything
+//   W A S D     drive by hand while held; takes the wheels off the pilot
+//   Q / E       the fork down / up while held; works while following too
+//
+// Held things are repeated at 20 Hz and the server lets go of them 400 ms
+// after the repeats stop, so a key the browser never saw come up — focus
+// lost, tab frozen — is a stop, not a robot that keeps going.
+const HAND = new Set();       // w a s d held
+let liftDir = 0;              // -1 Q, +1 E, 0 neither
+let handDriving = false;      // this page sent START for the keys
+const liftKeys = { KeyQ: -1, KeyE: 1 };
+const driveKeys = { KeyW: 'w', KeyA: 'a', KeyS: 's', KeyD: 'd' };
+
+const isTyping = () => {
   const el = document.activeElement;
-  const typing = el && el.tagName === 'INPUT'
-    && ['text', 'number', 'search'].includes(el.type);
-  if (typing && e.key !== 'Escape') return;
-  e.preventDefault();
-  disarm('boşluk tuşu');
+  return !!el && ((el.tagName === 'INPUT' && ['text', 'number', 'search'].includes(el.type))
+    || el.tagName === 'TEXTAREA');
+};
+const handPct = () => Number($('handPct').value) || 40;
+
+function pumpHand() {
+  if (HAND.size) sendWs({ cmd: 'keys', keys: [...HAND], pct: handPct(), swap: !!pcfg.swap });
+  if (liftDir) sendWs({ cmd: 'lift', dir: liftDir });
+}
+setInterval(pumpHand, 50);
+
+function handDown(k) {
+  if (HAND.has(k)) return;
+  // A hand on the keyboard wins over the pilot. It stops rather than pausing,
+  // so letting go of the key never hands the wheels back without being asked.
+  if (armed) disarm('elle sürüşe geçildi (W A S D)');
+  HAND.add(k);
+  if (!handDriving) { handDriving = true; sendWs({ cmd: 'start' }); }
+  pumpHand();
+  paintHand();
+}
+function handUp(k) {
+  if (!HAND.delete(k)) return;
+  if (!HAND.size) {
+    sendWs({ cmd: 'keys', keys: [], pct: handPct() });
+    if (handDriving && !armed) sendWs({ cmd: 'stop' });
+    handDriving = false;
+  } else pumpHand();
+  paintHand();
+}
+function liftSet(dir) {
+  if (liftDir === dir) return;
+  liftDir = dir;
+  sendWs({ cmd: 'lift', dir });
+  paintHand();
+}
+function releaseHand() {
+  for (const k of [...HAND]) handUp(k);
+  liftSet(0);
+}
+
+function paintHand() {
+  for (const k of 'wasd') $('k' + k.toUpperCase()).classList.toggle('on', HAND.has(k));
+  $('kQ').classList.toggle('on', liftDir < 0);
+  $('kE').classList.toggle('on', liftDir > 0);
+  const parts = [];
+  if (HAND.size) parts.push(`elle sürüş: ${[...HAND].join('+').toUpperCase()}`);
+  if (liftDir) parts.push(`fork ${liftDir > 0 ? 'yukarı' : 'aşağı'}`);
+  $('handState').textContent = parts.join(' · ') || 'tuş basılı değil';
+}
+
+addEventListener('keydown', (e) => {
+  // Stop first, and from anywhere: a slider or a button having focus must not
+  // stop the robot from stopping. Only typing into a text field is exempt, and
+  // Escape works even then.
+  if (e.code === 'Space' || e.key === 'Escape') {
+    if (isTyping() && e.key !== 'Escape') return;
+    e.preventDefault();
+    releaseHand();
+    disarm(e.key === 'Escape' ? 'Esc tuşu' : 'boşluk tuşu');
+    return;
+  }
+  if (isTyping() || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.code === 'KeyF') {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (armed) disarm('F tuşu');
+    else { releaseHand(); arm(); }
+    return;
+  }
+  if (driveKeys[e.code]) { e.preventDefault(); if (!e.repeat) handDown(driveKeys[e.code]); return; }
+  if (liftKeys[e.code]) { e.preventDefault(); if (!e.repeat) liftSet(liftKeys[e.code]); }
 });
+addEventListener('keyup', (e) => {
+  if (driveKeys[e.code]) handUp(driveKeys[e.code]);
+  if (liftKeys[e.code] && liftDir === liftKeys[e.code]) liftSet(0);
+});
+
+// The same keys on screen, for touch and mouse: held while pressed.
+for (const el of document.querySelectorAll('#handCard kbd')) {
+  const down = (e) => {
+    e.preventDefault();
+    el.setPointerCapture?.(e.pointerId);
+    if (el.dataset.key) handDown(el.dataset.key);
+    else liftSet(Number(el.dataset.lift));
+  };
+  const up = () => {
+    if (el.dataset.key) handUp(el.dataset.key);
+    else if (liftDir === Number(el.dataset.lift)) liftSet(0);
+  };
+  el.addEventListener('pointerdown', down);
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => el.addEventListener(ev, up));
+}
+
+$('handPct').addEventListener('input', () => { $('handPctV').textContent = $('handPct').value; });
+const saveLift = () => sendWs({ cmd: 'follow_cfg', cfg: { lift: {
+  ...((status && status.follow_cfg && status.follow_cfg.lift) || {}),
+  feed: Math.max(10, Math.min(600, Number($('liftFeed').value) || 240)),
+  invert: $('liftInvert').checked,
+} } });
+$('liftFeed').addEventListener('change', saveLift);
+$('liftInvert').addEventListener('change', saveLift);
+
 // A hidden tab gets its rAF throttled to ~1 Hz, which is not a rate you can
-// steer at. Leaving is stopping.
-addEventListener('blur', () => disarm('pencere odağı kayboldu'));
+// steer at. Leaving is stopping — the keys and the fork included.
+addEventListener('blur', () => { releaseHand(); disarm('pencere odağı kayboldu'); });
 document.addEventListener('visibilitychange', () => {
+  if (document.hidden) releaseHand();
   if (document.hidden) disarm('sayfa arka plana geçti');
 });
 
