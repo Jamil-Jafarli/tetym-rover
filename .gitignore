@@ -6,3 +6,5 @@ logs/
 certs/
 .DS_Store
 *.log
+# what mobile/setup.sh generates when run in place
+mobile/WebScanner/

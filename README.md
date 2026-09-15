@@ -995,7 +995,9 @@ iPhone (webscan ARKit app, LiDAR)  ──SCN1, ~560 B/scan──▶  this server
 The relay that used to be webscan's own Express server lives inside this one
 now (`lidar_relay.js`), on the same port, speaking the same protocol to the
 byte: `/ws?room=<name>&role=sender|viewer`, binary SCN1 frames, JSON control
-messages. So **nothing in webscan changes.**
+messages. So **nothing in webscan changes.** The iPhone app itself is in this
+repo too, under [`mobile/`](mobile/README.md): React Native + Swift/ARKit, with
+its own setup script (macOS and Xcode needed to build it).
 
 **The phone finds the rover by itself.** Like webscan's own relay, this server
 announces `_webscan._tcp` over mDNS (`lidar_discovery.js`) with the same TXT
@@ -1968,6 +1970,7 @@ printer's, and the third is what both machines run.
 | `public/lidar.js` | SCN1 wire format, log-odds occupancy grid, motion gate. Pure |
 | `public/lidarmap.js` | the relay viewer and the radar renderer, shared by /dashboard and /lidar |
 | `public/lidar.html` | the LiDAR map full screen; `/viewer.html` too |
+| `mobile/` | the iPhone LiDAR scanner app (React Native + Swift/ARKit), moved from webscan; `mobile/setup.sh` builds it on a Mac |
 | `public/panel.html` | the 1920 × 1080 panel: every system and the drive controls on one screen |
 | `shared.js` | loads the pages' pure modules into Node — see the note at its top |
 | `follow_log.js` | writes `logs/follow-*.json` and its summary |
