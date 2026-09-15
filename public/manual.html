@@ -6,12 +6,11 @@
 <title>Manuel · ESP32 DAC</title>
 <style>
   :root{
-    --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
+    color-scheme:light;
+    --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570;
     --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
   }
-  @media (prefers-color-scheme: light){
-    :root{ --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570; }
-  }
+
   *{box-sizing:border-box}
   body{margin:0;padding:16px;background:var(--bg);color:var(--ink);
     font:15px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
@@ -93,7 +92,7 @@
 
     <div style="margin-top:16px">
       <div class="row">
-        <div class="lbl" style="margin:0">Master seviye — iki kanalı da ölçekler</div>
+        <div class="lbl" style="margin:0">Ana seviye — iki kanalı da ölçekler</div>
         <div class="row" style="gap:8px">
           <input type="number" id="lvlNum" min="0" max="100" step="1" value="100">
           <span style="font-size:16px;color:var(--dim)">%</span>
@@ -103,7 +102,7 @@
       <div class="levelbar" id="lvlBar"><i id="lvlFill"></i></div>
     </div>
 
-    <button id="start" style="margin-top:16px">START</button>
+    <button id="start" style="margin-top:16px">BAŞLAT</button>
     <div class="pin" style="margin-top:10px">
       START ayrıca dijital ENABLE pinini <b id="enPin">GPIO23</b> 1 yapar
     </div>
@@ -118,7 +117,7 @@
            <div class="muted"><b id="vR">1.00</b> V &middot; GPIO26</div></div>
     </div>
     <div class="row" style="margin-top:14px">
-      <span class="muted">ENABLE pini</span>
+      <span class="muted">ETKİN pini</span>
       <span class="row" style="gap:8px">
         <span class="dot" id="endot"></span>
         <b id="enval" style="font:600 15px ui-monospace,monospace">0</b>
@@ -133,7 +132,7 @@
     <div class="err" id="err" hidden></div>
   </div>
 
-  <button id="stopb">STOP · IDLE</button>
+  <button id="stopb">DUR · BOŞTA</button>
   <div class="muted" style="text-align:center">
     Bu sekmeyi kapat — iki DAC de anında idleye, ENABLE 0a düşer
   </div>
@@ -146,7 +145,7 @@ let VMAX = 3.3, IDLE_V = 1.0, running = false, ws = null;
 let level = 100, editingLevel = false;
 
 // Everything the user touches is percent: 0 % is idle (zero throttle) and
-// 100 % is the ceiling the server was started with. The master level scales
+// 100 % is the ceiling the server was started with. The ana seviye scales
 // both channels on top of that, so the volts shown are what you will get.
 const scaled = p => (p * level) / 100;
 const voltsFor = p => IDLE_V + (scaled(p) / 100) * (VMAX - IDLE_V);
@@ -179,7 +178,7 @@ $('inR').addEventListener('input', () => syncPair('inR','rgR','num'));
 $('rgL').addEventListener('input', () => syncPair('inL','rgL','rng'));
 $('rgR').addEventListener('input', () => syncPair('inR','rgR','rng'));
 
-// ── master level ───────────────────────────────────────────────────
+// ── ana seviye ───────────────────────────────────────────────────
 function paintLevel() {
   if (document.activeElement !== $('lvlNum')) $('lvlNum').value = level;
   if (document.activeElement !== $('lvlRange')) $('lvlRange').value = level;
@@ -215,7 +214,7 @@ function connect() {
   ws = new WebSocket(`${proto}://${location.host}/`);
   ws.onopen = () => {
     $('dot').className = 'dot ok';
-    $('linktxt').textContent = 'connected';
+    $('linktxt').textContent = 'bağlı';
     syncPair('inL','rgL','num');
   };
   ws.onclose = () => {

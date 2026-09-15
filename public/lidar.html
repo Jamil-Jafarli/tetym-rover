@@ -6,11 +6,9 @@
 <title>Robot · LiDAR haritası</title>
 <style>
   :root{
-    --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
+    color-scheme:light;
+    --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570;
     --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
-  }
-  @media (prefers-color-scheme: light){
-    :root{ --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570; }
   }
   *{box-sizing:border-box}
   html,body{height:100%}
@@ -103,7 +101,7 @@
 
   <h2>Tarayıcıyı bağlamak</h2>
   <p class="how"><b>iPhone LiDAR</b> — webscan ARKit uygulaması (apps/ios). Bu sunucuyu ağda
-    kendisi bulur; bulamazsa relay URL <code id="appUrl">–</code>. Harita metriktir, kalibrasyon
+    kendisi bulur; bulamazsa röle adresi <code id="appUrl">–</code>. Harita metriktir, kalibrasyon
     gerekmez.</p>
   <p class="how" style="margin-top:6px"><b>Tarayıcı</b> — sunucu <code>--webscan</code> ve
     <code>--https</code> ile açıldıysa <a id="senderLink" href="#">/sender.html</a>. Derinlik bir
@@ -174,7 +172,7 @@ function paint() {
   $('sLock').className = live && st.tracking === 'lost' ? 'bad' : '';
   $('sScore').textContent = fmt(st.score, 3);
   $('sArea').textContent = `${fmt(st.area, 1)} m²`;
-  $('sScans').textContent = st.scans.toLocaleString();
+  $('sScans').textContent = st.scans.toLocaleString('tr-TR');
   $('sLat').textContent = st.latencyMs == null ? '–' : `${Math.round(st.latencyMs)} ms`;
   $('sRx').textContent = `${fmt(st.bytes / 1024, 0)} KB`;
   $('sHeight').textContent = st.heightM ? `${fmt(st.heightM, 2)} m` : '–';

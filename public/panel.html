@@ -6,13 +6,10 @@
 <title>Robot · 1920×1080 panel</title>
 <style>
   :root{
-    --bg:#0b0e13; --panel:#141920; --panel2:#0f1318; --line:#262e39; --ink:#e6edf3; --dim:#8b949e;
-    --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
-    --lz-occ:#38bdf8; --lz-free:#182a3c;
-  }
-  @media (prefers-color-scheme: light){
-    :root{ --bg:#e9edf2; --panel:#fff; --panel2:#f5f7fa; --line:#d3dae3; --ink:#1c2128; --dim:#5a6570;
-           --lz-occ:#1f6fb4; --lz-free:#d7e2ee; }
+    color-scheme:light;
+    --bg:#e9edf2; --panel:#fff; --panel2:#f5f7fa; --line:#d3dae3; --ink:#1c2128;
+    --dim:#5a6570; --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
+    --lz-occ:#1f6fb4; --lz-free:#d7e2ee;
   }
   *{box-sizing:border-box}
   html,body{margin:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
@@ -118,9 +115,8 @@
 
   /* lidar */
   .mapwrap{position:relative;flex:1;min-height:0}
-  #map{width:100%;height:100%;display:block;border-radius:9px;background:#0a0d12;cursor:grab}
+  #map{width:100%;height:100%;display:block;border-radius:9px;background:#f7f9fc;cursor:grab}
   #map:active{cursor:grabbing}
-  @media (prefers-color-scheme: light){ #map{background:#f7f9fc} }
   .mapwait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     pointer-events:none;padding:18px;text-align:center}
   .mapwait[hidden]{display:none}
@@ -213,11 +209,11 @@
       <a href="/">ana sayfa</a><a href="/dashboard">panel (mobil)</a><a href="/drive">sür</a>
       <a href="/follow">takip</a><a href="/vision">kamera</a><a href="/tune">analiz</a>
       <a href="/obstacle">engel</a><a href="/setup">kurulum</a><a href="/pins">pinler</a>
-      <a href="/manual">manual</a><a href="/lidar">lidar</a>
+      <a href="/manual">manuel</a><a href="/lidar">lidar</a>
     </nav>
     <div class="row" style="gap:10px">
       <span id="clock">--:--:--</span>
-      <button id="estop" title="Boşluk tuşu da aynı şeyi yapar">■ STOP</button>
+      <button id="estop" title="Boşluk tuşu da aynı şeyi yapar">■ DUR</button>
     </div>
   </header>
 
@@ -228,7 +224,7 @@
     <div class="kpi"><span class="lbl">GPIO26</span><b id="k26">–</b><span class="muted" id="k26v">–</span></div>
     <div class="kpi" id="kCmBox"><span class="lbl">Önde</span><b id="kCm">–</b><span class="muted" id="kPhase">–</span></div>
     <div class="kpi"><span class="lbl">Mesafe</span><b id="kDist">–</b><span class="muted" id="kBearing">–</span></div>
-    <div class="kpi"><span class="lbl">Yön · Enable</span><b id="kDir">–</b><span class="muted" id="kEnable">–</span></div>
+    <div class="kpi"><span class="lbl">Yön · Etkin</span><b id="kDir">–</b><span class="muted" id="kEnable">–</span></div>
     <div class="kpi"><span class="lbl">Sahada</span><b id="kField">–</b><span class="muted" id="kFieldSub">–</span></div>
     <div class="kpi"><span class="lbl">LiDAR</span><b id="kLidar">–</b><span class="muted" id="kLidarSub">–</span></div>
     <div class="kpi" id="kPiBox"><span class="lbl">Raspberry Pi</span><b id="kPi">–</b><span class="muted" id="kPiSub">–</span></div>
@@ -303,7 +299,7 @@
           </div></div>
         </div>
         <div class="row" style="margin-top:8px">
-          <div class="kv" style="grid-template-columns:repeat(8,auto);gap:4px 22px">
+          <div class="kv" style="grid-template-columns:repeat(8,auto);gap:4px 16px">
             <div><span class="lbl">Tarayıcı</span><b id="lzLabel">–</b></div>
             <div><span class="lbl">Tarama/sn</span><b id="lzRate">–</b></div>
             <div><span class="lbl">Konum</span><b id="lzPos">–</b></div>
@@ -366,8 +362,8 @@
           <div class="tools"><span class="dirtag" id="dirTag">–</span><span class="muted" id="held">–</span></div>
         </div>
         <div id="driveTop">
-          <button id="arm">ARM</button>
-          <button id="stopb">STOP · IDLE</button>
+          <button id="arm">ETKİNLEŞTİR</button>
+          <button id="stopb">DUR · BOŞTA</button>
         </div>
         <div id="driveBody">
           <div>
@@ -379,7 +375,7 @@
               <div class="key" data-k="s"><b>S</b><span>geri</span></div>
               <div class="key" data-k="d"><b>D</b><span>sağ</span></div>
             </div>
-            <div class="muted" id="hint" style="margin-top:6px;font-size:11.5px">Önce ARM, sonra W A S D</div>
+            <div class="muted" id="hint" style="margin-top:6px;font-size:11.5px">Önce ETKİNLEŞTİR, sonra W A S D</div>
           </div>
           <div style="min-width:0">
             <div class="seg">
@@ -399,11 +395,11 @@
         </div>
         <div class="wheels">
           <div class="wheel">
-            <div class="row"><span class="lbl">GPIO25 · board</span><span class="muted mono" id="w25v">–</span></div>
+            <div class="row"><span class="lbl">GPIO25 · kart</span><span class="muted mono" id="w25v">–</span></div>
             <b id="w25">–</b><div class="meter"><i id="w25bar"></i></div>
           </div>
           <div class="wheel">
-            <div class="row"><span class="lbl">GPIO26 · board</span><span class="muted mono" id="w26v">–</span></div>
+            <div class="row"><span class="lbl">GPIO26 · kart</span><span class="muted mono" id="w26v">–</span></div>
             <b id="w26">–</b><div class="meter"><i id="w26bar"></i></div>
           </div>
         </div>
@@ -428,7 +424,7 @@
               <div><span class="lbl">Pin volt</span><b id="eVolt">–</b></div>
               <div><span class="lbl">DAC</span><b id="eDac">–</b></div>
               <div><span class="lbl">Röleler</span><b id="eRev">–</b></div>
-              <div><span class="lbl">ENABLE</span><b id="eEn">–</b></div>
+              <div><span class="lbl">ETKİN</span><b id="eEn">–</b></div>
             </div>
             <div class="muted bad" id="eErr" style="margin-top:6px" hidden></div>
           </div>
@@ -448,7 +444,7 @@
             <div class="kv" style="grid-template-columns:1fr 1fr">
               <div><span class="lbl">Yük</span><b id="rLoad">–</b></div>
               <div><span class="lbl">Disk</span><b id="rDisk">–</b></div>
-              <div><span class="lbl">Server</span><b id="rProc">–</b></div>
+              <div><span class="lbl">Sunucu</span><b id="rProc">–</b></div>
               <div><span class="lbl">Pi çalışıyor</span><b id="rUp">–</b></div>
             </div>
             <div class="muted ell" id="rThrottle" style="margin-top:7px">–</div>
@@ -580,7 +576,7 @@ function paintKpis(s) {
   $('kDist').textContent = r.calibrated ? `${fmt(r.dist, 1)} m` : '–';
   $('kBearing').textContent = r.calibrated ? `${fmt(r.bearing, 0)}° · ${fmt(r.x, 1)}, ${fmt(r.y, 1)} m` : 'ölçülmedi';
   $('kDir').textContent = s.dir_settling ? 'DURUYOR…' : (s.dir_name || '–');
-  $('kEnable').textContent = s.enable ? 'ENABLE 1' : 'ENABLE 0';
+  $('kEnable').textContent = s.enable ? 'ETKİN 1' : 'ETKİN 0';
   $('kEnable').className = 'muted ' + (s.enable ? 'ok' : '');
 
   const f = s.field || {};
@@ -728,8 +724,8 @@ function paintKeys() {
 }
 function paintArm() {
   $('arm').classList.toggle('on', armed);
-  $('arm').textContent = armed ? 'ARM AÇIK' : 'ARM';
-  $('hint').textContent = armed ? 'W A D basılı tut · S geri · boşluk = STOP' : 'Önce ARM, sonra W A S D';
+  $('arm').textContent = armed ? 'ETKİN' : 'ETKİNLEŞTİR';
+  $('hint').textContent = armed ? 'W A D basılı tut · S geri · boşluk = DUR' : 'Önce ETKİNLEŞTİR, sonra W A S D';
 }
 function keyDown(k) {
   if (!armed || held.has(k)) return;
@@ -825,7 +821,7 @@ function paintDrive(s) {
   const ceiling = Math.round((vmax / vref) * 255);
   $('gearNote').textContent = gear
     ? (s.gear_clamped ? `${gear} tavanın üstünde: --v-max ${vmax} V = dac ${ceiling} gidiyor`
-                      : `${gear} hızı seçili — seviye ona uygulanmaz` + (armed ? '' : ' · ARM bekleniyor'))
+                      : `${gear} hızı seçili — seviye ona uygulanmaz` + (armed ? '' : ' · etkinleştirme bekleniyor'))
     : `seviye ${level} % · ${s.combo ? `satır ${s.combo}` : 'tuş basılı değil'}`;
   $('gearNote').className = 'muted ell ' + (s.gear_clamped ? 'warnc' : '');
 

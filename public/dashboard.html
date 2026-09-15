@@ -6,12 +6,12 @@
 <title>Robot · kontrol paneli</title>
 <style>
   :root{
-    --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
-    --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
+    color-scheme:light;
+    --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570;
+    --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff; --lz-occ:#1f6fb4;
+    --lz-free:#d7e2ee;
   }
-  @media (prefers-color-scheme: light){
-    :root{ --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570; }
-  }
+
   *{box-sizing:border-box}
   body{margin:0;padding:16px 16px 40px;background:var(--bg);color:var(--ink);
     font:15px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
@@ -78,10 +78,9 @@
 
   /* map — the LiDAR radar, see public/lidarmap.js */
   .mapwrap{position:relative}
-  #map{width:100%;display:block;border-radius:10px;background:#0a0d12;aspect-ratio:62/35;
+  #map{width:100%;display:block;border-radius:10px;background:#f7f9fc;aspect-ratio:62/35;
     cursor:grab}
   #map:active{cursor:grabbing}
-  @media (prefers-color-scheme: light){ #map{background:#f7f9fc} }
   @media (max-width:640px){ #map{aspect-ratio:1/1} }
   .mapwait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     pointer-events:none;padding:18px;text-align:center}
@@ -90,9 +89,7 @@
   .mapwait[hidden]{display:none}
   .mapwait code{color:var(--ink)}
   .maptools button.on{border-color:var(--idle);color:var(--idle)}
-  /* the legend follows LIDAR_COLORS in public/lidar.js, per theme */
-  :root{--lz-occ:#38bdf8;--lz-free:#182a3c}
-  @media (prefers-color-scheme: light){ :root{--lz-occ:#1f6fb4;--lz-free:#d7e2ee} }
+  /* the legend's colours are --lz-occ / --lz-free in :root, as LIDAR_COLORS.light */
   .maplegend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px}
   .maplegend span{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
   .sw{width:10px;height:10px;border-radius:3px;flex:none}
@@ -196,7 +193,7 @@
         <div class="cm" id="gcm">–</div>
       </div>
       <div class="phase">
-        <div id="pGo">GEDİR</div><div id="pStop">DAYANIB</div><div id="pWait">GÖZLƏYİR</div>
+        <div id="pGo">GİDİYOR</div><div id="pStop">DURDU</div><div id="pWait">BEKLİYOR</div>
       </div>
       <div class="kv" style="margin-top:12px">
         <div><span class="lbl">Eşik</span><b id="oStop" class="sm">–</b></div>
@@ -319,7 +316,7 @@
         <div><span class="lbl">Çalışma süresi</span><b id="eUp" class="sm">–</b></div>
         <div><span class="lbl">Paket</span><b id="ePkt" class="sm">–</b></div>
         <div><span class="lbl">Bozuk paket</span><b id="eBad" class="sm">–</b></div>
-        <div><span class="lbl">ENABLE</span><b id="eEn" class="sm">–</b></div>
+        <div><span class="lbl">ETKİN</span><b id="eEn" class="sm">–</b></div>
       </div>
       <div class="kv" style="margin-top:12px">
         <div><span class="lbl">Pin gerilimi</span><b id="eVolt" class="sm">–</b></div>
@@ -346,8 +343,8 @@
       <div class="kv" style="margin-top:14px">
         <div><span class="lbl">Yük (1/5/15)</span><b id="rLoad" class="sm">–</b></div>
         <div><span class="lbl">Frekans</span><b id="rMhz" class="sm">–</b></div>
-        <div><span class="lbl">Server CPU</span><b id="rProc" class="sm">–</b></div>
-        <div><span class="lbl">Server RAM</span><b id="rRss" class="sm">–</b></div>
+        <div><span class="lbl">Sunucu CPU</span><b id="rProc" class="sm">–</b></div>
+        <div><span class="lbl">Sunucu RAM</span><b id="rRss" class="sm">–</b></div>
         <div><span class="lbl">Pi çalışıyor</span><b id="rUp" class="sm">–</b></div>
         <div><span class="lbl">Disk</span><b id="rDisk" class="sm">–</b></div>
       </div>
@@ -456,14 +453,14 @@ function paintNow(s) {
   $('kCm').textContent = o.cm == null ? 'yankı yok' : `${fmt(o.cm)} sm`;
   $('kCm').className = o.blocked ? 'bad' : '';
   $('kPhase').textContent = o.phase === 'go' ? 'açık'
-    : o.phase === 'stop' ? 'DAYANIB' : 'bekliyor';
+    : o.phase === 'stop' ? 'DURDU' : 'bekliyor';
 
   $('kDist').textContent = r.calibrated ? `${fmt(r.dist, 1)} m` : '–';
   $('kBearing').textContent = r.calibrated
     ? `${fmt(r.bearing, 0)}° · ${fmt(r.x, 1)}, ${fmt(r.y, 1)} m` : 'ölçülmedi';
 
   $('kDir').textContent = s.dir_settling ? 'DURUYOR…' : (s.dir_name || '–');
-  $('kEnable').textContent = s.enable ? 'ENABLE 1' : 'ENABLE 0';
+  $('kEnable').textContent = s.enable ? 'ETKİN 1' : 'ETKİN 0';
   $('kEnable').className = 'muted ' + (s.enable ? 'ok' : '');
 }
 
@@ -513,7 +510,7 @@ function paintQr(s) {
   const hist = (q.history || []).slice().reverse();
   $('qrList').innerHTML = hist.length
     ? hist.map(h => `<div><code>${escapeHtml(String(h.text).slice(0, 40))}</code>`
-        + `<span>${new Date(h.at).toLocaleTimeString()}</span></div>`).join('')
+        + `<span>${new Date(h.at).toLocaleTimeString('tr-TR')}</span></div>`).join('')
     : '<div><span>geçmiş boş</span></div>';
 }
 

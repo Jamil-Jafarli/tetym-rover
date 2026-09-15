@@ -265,7 +265,7 @@ const INFO = {
     + 'kendi DAC sayısını verir.',
     'Kullan: ARM, sonra hızı seç. W/A/S/D basmak hızı kapatır — el her zaman '
     + 'üstündür.',
-    'Ham çıkış: dönme eşiği, güç düzeltmesi ve master level buna UYGULANMAZ '
+    'Ham çıkış: dönme eşiği, güç düzeltmesi ve ana seviye buna UYGULANMAZ '
     + '— yazdığın sayı pine giden sayıdır.'],
   gearDac: ['Hızın DAC sayısı',
     'Pinin aldığı 0-255 sayısı: dac = V / 3.3 × 255. 124 ≈ 1.60 V, 241 ≈ 3.12 V.',

@@ -6,12 +6,11 @@
 <title>Robot · yolu takip et</title>
 <style>
   :root{
-    --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
+    color-scheme:light;
+    --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570;
     --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
   }
-  @media (prefers-color-scheme: light){
-    :root{ --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570; }
-  }
+
   *{box-sizing:border-box}
   body{margin:0;padding:16px 16px 40px;background:var(--bg);color:var(--ink);
     font:15px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
@@ -97,7 +96,7 @@
     <p class="muted" style="margin:8px 0 0">Kamerada yol doğru bulunana kadar
     <b>/vision</b> sayfasında ayarla, sonra buraya dön. İlk seferde
     <b>tekerleri yerden kaldır</b>, «düz yolda hız»ı 20 % yap ve bir tur
-    izle. Burada master seviye yok: sürgüde yazan yüzde doğrudan pine giden
+    izle. Burada ana seviye yok: sürgüde yazan yüzde doğrudan pine giden
     yüzdedir. <b>Boşluk tuşu</b> her an durdurur.</p>
   </div>
 
@@ -108,8 +107,8 @@
   <!-- ── the two buttons that matter ── -->
   <div class="card">
     <div class="btnrow" style="margin-top:0">
-      <button id="arm">SÜRMƏYƏ BAŞLA</button>
-      <button id="kill">DAYAN</button>
+      <button id="arm">SÜRÜŞE BAŞLA</button>
+      <button id="kill">DUR</button>
     </div>
     <div class="muted" style="margin-top:10px;text-align:center" id="why">
       önce kamerayı başlat
@@ -125,7 +124,7 @@
       <div><span class="lbl">Mesafe</span><b id="rDist">–</b></div>
     </div>
     <div class="row" style="margin-top:10px">
-      <span class="muted">Qabaqda</span>
+      <span class="muted">Önde</span>
       <span class="muted" id="rSon">sensör yok</span>
     </div>
     <div class="bars">
@@ -167,7 +166,7 @@
     </div>
     <div class="btnrow" style="margin-top:0">
       <button id="mAuto" class="on">Avto</button>
-      <button id="mDark">Qara yol</button>
+      <button id="mDark">Siyah yol</button>
       <button id="mWhite">Ağ yol</button>
     </div>
   </div>
@@ -211,11 +210,11 @@
 
   <div class="card">
     <div class="lbl" style="margin-bottom:4px">Teker dengesi</div>
-    <p class="muted" style="margin:0 0 12px">İki motor heç vaxt eyni motor
+    <p class="muted" style="margin:0 0 12px">İki motor hiçbir zaman aynı motor
     değil. Her tekerin kendi dönme eşiği ve kendi gücü var — aynı gerilimde biri
     daha hızlı gidiyorsa robot düz gitmez. Bunlar <b>ölçüldükten sonra</b>
     doldurulur: <a href="/manual">manual sayfasında</a> her tekeri ayrı ayrı
-    qaldır, ilk döndüyü faizi yaz.</p>
+    kaldır, ilk döndüğü yüzdeyi yaz.</p>
     <div class="sl">
       <div class="row"><span class="muted">GPIO25 — dönme eşiği</span><b id="vS25">genel</b></div>
       <input type="range" id="stall25" min="0" max="60" step="1" value="0">
@@ -270,7 +269,7 @@
   </div>
 
   <div class="card">
-    <div class="lbl" style="margin-bottom:12px">Yoldan uzaqlaşanda</div>
+    <div class="lbl" style="margin-bottom:12px">Yoldan uzaklaşınca</div>
     <div class="sl">
       <div class="row"><span class="muted">Bu sapmadan sonra dönmeye geçer</span>
         <b id="vHard">0.60</b></div>
@@ -322,7 +321,7 @@
     yalnızca <b>hız farkıyla</b> olur — yön röleleri kullanılmaz, bu yüzden
     virajda durma duraklaması yoktur.</p>
     <p class="muted" style="margin:8px 0 0">Yüzdeler <b>doğrudan</b> pine gider —
-    /drivedaki master seviye bu sayfada uygulanmaz. Yani 100 %
+    /drive sayfasındaki ana seviye bu sayfada uygulanmaz. Yani 100 %
     <code>--v-max</code>tır (varsayılan 3.3 V), 0 % ise boştur (1.00 V). Tek yol,
     tek sınır: burada tavan «en yüksek hız» sürgüsüdür.</p>
     <p class="muted" style="margin:8px 0 0"><b>Ölü bölge.</b> Motor 1.5 Vun
@@ -644,7 +643,7 @@ function disarm(why) {
   pst = pilotState(performance.now());
   roadLockAuto(false);              // free to re-decide while you point it around
   $('arm').classList.remove('live');
-  $('arm').textContent = 'SÜRMƏYƏ BAŞLA';
+  $('arm').textContent = 'SÜRÜŞE BAŞLA';
   $('why').textContent = why || 'durdu';
   sendWs({ cmd: 'stop' });
   flushRows(true);

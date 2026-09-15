@@ -6,12 +6,11 @@
 <title>Robot · kaydı oku</title>
 <style>
   :root{
-    --bg:#0e1116; --panel:#161b22; --line:#2a323d; --ink:#e6edf3; --dim:#8b949e;
+    color-scheme:light;
+    --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570;
     --accent:#3fb950; --warn:#d29922; --stop:#f85149; --idle:#58a6ff;
   }
-  @media (prefers-color-scheme: light){
-    :root{ --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570; }
-  }
+
   *{box-sizing:border-box}
   body{margin:0;padding:16px 16px 40px;background:var(--bg);color:var(--ink);
     font:15px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
@@ -57,8 +56,7 @@
   td.n{text-align:right;font:13px ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
   .tag{font-size:11px;padding:2px 7px;border-radius:20px;border:1px solid var(--line)}
   .tag.l{color:var(--idle)} .tag.r{color:var(--warn)} .tag.x{color:var(--stop)}
-  svg{display:block;width:100%;height:auto;border-radius:10px;background:#0a0d12}
-  @media (prefers-color-scheme: light){ svg{background:#f7f9fc} }
+  svg{display:block;width:100%;height:auto;border-radius:10px;background:#f7f9fc}
   .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .ok{color:var(--accent)} .bad{color:var(--stop)}
 </style>
@@ -98,7 +96,7 @@
       <div class="grid">
         <div><span class="lbl">Süre</span><b id="mDur">–</b></div>
         <div><span class="lbl">Ortalama hız</span><b id="mSpeed">–</b></div>
-        <div><span class="lbl">Ən pis sapma</span><b id="mWorst">–</b></div>
+        <div><span class="lbl">En kötü sapma</span><b id="mWorst">–</b></div>
         <div><span class="lbl">Yırğalanma</span><b id="mWob">–</b></div>
         <div><span class="lbl">Direksiyon doyması</span><b id="mSat">–</b></div>
         <div><span class="lbl">Yol kaybı</span><b id="mLost">–</b></div>
@@ -236,14 +234,14 @@ function show(data, name) {
 
   const m = r.metrics;
   $('rTitle').textContent = name;
-  $('rWhen').textContent = r.started ? new Date(r.started).toLocaleString() : '';
+  $('rWhen').textContent = r.started ? new Date(r.started).toLocaleString('tr-TR') : '';
   $('rNote').textContent = r.note ? `«${r.note}»` : '';
   $('mDur').textContent = m.duration_s + ' s';
   $('mSpeed').textContent = m.avg_speed + ' %';
   $('mWorst').textContent = m.worst_err;
   $('mWob').textContent = m.wobble + '/s';
   $('mSat').textContent = Math.round(m.sat_frac * 100) + ' %';
-  $('mLost').textContent = m.lost_events === 0 ? 'yox'
+  $('mLost').textContent = m.lost_events === 0 ? 'yok'
     : `${m.lost_events} × ${m.lost_s} s`;
 
   drawChart(data.rows);
@@ -353,7 +351,7 @@ $('applyCalib').addEventListener('click', () => {
   if (!result || !result.calib) return;
   const { pct, metres, seconds, dead } = result.calib;
   sendWs({ cmd: 'follow_cfg', cfg: { calib: { pct, metres, seconds, dead } } });
-  $('applyCalib').textContent = 'Saxlanıldı';
+  $('applyCalib').textContent = 'Kaydedildi';
   $('applyCalib').disabled = true;
 });
 

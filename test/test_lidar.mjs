@@ -327,11 +327,11 @@ console.log('\n--lidar-sim: telefon olmadan xəritə axır');
     await v.open;
     await sleep(700);
     ok(v.got.bin.length > 10, `simulyator otağa kadr axıdır  (${v.got.bin.length})`);
-    ok(v.got.text.some((m) => m.type === 'sender-state' && /simulated/.test(m.note || '')),
+    ok(v.got.text.some((m) => m.type === 'sender-state' && /simülasyon/.test(m.note || '')),
        'simulyasiya olduğunu özü deyir');
     const api = await (await fetch('http://127.0.0.1:8195/api/lidar')).json();
     const r = api.rooms.find((x) => x.id === 'default');
-    ok(r && r.live && /SIMULATED/.test(r.label), `etiket: ${r && r.label}`);
+    ok(r && r.live && /SİMÜLE/.test(r.label), `etiket: ${r && r.label}`);
     v.ws.close();
   } finally {
     srv.proc.kill();

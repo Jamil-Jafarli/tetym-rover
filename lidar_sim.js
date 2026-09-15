@@ -108,8 +108,8 @@ export class LidarSim {
 
   start() {
     if (this.timer) return this;
-    this.sender = this.relay.localSender(this.room, 'SIMULATED lidar');
-    this.sender.state({ active: true, calibrated: true, note: 'simulated — not the robot' });
+    this.sender = this.relay.localSender(this.room, 'SİMÜLE LiDAR');
+    this.sender.state({ active: true, calibrated: true, note: 'simülasyon — robot değil' });
     const t0 = Date.now();
     this.timer = setInterval(() => this.sender.send(this.scan((Date.now() - t0) / 1000)),
                              1000 / this.hz);

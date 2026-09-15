@@ -332,7 +332,7 @@ function lidarHowHtml(st, srv, esc, openParam) {
       + `(<code>${esc(srv.announced)}</code>). Oda <code>${esc(st.room)}</code>, sonra Start. `
       + `Listede yoksa elle: <code>${esc(url)}</code>.`;
   } else {
-    h += `webscan uygulamasında relay URL <code>${esc(url)}</code>, `
+    h += `webscan uygulamasında röle adresi <code>${esc(url)}</code>, `
       + `oda <code>${esc(st.room)}</code>, sonra Start.`;
   }
   return h;
@@ -354,7 +354,9 @@ function lidarMount({ canvas, room = 'default', onChange = null }) {
   const grid = new LidarGrid();
   const radar = new LidarRadar(canvas, grid);
   const motion = new LidarMotion();
-  const dark = () => !matchMedia('(prefers-color-scheme: light)').matches;
+  // The interface is white on every page, whatever the OS theme, so the map
+  // is too. The renderer still takes a theme, should that ever change.
+  const dark = () => false;
 
   const stats = {
     room: lidarRoom(room), link: 'connecting', scans: 0, locked: 0, lost: 0, rate: 0,
