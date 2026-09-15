@@ -28,10 +28,10 @@ const load = (file, names) => new Function(
   `${readFileSync(join(here, '..', 'public', file), 'utf8')}
    return { ${names.join(', ')} };`)();
 
-const { FIELD, fieldNode, fieldEdge, fieldQrId, fieldQr, fieldQrs, fieldBearing,
+const { FIELD, FIELD_DENEME, FIELDS, fieldNode, fieldEdge, fieldQrId, fieldQr, fieldQrs, fieldBearing,
         fieldDist, fieldTurn, fieldPath, fieldPlan, fieldLegs, fieldState,
         fieldSee, fieldMission, fieldPose, fieldStatus, fieldBounds } =
-  load('field.js', ['FIELD', 'fieldNode', 'fieldEdge', 'fieldQrId', 'fieldQr',
+  load('field.js', ['FIELD', 'FIELD_DENEME', 'FIELDS', 'fieldNode', 'fieldEdge', 'fieldQrId', 'fieldQr',
                     'fieldQrs', 'fieldBearing', 'fieldDist', 'fieldTurn',
                     'fieldPath', 'fieldPlan', 'fieldLegs', 'fieldState', 'fieldSee',
                     'fieldMission', 'fieldPose', 'fieldStatus', 'fieldBounds']);
@@ -49,7 +49,7 @@ const near = (a, b, eps, m) =>
 console.log('\nSaha şemadaki gibi');
 {
   const ids = FIELD.nodes.map((n) => n.id);
-  for (const want of ['START', 'A1', 'A2', 'A3', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6',
+  for (const want of ['START', 'A1', 'A2', 'A3', 'D1', 'D2', 'D3', 'D4',
                       'GATE', 'B1', 'B2', 'B3']) {
     ok(ids.includes(want), `${want} haritada`);
   }
@@ -64,18 +64,73 @@ console.log('\nSaha şemadaki gibi');
   const bad = FIELD.edges.filter((e) => !fieldNode(e.a) || !fieldNode(e.b));
   ok(bad.length === 0, `her kenar var olan düğümleri birleştiriyor  (${FIELD.edges.length} kenar)`);
 
-  // The layout from test.png: the D corridor is one straight line, and the
-  // pickups sit directly above the first three of its nodes.
-  ok(['D1', 'D2', 'D3', 'GATE', 'D4'].every((id) => fieldNode(id).y === 0),
-     'D1…D4 ve kapı aynı koridorda');
+  // The layout: the D corridor is one straight line 5.5 m below the top wall,
+  // the pickups sit directly above the first three of its nodes, and the drop
+  // column crosses it at D4 — B3 up, B1 down (ek şartname, Şekil 1).
+  ok(['D1', 'D2', 'D3', 'GATE', 'D4'].every((id) => fieldNode(id).y === 4.5),
+     'D1…D4 ve kapı aynı koridorda, üst duvardan 5.5 m');
   ok(fieldNode('A2').x === fieldNode('D2').x, 'A2 doğrudan D2 üzerinde');
-  ok(fieldNode('B1').y === fieldNode('D5').y && fieldNode('B3').y === fieldNode('D6').y,
-     'B1 D5 ile, B3 ise D6 ile karşı karşıya');
+  ok(fieldNode('B3').x === fieldNode('D4').x && fieldNode('B3').y > 4.5,
+     'B3 D4ün kuzeyinde (q7 = BIRAK3 üstte)');
+  ok(fieldNode('B1').x === fieldNode('D4').x && fieldNode('B1').y < 4.5,
+     'B1 D4ün güneyinde (q9 = BIRAK1 altta)');
   ok(fieldNode('GATE').kind === 'gate', 'kapı ayrı bir tür — orada beklenebilir');
+  ok(FIELD.w === 18 && FIELD.h === 10, 'yarışma alanı 18 × 10 m');
+  ok(FIELD.nodes.every((n) => n.x > 0 && n.x < 18 && n.y > 0 && n.y < 10),
+     'her düğüm duvarların içinde');
+}
+
+console.log('\nEk şartname ölçüleri');
+{
+  // The dimensions the drawing actually prints. The rest is scaled off it and
+  // is not worth pinning here — it is what gets measured on the day.
+  near(fieldQr('q1').y, 3.8, 0.01, 'BASLA arka duvardan 3.8 m (Şekil 5)');
+  for (const q of ['q2', 'q3', 'q4', 'q7']) {
+    near(fieldQr(q).y, 6.0, 0.01, `${q} üst duvardan 4 m`);
+  }
+  near(fieldQr('q9').y, 3.0, 0.01, 'BIRAK1 koridorun 1.5 m altında');
+  // Exact to the millimetre, not just near: the PLC gets whole centimetres,
+  // truncated, and 6.599 m goes out as 659.
+  const cm = [...fieldQrs(), ...fieldQrs(FIELD_DENEME)]
+    .filter((q) => [q.x, q.y].some((v) => Math.abs(v * 100 - Math.round(v * 100)) > 1e-6));
+  ok(cm.length === 0, `her QR tam santimetrede  (${cm.map((q) => `${q.qr} ${q.x},${q.y}`).join(' ') || 'hepsi'})`);
+  near(fieldNode('A2').y - fieldQr('q3').y, 1.8, 0.01, 'istasyonun ortası QRdan 1.8 m ötede (Şekil 6)');
+  ok(fieldQr('q5').x < fieldNode('GATE').x && fieldQr('q6').x > fieldNode('GATE').x,
+     'KAPI1 kapıdan önce, KAPI2 sonra');
+
+  const texts = Object.fromEntries(fieldQrs().map((q) => [q.qr, q.text]));
+  const want = { q1: 'BASLA', q2: 'ALIM1', q3: 'ALIM2', q4: 'ALIM3', q5: 'KAPI1',
+                 q6: 'KAPI2', q7: 'BIRAK3', q8: 'BIRAK2', q9: 'BIRAK1' };
+  ok(Object.entries(want).every(([k, v]) => texts[k] === v),
+     'QR metinleri Tablo 2 ile aynı');
+}
+
+console.log('\nDeneme alanı');
+{
+  const m = FIELD_DENEME;
+  ok(FIELDS.deneme === m && FIELDS.yarisma === FIELD, 'iki saha adıyla seçiliyor');
+  ok(m.w === 10 && m.h === 7, 'deneme alanı 10 × 7 m');
+  ok(fieldQrs(m).map((q) => q.text).join(' ') === 'BASLA ALIM1 KAPI1 KAPI2 BIRAK1',
+     'deneme alanında beş kod var');
+  const p = fieldPlan('START', ['A1', 'B1', 'START'], m);
+  ok(p.ok && p.nodes.join('>') === 'START>D1>A1>D1>GATE>D4>B1>D4>GATE>D1>START',
+     `deneme görevi: ${p.nodes.join('>')}`);
+  ok(fieldQrId('ALIM2', m) === null, 'deneme alanında ALIM2 yok');
+  ok(fieldQrId('BIRAK1', m) === 'q9', 'BIRAK1 deneme alanında da q9');
 }
 
 console.log("\nQR metni id'ye çevriliyor");
 {
+  // What the codes on the field actually say.
+  ok(fieldQrId('BASLA') === 'q1', '«BASLA» → q1');
+  ok(fieldQrId('ALIM2') === 'q3', '«ALIM2» → q3');
+  ok(fieldQrId('KAPI1') === 'q5', '«KAPI1» → q5');
+  ok(fieldQrId('BIRAK3') === 'q7' && fieldQrId('BIRAK1') === 'q9', '«BIRAK3» → q7, «BIRAK1» → q9');
+  ok(fieldQrId(' birak2 ') === 'q8', 'küçük harf ve boşluk');
+  ok(fieldQrId('BAŞLA') === 'q1' && fieldQrId('kapı2') === 'q6', 'Türkçe harfler katlanıyor');
+  ok(fieldQrId('ALIM22') === null && fieldQrId('XALIM2') === null,
+     'metin tam eşleşmeli — içinde geçmesi yetmez');
+  ok(fieldQrId('ALIM4') === null, 'olmayan istasyon tanınmıyor');
   ok(fieldQrId('q5') === 'q5', '«q5»');
   ok(fieldQrId('Q5') === 'q5', 'büyük harf');
   ok(fieldQrId(' qr5 ') === 'q5', '«qr5», boşluklarla');
@@ -99,8 +154,8 @@ console.log('\nAçılar ve dönüşler');
 {
   near(fieldBearing('D1', 'D2'), 90, 0.01, 'D1→D2 doğuya bakıyor');
   near(fieldBearing('D1', 'A1'), 0, 0.01, 'D1→A1 kuzeye bakıyor');
-  near(fieldBearing('D4', 'D6'), 180, 0.01, 'D4→D6 güneye bakıyor');
-  near(fieldDist('D1', 'D2'), 1.5, 0.001, 'D1 ile D2 arası 1.5 m');
+  near(fieldBearing('D4', 'B1'), 180, 0.01, 'D4→B1 güneye bakıyor');
+  near(fieldDist('D1', 'D2'), 1.8, 0.001, 'D1 ile D2 arası 1.8 m');
 
   ok(fieldTurn(90, 0).dir === 'left', 'doğudan kuzeye — sola');
   ok(fieldTurn(90, 180).dir === 'right', 'doğudan güneye — sağa');
@@ -118,7 +173,7 @@ console.log('\nRota kuruluyor');
   ok(fieldPath('D1', 'D1').join('>') === 'D1', 'zaten oradasın');
   ok(fieldPath('START', 'YOX').length === 0, 'olmayan hedef için rota yok');
   ok(fieldPath('START', 'A2').join('>') === 'START>D1>D2>A2', 'başlangıçtan A2ye');
-  ok(fieldPath('START', 'B3').join('>') === 'START>D1>D2>D3>GATE>D4>D6>B3',
+  ok(fieldPath('START', 'B3').join('>') === 'START>D1>D2>D3>GATE>D4>B3',
      `başlangıçtan B3e kapıdan geçiyor  (${fieldPath('START', 'B3').join('>')})`);
 
   const p = fieldPlan('START', ['A2', 'B3']);
@@ -145,8 +200,9 @@ console.log('\nQR okunduğunda robot nerede olduğunu bilir');
   const st = fieldState();
   const r = fieldSee(st, 'q1', 1000);
   ok(r.ok && r.qr === 'q1', 'q1 tanındı');
-  near(r.x, 0, 0.01, 'q1 D1 ile aynı sütunda');
-  ok(r.y > -1.6 && r.y < 0, 'q1 başlangıç alanı ile D1 arasında');
+  near(r.x, fieldNode('D1').x, 0.01, 'q1 D1 ile aynı sütunda');
+  ok(r.y > fieldNode('START').y && r.y < fieldNode('D1').y, 'q1 başlangıç alanı ile D1 arasında');
+  ok(r.text === 'BASLA', 'okunan kodun metni BASLA');
   ok(r.sure === false, 'plan yoksa ilk kodda yön tahmindir — ve bu söylenir');
 
   // Second code: continuity decides the direction with no plan at all. The
@@ -295,7 +351,7 @@ console.log('\nDurum tek yerde toplanıyor');
   ok(s.pose.known === true, 'konum biliniyor');
 
   const b = fieldBounds();
-  ok(b.w > b.h && b.minX < 0 && b.maxX > 9, `saha geniş: ${b.w.toFixed(1)} × ${b.h.toFixed(1)} m`);
+  ok(b.w > b.h && b.minX < 0 && b.maxX > 18, `saha geniş: ${b.w.toFixed(1)} × ${b.h.toFixed(1)} m`);
 }
 
 console.log(fail ? `\nFAILED — ${pass} ok, ${fail} fail`

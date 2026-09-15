@@ -81,10 +81,14 @@ import { Rover } from './rover.js';
 import { LidarRelay, routeUpgrades } from './lidar_relay.js';
 import { LidarSim } from './lidar_sim.js';
 import { advertise } from './lidar_discovery.js';
+import { startCompetition } from './plc_run.js';
 
 // The competition field, straight out of the module the pages load — one copy
 // of the graph, served to anything that asks for it. See public/field.js.
-const { FIELD } = loadShared('field.js', ['FIELD']);
+// FIELDS holds both: the competition field and the practice one (--field).
+const { FIELDS, fieldState, fieldSee, fieldMission, fieldClearMission, fieldStatus } =
+  loadShared('field.js', ['FIELDS', 'fieldState', 'fieldSee', 'fieldMission',
+                          'fieldClearMission', 'fieldStatus']);
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FOLLOW_FILE = path.join(HERE, 'follow.json');
@@ -131,7 +135,12 @@ function parseArgs(argv) {
                  lidarRoom: 'default', lidarSim: false, webscan: null,
                  // Announce the relay over mDNS so the phone app lists it
                  // without an address being typed.
-                 advertise: true };
+                 advertise: true,
+                 // The competition: which field, and the factory automation
+                 // system's PLC (EK TEKNİK ŞARTNAME, bölüm 2). Off unless asked
+                 // for, so a laptop on the office wifi does not spray UDP at
+                 // 192.168.100.100.
+                 field: 'yarisma', plc: null, plcBind: null, plcSim: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--fake') args.fake = true;
@@ -158,6 +167,17 @@ function parseArgs(argv) {
     else if (a === '--lidar-sim') args.lidarSim = true;
     else if (a === '--webscan') args.webscan = argv[++i];
     else if (a === '--no-advertise') args.advertise = false;
+    else if (a === '--field') args.field = argv[++i];
+    else if (a === '--plc') {
+      const next = argv[i + 1];
+      args.plc = next && !next.startsWith('--') ? argv[++i] : true;
+    }
+    else if (a === '--plc-bind') args.plcBind = argv[++i];
+    else if (a === '--plc-sim') {
+      args.plcSim = true;
+      const next = argv[i + 1];
+      if (next && /^\d+$/.test(next)) args.plcSimPort = Number(argv[++i]);
+    }
     else if (a === '--https') args.https = true;
     else if (a === '--cert') { args.cert = argv[++i]; args.https = true; }
     else if (a === '--key') { args.key = argv[++i]; args.https = true; }
@@ -206,6 +226,12 @@ function parseArgs(argv) {
   --webscan <dir>   also serve a built webscan web app (apps/web/dist), so its
                     browser scanner streams straight here. The phone's camera
                     needs --https for that page
+  --field <name>    yarisma (default, 18 × 10 m) or deneme (10 × 7 m)
+  --plc [host:port] talk to the factory automation PLC over UDP: PAKET_TX once
+                    a second, PAKET_RX back. Default 192.168.100.100:1515
+  --plc-bind <ip>   send from this address — the robot's, 192.168.100.10
+  --plc-sim [port]  run a PLC simulator in this server on 127.0.0.1:1515 and
+                    talk to it: the whole mission, no field needed. /plc
   --list            list serial ports and exit`);
       process.exit(0);
     }
@@ -217,6 +243,10 @@ function parseArgs(argv) {
   // — while the printer is simply found on USB.
   if (!args.marlin && args.esp === null && args.serial === null && !args.fake) {
     args.marlin = true;
+  }
+  if (!FIELDS[args.field]) {
+    console.error(`--field must be one of: ${Object.keys(FIELDS).join(', ')}`);
+    process.exit(2);
   }
   return args;
 }
@@ -561,7 +591,8 @@ async function announceLidar(lidar, args) {
 async function runMarlin(args) {
   const link = new MarlinLink();
   const jog = new Jogger(link);
-  const api = marlinApi({ link, jog });
+  // held() is read per request, so the rover being declared further down is fine.
+  const api = marlinApi({ link, jog, held: () => rover.holdReason });
 
   // --trace mirrors the link's log to the console. The page shows the same
   // thing, but a terminal can be scrolled back, piped and pasted.
@@ -592,6 +623,9 @@ async function runMarlin(args) {
     // /viewer.html is where the webscan phone app tells you to look.
     '/lidar':  'lidar.html',
     '/viewer.html': 'lidar.html',
+    // The competition: PLC link, mission, field. On both machines, because the
+    // factory automation system talks to the robot, not to its motor board.
+    '/plc':    'plc.html',
   };
 
   // The road pages are shared with the ESP32 half, so they load what those
@@ -601,7 +635,8 @@ async function runMarlin(args) {
   const SCRIPTS = { '/road.js': 'road.js', '/pilot.js': 'pilot.js',
                     '/analyse.js': 'analyse.js', '/wheels.js': 'wheels.js',
                     '/sonar.js': 'sonar.js', '/cam.js': 'cam.js',
-                    '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js' };
+                    '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js',
+                    '/field.js': 'field.js', '/plc.js': 'plc.js' };
 
   const lidar = new LidarRelay({ room: args.lidarRoom });
   const lidarSim = args.lidarSim ? new LidarSim({ relay: lidar }).start() : null;
@@ -611,13 +646,32 @@ async function runMarlin(args) {
 
   // The webcam is the Pi's, not the board's, so it is here for the same reason
   // it is on the ESP32 side: /vision and /follow are the same two pages, and
-  // they read the picture off this machine over plain http. No QR reader and
-  // no /proc sampling — those belong to the competition field, which is the
-  // other machine's job.
+  // they read the picture off this machine over plain http.
   const camera = new Camera({
     device: args.camera, width: args.camWidth, height: args.camHeight,
     fps: args.camFps, enabled: args.camera !== null,
   });
+
+  // The field and the QR codes on it. No dead reckoning on this machine (no
+  // route.js), so between two codes the position is the last code's — which is
+  // what the PLC gets told, and what the page says.
+  const fieldMap = FIELDS[args.field];
+  let fieldSt = fieldState();
+  const qr = new QrReader();
+  let competition = null;         // started once the rover exists, below
+  const seeQr = (text, at, byHand = false) => {
+    const fix = fieldSee(fieldSt, text, at, fieldMap, null);
+    console.log(`qr${byHand ? ' (by hand)' : ''}: ${JSON.stringify(String(text)).slice(0, 60)}`
+      + (fix.ok ? `  → ${fix.from}→${fix.to}, ${fix.x}, ${fix.y} m`
+                  + (fix.turn ? `  ·  ${fix.turn.node}: ${fix.turn.label}` : '')
+                : '  → not on the field map'));
+    if (competition) competition.onFix(fix);
+    return fix;
+  };
+  if (args.qr && qr.available) {
+    camera.onGray((gray, w, h) => qr.feed(gray, w, h));
+    qr.onRead((text, at) => { seeQr(text, at); });
+  }
   camera.start();
 
   const server = http.createServer((req, res) => {
@@ -636,6 +690,14 @@ async function runMarlin(args) {
     }
 
     if (url === '/logs' || url.startsWith('/logs/')) { serveLogs(res, url); return; }
+
+    if (url === '/api/field' || url === '/api/plc') {
+      const b = Buffer.from(JSON.stringify(url === '/api/field' ? fieldMap : competition.status()));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
+                           'Content-Length': b.length, 'Cache-Control': 'no-store' });
+      res.end(b);
+      return;
+    }
 
     if (url.startsWith('/api/marlin/')) {
       api(req, res, url).catch((err) => {
@@ -678,6 +740,17 @@ async function runMarlin(args) {
   // gets a socket. Same port as the page, so there is nothing to configure in
   // the browser. `/ws` on the same port is the LiDAR relay — see lidar_relay.js.
   const rover = new Rover({ link, jog });
+
+  competition = startCompetition(args, {
+    map: fieldMap,
+    field: () => fieldSt,
+    route: () => null,
+    setMission: (stops) => fieldMission(fieldSt, stops, fieldMap, 'START'),
+    hold: (reason) => rover.hold(reason),
+    armed: () => rover.running,
+    fault: () => (link.connected ? null : 'motor kartı bağlı değil'),
+    estop: () => rover.stop('acil stop'),
+  });
   const wss = new WebSocketServer({ noServer: true });
   routeUpgrades(server, { relay: lidar, wss });
 
@@ -694,6 +767,9 @@ async function runMarlin(args) {
         log: { active: runLog.active, file: runLog.file, rows: runLog.rows },
         cam: camera.status(),
         lidar: lidar.status(),
+        qr: qr.status(),
+        field: fieldStatus(fieldSt, null, fieldMap),
+        plc: competition.status(),
       }));
     };
     const pusher = setInterval(send, 100);
@@ -744,8 +820,30 @@ async function runMarlin(args) {
         case 'lidar_reset':
           if (lidar.reset(msg.room || lidar.room)) console.log('lidar map cleared');
           break;
+
+        // ── the field, as on the ESP32 side ──
+        case 'field_mission': {
+          if (!Array.isArray(msg.targets) || msg.targets.length === 0) {
+            fieldClearMission(fieldSt);
+            console.log('mission cleared');
+            break;
+          }
+          const plan = fieldMission(fieldSt, msg.targets, fieldMap, msg.from || null);
+          console.log(plan.ok ? `mission ${plan.stops.join(' → ')}: ${plan.nodes.join(' > ')}`
+                              : `mission refused: ${plan.reason}`);
+          break;
+        }
+        case 'field_qr':
+          seeQr(msg.text, Date.now(), true);
+          break;
+        case 'route_reset': {
+          const stops = fieldSt.stops;
+          fieldSt = fieldState();
+          if (stops && stops.length) fieldMission(fieldSt, stops, fieldMap, 'START');
+          break;
+        }
         default:
-          return;
+          if (!competition.command(msg)) return;
       }
       send({ ack: msg.cmd });
     });
@@ -772,6 +870,11 @@ async function runMarlin(args) {
   console.log(`  follow a line:  ${base}/follow`);
   console.log(`  read a run back:${base}/tune`);
   console.log(`  lidar map:      ${base}/lidar`);
+  console.log(`  plc / görev:    ${base}/plc`);
+  console.log(`  field:          ${fieldMap.label} (${fieldMap.w} × ${fieldMap.h} m)`);
+  competition.banner();
+  if (camera.enabled && !args.qr) console.log('   qr reader: off (--no-qr)');
+  else if (camera.enabled && !qr.available) console.log(`   qr reader: off — ${qr.error}`);
   lidarBanner(lidar, args, 'http');
   const lidarAd = await announceLidar(lidar, args);
   if (!camera.enabled) {
@@ -831,6 +934,7 @@ async function runMarlin(args) {
     if (closing) return;
     closing = true;
     console.log('\nshutting down — letting the last move finish');
+    competition.close();
     jog.stop();
     rover.stop('shutting down');
     for (const c of wss.clients) c.close();
@@ -869,7 +973,20 @@ async function main() {
   if (args.marlin) return runMarlin(args);
 
   const transport = await buildTransport(args);
-  const bench = new Bench({ transport, vMax: args.vMax });
+  const bench = new Bench({ transport, vMax: args.vMax, field: FIELDS[args.field] });
+
+  // The competition: the PLC mission holds the bench's wheels and hears about
+  // every code the field recognises. See plc_run.js.
+  const competition = startCompetition(args, {
+    map: bench.fieldMap,
+    field: () => bench.field,
+    route: () => bench.routePose(),
+    setMission: (stops) => bench.setMission(stops, 'START'),
+    hold: (reason) => bench.hold(reason),
+    armed: () => bench.running,
+    fault: () => (bench.tx.fresh ? null : 'esp32 erişilemiyor'),
+    estop: () => bench.stop(),
+  });
   await bench.open();
 
   // The persisted tuning. Declared here rather than next to the socket because
@@ -896,6 +1013,7 @@ async function main() {
     // says *which* place, so it both goes on the map and fixes the position.
     qr.onRead((text, at, entry) => {
       const { mark, fix } = bench.seeQr(text, at);
+      competition.onFix(fix);
       if (entry) entry.pos = { x: mark.x, y: mark.y };
       console.log(`qr: ${JSON.stringify(text).slice(0, 80)}  @ ${mark.x}, ${mark.y} m`
         + (fix.ok ? `  → ${fix.from}→${fix.to}, ${fix.x}, ${fix.y} m, ${fix.bearing}°`
@@ -927,6 +1045,7 @@ async function main() {
     '/panel':  'panel.html',   // the same, plus driving, fixed at 1920 × 1080
     '/lidar':  'lidar.html',   // the LiDAR map, full screen
     '/viewer.html': 'lidar.html',    // where the webscan phone app says to look
+    '/plc':    'plc.html',     // the factory automation PLC and the mission
   };
 
   // The two pages that see the road share their code rather than each keeping
@@ -939,7 +1058,7 @@ async function main() {
                     '/analyse.js': 'analyse.js', '/sonar.js': 'sonar.js',
                     '/wheels.js': 'wheels.js', '/route.js': 'route.js',
                     '/cam.js': 'cam.js', '/field.js': 'field.js',
-                    '/lift.js': 'lift.js',
+                    '/lift.js': 'lift.js', '/plc.js': 'plc.js',
                     '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js' };
 
   // The LiDAR relay: scanners stream to /ws, pages draw what they stream. The
@@ -973,8 +1092,8 @@ async function main() {
     // than repeated in a status frame ten times a second. A page could read
     // FIELD out of /field.js instead — this exists so anything that is not a
     // browser (a phone, curl, the firmware one day) can have the map too.
-    if (url === '/api/field') {
-      const b = Buffer.from(JSON.stringify(FIELD));
+    if (url === '/api/field' || url === '/api/plc') {
+      const b = Buffer.from(JSON.stringify(url === '/api/field' ? bench.fieldMap : competition.status()));
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
                            'Content-Length': b.length, 'Cache-Control': 'no-store' });
       res.end(b);
@@ -1048,6 +1167,7 @@ async function main() {
           qr: qr.status(),
           rpi: sysSnap,
           lidar: lidar.status(),
+          plc: competition.status(),
         }));
       }
     };
@@ -1158,6 +1278,7 @@ async function main() {
         // sign that was never there.
         case 'field_qr': {
           const { fix } = bench.seeQr(msg.text, Date.now());
+          competition.onFix(fix);
           console.log(`qr (by hand): ${JSON.stringify(String(msg.text || '')).slice(0, 40)}`
             + (fix.ok ? ` → ${fix.from}→${fix.to}` : ' → not recognised'));
           break;
@@ -1181,7 +1302,7 @@ async function main() {
           break;
         }
         default:
-          return;
+          if (!competition.command(msg)) return;
       }
       // `ack` marks this status as the direct answer to that command, so a
       // client can tell it apart from the 10 Hz background push.
@@ -1218,6 +1339,9 @@ async function main() {
     console.log(`  obstacle stop:  ${base}/obstacle`);
     console.log(`  spare pins:     ${base}/pins`);
     console.log(`  lidar map:      ${base}/lidar`);
+    console.log(`  plc / görev:    ${base}/plc`);
+    console.log(`  field:          ${bench.fieldMap.label} (${bench.fieldMap.w} × ${bench.fieldMap.h} m)`);
+    competition.banner();
 
     // "0.0.0.0" is not something anyone can type into a phone, so print what
     // they can. Every interface, every address, ready to copy.
@@ -1264,6 +1388,7 @@ async function main() {
     closing = true;
     console.log('\nshutting down — outputs to idle');
     clearInterval(sysTimer);
+    competition.close();
     for (const c of wss.clients) c.close();
     if (lidarSim) lidarSim.stop();
     // Goodbye packets first — see announceLidar.

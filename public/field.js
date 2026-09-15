@@ -20,8 +20,10 @@
  * dead reckoning that gets reset to the truth every few metres instead of
  * drifting for the whole lap.
  *
- * So the field is written down here as a graph — the schematic in test.png,
- * node for node — and this module does three things with it:
+ * So the field is written down here as a graph — the topology of test.png (the
+ * main specification's schematic), with the measurements, QR texts and QR
+ * positions of the EK TEKNİK ŞARTNAME's Şekil 1 and Şekil 3 — and this module
+ * does three things with it:
  *
  *   1. localise:  a QR id  → which leg the robot is on, and which way along it
  *   2. plan:      a target → the nodes to drive through, breadth first
@@ -30,8 +32,9 @@
  * ── The coordinate frame ────────────────────────────────────────────
  *
  * Metres. +x is east (right on the drawing), +y is north (up). The origin is
- * D1, because D1 is the corner the start area feeds into and every other node
- * is a whole number of steps from it. Headings are compass bearings in
+ * the field's bottom-left corner, as the specification dimensions it, so every
+ * coordinate is a positive number a tape measure can check — and the same
+ * numbers go to the PLC in PAKET_TX (see plc.js). Headings are compass bearings in
  * degrees: 0 = north, 90 = east, clockwise positive — the same convention
  * routeBearing() returns, which is what lets the two be added together in
  * fieldPose() without a sign to get wrong.
@@ -44,12 +47,25 @@ const FIELD_BACK_DEG = 150;      // more than this and it is a U-turn, not a tur
 const FIELD_SAME_M = 0.5;
 
 /**
- * The field itself.
+ * The competition field — EK TEKNİK ŞARTNAME, Şekil 1 (18 × 10 m).
  *
- * Distances are the schematic's proportions carried over to metres. If the
- * real field is measured and comes out different, this table is the only thing
- * to edit — the planner, the localiser and the drawing all read it, and none
- * of them has a second copy of a coordinate.
+ * Where the drawing has a dimension it is used as written: the field is 18 × 10,
+ * the corridor runs 5.5 m below the top wall (y = 4.5), the pick and drop QRs
+ * stand 4 m below it (y = 6.0, so 1.5 m off the corridor), the inner walls are
+ * at 7.5 m and 9 m. Şekil 5 puts BASLA 3.8 m from the wall behind the start
+ * area and the start area's middle 0.35 + 1.9 / 2 = 1.3 m from it; Şekil 6
+ * puts a station's middle 1.5 + 0.615 / 2 ≈ 1.8 m past its QR. The x positions
+ * of the three branches, the drop column, the door and q5 / q6 / q8 have no
+ * dimension in the drawing and are scaled off it (27.9 px per metre), so they
+ * are the numbers to check with a tape on the day. If they come out different,
+ * this table is the only thing to edit — the planner, the localiser, the
+ * drawing and the PLC coordinates all read it, and none of them has a second
+ * copy of a coordinate.
+ *
+ * Differences from test.png, the main specification's schematic, and why the
+ * ek şartname wins: it is the measured drawing, and it is the one that prints
+ * the codes. There B1 and B3 hang straight off the drop column at D4 — B3 up
+ * (q7 = BIRAK3), B1 down (q9 = BIRAK1) — with no D5 / D6 legs in between.
  *
  * Node kinds, straight off the legend in test.png:
  *   node  Dx — düyüm noktası, a junction the robot drives through
@@ -59,47 +75,100 @@ const FIELD_SAME_M = 0.5;
  *   gate     the door the factory automation opens; a node you may have to
  *            wait at, which is why it is a node and not just a spot on a leg
  *
- * An edge's `qr` is the code standing on that leg, and `at` is how far along
- * it stands as a fraction from `a` to `b`. Position comes from that fraction
+ * An edge's `qr` is the code standing on that leg, `text` is what that code
+ * actually says when it is read (Tablo 2), and `at` is how far along the leg
+ * it stands as a fraction from `a` to `b` — written as metres over the leg's
+ * length, not as a rounded decimal, because the position goes to the PLC in
+ * whole centimetres and 0.407 of 2.7 m is 6.599, which truncates to 659. Position comes from that fraction
  * rather than being typed out again, so a QR cannot end up drawn in one place
  * and localised to another.
+ *
+ * `walls` and `doors` are only for drawing: [x1, y1, x2, y2] segments.
  */
 const FIELD = {
+  name: 'yarisma',
+  label: 'Yarışma alanı',
+  w: 18, h: 10,
   nodes: [
-    { id: 'START', kind: 'start', x: 0,   y: -1.6, label: 'Başlangıç alanı' },
+    { id: 'START', kind: 'start', x: 1.9, y: 1.3, label: 'Başlangıç alanı' },
 
-    { id: 'A1', kind: 'pick', x: 0,   y: 2.6, label: 'A1' },
-    { id: 'A2', kind: 'pick', x: 1.5, y: 2.6, label: 'A2' },
-    { id: 'A3', kind: 'pick', x: 3.0, y: 2.6, label: 'A3' },
+    { id: 'A1', kind: 'pick', x: 1.9, y: 7.8, label: 'A1' },
+    { id: 'A2', kind: 'pick', x: 3.7, y: 7.8, label: 'A2' },
+    { id: 'A3', kind: 'pick', x: 5.5, y: 7.8, label: 'A3' },
 
-    { id: 'D1', kind: 'node', x: 0,   y: 0,   label: 'D1' },
-    { id: 'D2', kind: 'node', x: 1.5, y: 0,   label: 'D2' },
-    { id: 'D3', kind: 'node', x: 3.0, y: 0,   label: 'D3' },
-    { id: 'GATE', kind: 'gate', x: 4.6, y: 0, label: 'Fabrika otomasyon sistemi kontrollü kapı' },
-    { id: 'D4', kind: 'node', x: 6.4, y: 0,   label: 'D4' },
-    { id: 'D5', kind: 'node', x: 6.4, y: 1.7, label: 'D5' },
-    { id: 'D6', kind: 'node', x: 6.4, y: -1.7, label: 'D6' },
+    { id: 'D1', kind: 'node', x: 1.9, y: 4.5, label: 'D1' },
+    { id: 'D2', kind: 'node', x: 3.7, y: 4.5, label: 'D2' },
+    { id: 'D3', kind: 'node', x: 5.5, y: 4.5, label: 'D3' },
+    { id: 'GATE', kind: 'gate', x: 8.2, y: 4.5, label: 'Fabrika otomasyon sistemi kontrollü kapı' },
+    { id: 'D4', kind: 'node', x: 11.5, y: 4.5, label: 'D4' },
 
-    { id: 'B1', kind: 'drop', x: 9.3, y: 1.7,  label: 'B1' },
-    { id: 'B2', kind: 'drop', x: 9.3, y: 0,    label: 'B2' },
-    { id: 'B3', kind: 'drop', x: 9.3, y: -1.7, label: 'B3' },
+    { id: 'B3', kind: 'drop', x: 11.5, y: 7.8, label: 'B3' },
+    { id: 'B2', kind: 'drop', x: 16.8, y: 4.5, label: 'B2' },
+    { id: 'B1', kind: 'drop', x: 11.5, y: 1.2, label: 'B1' },
   ],
   edges: [
-    { a: 'START', b: 'D1', qr: 'q1', at: 0.56 },
-    { a: 'A1', b: 'D1', qr: 'q2', at: 0.54 },
-    { a: 'A2', b: 'D2', qr: 'q3', at: 0.54 },
-    { a: 'A3', b: 'D3', qr: 'q4', at: 0.54 },
+    { a: 'START', b: 'D1', qr: 'q1', text: 'BASLA', at: 2.5 / 3.2 },    // y 3.8
+    { a: 'A1', b: 'D1', qr: 'q2', text: 'ALIM1', at: 1.8 / 3.3 },       // y 6.0
+    { a: 'A2', b: 'D2', qr: 'q3', text: 'ALIM2', at: 1.8 / 3.3 },
+    { a: 'A3', b: 'D3', qr: 'q4', text: 'ALIM3', at: 1.8 / 3.3 },
     { a: 'D1', b: 'D2', qr: null, at: 0.5 },
     { a: 'D2', b: 'D3', qr: null, at: 0.5 },
-    { a: 'D3', b: 'GATE', qr: 'q5', at: 0.56 },
-    { a: 'GATE', b: 'D4', qr: 'q6', at: 0.33 },
-    { a: 'D4', b: 'D5', qr: null, at: 0.5 },
-    { a: 'D4', b: 'D6', qr: null, at: 0.5 },
-    { a: 'D5', b: 'B1', qr: 'q9', at: 0.48 },
-    { a: 'D4', b: 'B2', qr: 'q8', at: 0.48 },
-    { a: 'D6', b: 'B3', qr: 'q7', at: 0.48 },
+    { a: 'D3', b: 'GATE', qr: 'q5', text: 'KAPI1', at: 1.1 / 2.7 },     // x 6.6
+    { a: 'GATE', b: 'D4', qr: 'q6', text: 'KAPI2', at: 1.8 / 3.3 },     // x 10.0
+    { a: 'D4', b: 'B3', qr: 'q7', text: 'BIRAK3', at: 1.5 / 3.3 },      // y 6.0
+    { a: 'D4', b: 'B2', qr: 'q8', text: 'BIRAK2', at: 3.5 / 5.3 },      // x 15.0
+    { a: 'D4', b: 'B1', qr: 'q9', text: 'BIRAK1', at: 1.5 / 3.3 },      // y 3.0
   ],
+  walls: [
+    [0, 0, 18, 0], [18, 0, 18, 10], [18, 10, 0, 10], [0, 10, 0, 0],
+    [7.5, 10, 7.5, 5.5], [7.5, 0, 7.5, 2.5],
+    [9, 10, 9, 5.4], [9, 0, 9, 2.45],
+  ],
+  doors: [[8.2, 5.2, 8.2, 2.45]],
 };
+
+/**
+ * The practice field — EK TEKNİK ŞARTNAME, Şekil 3 (10 × 7 m).
+ *
+ * One of everything: start, A1, the door, B1. Dimensioned: 10 × 7, the corridor
+ * 4.5 m below the top wall (y = 2.5), the wall with the door at 5 m, its two
+ * stubs 2.5 m and 1.5 m long. The rest is scaled off the drawing (47.5 px per
+ * metre), start and station sized as Şekil 5 and 6 size them.
+ *
+ * One thing in Şekil 3 does not agree with Tablo 2: the q2 label is drawn on
+ * the start side of the corridor and q1 on the station side, but q1 says BASLA
+ * and q2 says ALIM1. This table follows the texts — BASLA on the start leg —
+ * because the text is what the robot reads. If the codes on the practice field
+ * really are the other way round, swap the two `text`s here.
+ */
+const FIELD_DENEME = {
+  name: 'deneme',
+  label: 'Deneme alanı',
+  w: 10, h: 7,
+  nodes: [
+    { id: 'START', kind: 'start', x: 1.2, y: 5.5, label: 'Başlangıç alanı' },
+    { id: 'D1', kind: 'node', x: 1.2, y: 2.5, label: 'D1' },
+    { id: 'A1', kind: 'pick', x: 1.2, y: 0.8, label: 'A1' },
+    { id: 'GATE', kind: 'gate', x: 5.0, y: 2.5, label: 'Fabrika otomasyon sistemi kontrollü kapı' },
+    { id: 'D4', kind: 'node', x: 7.7, y: 2.5, label: 'D4' },
+    { id: 'B1', kind: 'drop', x: 7.7, y: 0.95, label: 'B1' },
+  ],
+  edges: [
+    { a: 'START', b: 'D1', qr: 'q1', text: 'BASLA', at: 2.4 / 3.0 },    // y 3.1
+    { a: 'A1', b: 'D1', qr: 'q2', text: 'ALIM1', at: 1.2 / 1.7 },       // y 2.0
+    { a: 'D1', b: 'GATE', qr: 'q5', text: 'KAPI1', at: 2.8 / 3.8 },     // x 4.0
+    { a: 'GATE', b: 'D4', qr: 'q6', text: 'KAPI2', at: 0.7 / 2.7 },     // x 5.7
+    { a: 'D4', b: 'B1', qr: 'q9', text: 'BIRAK1', at: 0.3 / 1.55 },     // y 2.2
+  ],
+  walls: [
+    [0, 0, 10, 0], [10, 0, 10, 7], [10, 7, 5, 7], [3.5, 7, 0, 7], [0, 7, 0, 0],
+    [5, 7, 5, 4.5], [5, 0, 5, 1.5],
+  ],
+  doors: [[5, 4.3, 5, 1.75]],
+};
+
+/** Both fields by name, for `--field`. */
+const FIELDS = { yarisma: FIELD, deneme: FIELD_DENEME };
 
 // ── the graph, read ──────────────────────────────────────────────────
 
@@ -132,9 +201,14 @@ function fieldEdge(a, b, map) {
 /**
  * The code on a QR, reduced to the id this field knows it by.
  *
- * The sticker may say "q5", "Q5", "qr5", "qr/5" at the end of a URL, or just
- * "5" — none of which is worth a failed localisation, because the one thing
- * they all agree on is the number after a q.
+ * On the competition field a code says what Tablo 2 prints — BASLA, ALIM2,
+ * KAPI1, BIRAK3 — and that is matched as the *whole* text, upper-cased and with
+ * Turkish letters folded (BAŞLA, kapı1), and nothing else. A code whose text
+ * merely contains ALIM2 is not ALIM2.
+ *
+ * For rehearsal the id itself also works: "q5", "Q5", "qr5", "qr/5" at the end
+ * of a URL, or just "5" — because the one thing those agree on is the number
+ * after a q.
  *
  * That q is not decoration, it is the whole safety margin. A field has other
  * codes on it — a pallet label, a cargo id, somebody's stock sticker — and
@@ -147,6 +221,9 @@ function fieldQrId(text, map) {
   const m = map || FIELD;
   if (text == null) return null;
   const s = String(text).trim();
+  const folded = fieldFold(s);
+  const byText = m.edges.find((e) => e.qr && e.text && fieldFold(e.text) === folded);
+  if (byText) return byText.qr;
   // q, optionally the r of "qr", optionally a separator, then the number — and
   // the q may not be the tail of a longer word.
   const tagged = s.match(/(?:^|[^a-z0-9])q(?:r)?[-_/ ]?(\d{1,2})(?![0-9])/i);
@@ -157,7 +234,14 @@ function fieldQrId(text, map) {
   return m.edges.some((e) => e.qr === id) ? id : null;
 }
 
-/** Where a QR stands, and the leg it stands on: {qr, edge, x, y} or null. */
+/** Upper case, Turkish letters folded to the ASCII the printed codes use. */
+function fieldFold(s) {
+  const map = { 'ş': 'S', 'Ş': 'S', 'ı': 'I', 'İ': 'I', 'ç': 'C', 'Ç': 'C',
+                'ğ': 'G', 'Ğ': 'G', 'ö': 'O', 'Ö': 'O', 'ü': 'U', 'Ü': 'U' };
+  return String(s).replace(/[şŞıİçÇğĞöÖüÜ]/g, (c) => map[c]).toUpperCase();
+}
+
+/** Where a QR stands, and the leg it stands on: {qr, text, edge, x, y} or null. */
 function fieldQr(qrId, map) {
   const m = map || FIELD;
   const e = m.edges.find((x) => x.qr === qrId);
@@ -165,7 +249,7 @@ function fieldQr(qrId, map) {
   const a = fieldNode(e.a, m), b = fieldNode(e.b, m);
   const t = Number(e.at);
   return {
-    qr: qrId, edge: e, a: e.a, b: e.b,
+    qr: qrId, text: e.text || null, edge: e, a: e.a, b: e.b,
     x: fieldRound(a.x + (b.x - a.x) * t),
     y: fieldRound(a.y + (b.y - a.y) * t),
   };
@@ -414,10 +498,10 @@ function fieldSee(st, text, now = 0, map = null, route = null) {
     rb: route ? Number(route.bearing) || 0 : null,
   };
 
-  st.seen.push({ qr: qrId, at: now, from, to, onPlan: st.onPlan });
+  st.seen.push({ qr: qrId, text: spot.text, at: now, from, to, onPlan: st.onPlan });
   while (st.seen.length > 40) st.seen.shift();
 
-  return { ok: true, qr: qrId, from, to, x: spot.x, y: spot.y, bearing,
+  return { ok: true, qr: qrId, text: spot.text, from, to, x: spot.x, y: spot.y, bearing,
            sure, onPlan: st.onPlan, turn: fieldTurnAt(st, m) };
 }
 
@@ -549,11 +633,15 @@ function fieldPose(st, route) {
   };
 }
 
-/** The box the whole field fits in, padded — the drawing's viewport. */
+/**
+ * The box the whole field fits in, padded — the drawing's viewport. The walls
+ * when the field has a size, so an empty corner of the arena is still drawn.
+ */
 function fieldBounds(map, pad = 0.9) {
   const m = map || FIELD;
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const n of m.nodes) {
+  const pts = m.w && m.h ? [{ x: 0, y: 0 }, { x: m.w, y: m.h }, ...m.nodes] : m.nodes;
+  for (const n of pts) {
     if (n.x < minX) minX = n.x;
     if (n.x > maxX) maxX = n.x;
     if (n.y < minY) minY = n.y;
@@ -575,7 +663,9 @@ function fieldStatus(st, route, map) {
   const pose = fieldPose(st, route);
   const legs = fieldLegs(st.plan, m);
   return {
+    map: m.name || null,
     qr: st.qr,
+    text: st.qr ? (fieldQr(st.qr, m) || {}).text || null : null,
     at: st.at || null,
     from: st.from,
     to: st.to,
@@ -604,7 +694,7 @@ function fieldStatus(st, route, map) {
 function fieldRound(v, n = 3) { return Math.round(v * 10 ** n) / 10 ** n; }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { FIELD, FIELD_STRAIGHT_DEG, FIELD_BACK_DEG, FIELD_TURN_LABEL,
+  module.exports = { FIELD, FIELD_DENEME, FIELDS, fieldFold, FIELD_STRAIGHT_DEG, FIELD_BACK_DEG, FIELD_TURN_LABEL,
                      fieldNode, fieldLinks, fieldEdge, fieldQrId, fieldQr, fieldQrs,
                      fieldBearing, fieldDist, fieldWrapDeg, fieldTurn,
                      fieldPath, fieldPlan, fieldLegs,

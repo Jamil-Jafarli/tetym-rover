@@ -136,7 +136,7 @@ export class Bench {
    * @param {import('./transports.js').WsTransport} opts.transport
    * @param {number} opts.vMax  what 100% means, in volts
    */
-  constructor({ transport, vMax = esp.V_MAX } = {}) {
+  constructor({ transport, vMax = esp.V_MAX, field = FIELD } = {}) {
     this.tx = transport;
     this.vMax = esp.clamp(vMax);
 
@@ -208,9 +208,24 @@ export class Bench {
     // ── where it is on the field ──
     // The dead reckoning above says how far it has gone; this says where that
     // is, because the QR codes are bolted to known places and the wheels are
-    // not. See public/field.js.
+    // not. See public/field.js. `fieldMap` is which field: the competition's
+    // or the practice one (--field).
+    this.fieldMap = field;
     this.field = fieldState();
+
+    // ── the factory automation system ──
+    // Why the PLC mission says the wheels must not turn — waiting for "start",
+    // waiting at the door, emergency stop — or null. See plc_run.js.
+    this.plcHold = null;
   }
+
+  /** Dead reckoning as field.js wants it, for the PLC's coordinates. */
+  routePose() {
+    return { x: this.route.x, y: this.route.y, bearing: routeBearing(this.route) };
+  }
+
+  /** The PLC mission's brake. Wheels only: the lift is not in the way of a door. */
+  hold(reason) { this.plcHold = reason || null; }
 
   /**
    * Take the persisted tuning: obstacle thresholds, wheelbase, distance
@@ -505,6 +520,10 @@ export class Bench {
     if (this.clients === 0) return [0, 0, false, 'tarayıcı bağlı değil'];
     if (!this.running) return [0, 0, false, 'durduruldu'];
     if (!this.tx.fresh) return [0, 0, false, 'esp32 erişilemiyor'];
+    // The PLC mission holds the robot: before "start", at the door, e-stop.
+    // Every way of driving stops — keys, gears and the follow page alike —
+    // with enable up, because this is a wait and not a shutdown.
+    if (this.plcHold) return [0, 0, true, this.plcHold];
     // Armed but the drive page stopped reporting: coast, stay enabled. Holding
     // enable through a released key is deliberate — toggling it on every
     // keystroke would hammer the relay.
@@ -651,7 +670,7 @@ export class Bench {
    */
   seeQr(text, now = Date.now()) {
     const mark = routeMark(this.route, 'qr', text, now, this.routeCfg);
-    const fix = fieldSee(this.field, text, now, FIELD,
+    const fix = fieldSee(this.field, text, now, this.fieldMap,
       { x: this.route.x, y: this.route.y, bearing: routeBearing(this.route) });
     return { mark, fix };
   }
@@ -662,7 +681,7 @@ export class Bench {
       fieldClearMission(this.field);
       return { nodes: [], stops: [], ok: true, reason: null };
     }
-    return fieldMission(this.field, targets, FIELD, from);
+    return fieldMission(this.field, targets, this.fieldMap, from);
   }
 
   /** Start the map again from here. The run log is what keeps a run forever. */
@@ -673,7 +692,7 @@ export class Bench {
     // than to keep an offset into a frame that was just reset to zero.
     const stops = this.field.stops;
     this.field = fieldState();
-    if (stops && stops.length) fieldMission(this.field, stops, FIELD, 'START');
+    if (stops && stops.length) fieldMission(this.field, stops, this.fieldMap, 'START');
     return this.route;
   }
 
@@ -762,7 +781,7 @@ export class Bench {
       // once — see GET /api/field — so this carries only what changes.
       field: fieldStatus(this.field,
         { x: this.route.x, y: this.route.y, bearing: routeBearing(this.route) },
-        FIELD),
+        this.fieldMap),
     };
   }
 }

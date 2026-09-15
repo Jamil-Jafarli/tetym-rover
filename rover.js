@@ -62,6 +62,17 @@ export class Rover {
     this.demand = [0, 0];         // [left %, right %] as last asked for
     this.clients = 0;
     this.lastAt = 0;
+    // Why the PLC mission says the wheels must not turn, or null. See plc_run.js.
+    this.holdReason = null;
+  }
+
+  /**
+   * The PLC mission's brake: waiting for "start", at the door, e-stop.
+   * The current chunk is cancelled and no new one goes out until released.
+   */
+  hold(reason) {
+    this.holdReason = reason || null;
+    if (this.holdReason) this.jog.stop();
   }
 
   clientJoined() { this.clients += 1; }
@@ -100,6 +111,7 @@ export class Rover {
     if (reason) this.reason = reason;
 
     if (!this.running || !this.link.connected) return;
+    if (this.holdReason) { this.jog.stop(); return; }
 
     // Below the dead band both wheels are stopped, and a stopped rover is the
     // absence of a stream rather than a stream of zeroes.
@@ -147,7 +159,8 @@ export class Rover {
     const fresh = this.link.connected && this.link.sawRx;
     return {
       running: this.running,
-      reason: this.reason,
+      reason: this.holdReason || this.reason,
+      hold: this.holdReason,
       clients: this.clients,
       // The pages were written for a board reached over wifi, and ask whether
       // it has been heard from recently. The serial link answers the same

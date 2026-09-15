@@ -88,9 +88,13 @@ export function resolveVector(data) {
   return out;
 }
 
-export function marlinApi({ link, jog }) {
+export function marlinApi({ link, jog, held = () => null }) {
   /** POST bodies, by route. Throwing here turns into a 4xx below. */
   async function post(path, data) {
+    // The PLC mission's brake covers the keyboard too: a robot waiting at the
+    // door, or on emergency stop, does not creep forward because a key is down.
+    const hold = (path === 'jog' || path === 'run') ? held() : null;
+    if (hold) return [423, { error: `bekleniyor: ${hold}` }];
     switch (path) {
       case 'connect': {
         const port = data.port || await bestPort() || (await listPorts())[0];

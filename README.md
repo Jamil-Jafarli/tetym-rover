@@ -1084,11 +1084,20 @@ but everything below still runs: the localiser, the planner and the turn at
 the next node, shown in the **konum ve sıradaki dönüş** card, which also holds
 the mission pickers, the test QR selector and **Yolu sıfırla**.
 
-The field is the arena, as the rule book draws it (`Şəkil 1`): the
-three pick-up points **A1–A3** along the top, the three drop points **B1–B3**
-down the right, the junctions **D1–D6** and the start area joined by the
-corridors between them, the factory-automation gate across the middle, and the
-nine QR codes **q1–q9** standing on the legs they belong to.
+The field is the arena as the **EK TEKNİK ŞARTNAME** measures it (Şekil 1,
+18 × 10 m): the three pick-up points **A1–A3** along the top, the drop column at
+**D4** with **B3** above it, **B1** below it and **B2** at the end of the
+corridor, the junctions **D1–D4** and the start area joined by the corridors
+between them, the factory-automation door across the middle, and the nine QR
+codes **q1–q9** standing on the legs they belong to. The practice field
+(Şekil 3, 10 × 7 m: start, A1, the door, B1) is the other one —
+`--field deneme`. The origin is each field's bottom-left corner, in metres.
+
+Where the drawing prints a dimension it is used as printed (the corridor 5.5 m
+below the top wall, the station QRs 4 m below it, BASLA 3.8 m from the wall
+behind the start area, the walls at 7.5 m and 9 m). The branch positions, the
+door and q5 / q6 / q8 have no dimension and are scaled off the drawing — measure
+them on the day and correct `public/field.js`.
 
 The field lives in `public/field.js` as a graph — the coordinates, the edges and
 which code stands where — and everything reads that one table: the localiser,
@@ -1113,8 +1122,11 @@ codes, not from the wheels:
   is somewhere, and drawing it on the start line because nothing better is
   available is exactly the failure this is meant to prevent.
 
-Only codes that carry a **q** are waypoints: `q5`, `Q5`, `qr5`, `qr/5` at the
-end of a URL, or a string that is nothing but a number. A field has other codes
+The codes on the floor say what Tablo 2 prints — **BASLA, ALIM1–3, KAPI1–2,
+BIRAK1–3** — and a read is matched against that as the whole text, upper-cased,
+with Turkish letters folded (`BAŞLA`, `kapı1`). For rehearsal the ids work too:
+`q5`, `Q5`, `qr5`, `qr/5` at the end of a URL, or a string that is nothing
+but a number. A field has other codes
 on it, and reading `kargo-9` as `q9` would put the robot at the far end of the
 arena with total confidence — a wrong fix is much worse than no fix, so those
 are counted as strays and the position is left alone.
@@ -1157,6 +1169,94 @@ Two numbers decide that trail, and both are measured rather than guessed:
 The path is fetched once over HTTP (`GET /api/route`) and appended to from the
 status stream, because sending 1 500 points ten times a second to say the last
 one moved 5 cm is how a dashboard becomes the reason the robot stutters.
+
+### The factory automation system — PLC (`/plc`)
+
+The ek şartname's second half is a protocol: the robot talks to the
+competition's **PLC simulator** over **UDP** on the field's closed wifi, and the
+PLC hands out the task and opens the door. `plc_link.js` is the socket,
+`public/plc.js` the packets and the mission (pure, tested with no network),
+`plc_run.js` wires them into either server, and `/plc` shows all of it.
+
+| | |
+|---|---|
+| PLC | `192.168.100.100`, UDP port `1515` |
+| robot (the Pi) | `192.168.100.10`, set by hand, gateway `192.168.100.1` |
+| team laptop | `192.168.100.20`, gateway `192.168.100.1` |
+| wifi | MAC-filtered: hand in the Pi's wifi MAC (`cat /sys/class/net/wlan0/address`) |
+
+Once a second the robot sends **PAKET_TX** (7 bytes) and the PLC answers each
+one with **PAKET_RX** (3 bytes). The PLC times the packets and declares the link
+broken after a second of silence, so the send clock is fixed to the time the
+link started rather than chained off the previous send.
+
+```
+PAKET_TX  durum · alım · bırakma · X lsb · X msb · Y lsb · Y msb
+          e.g. 04 02 03 94 02 c2 01 = yüklü, A2 → B3, x 6.60 m, y 4.50 m
+PAKET_RX  alım · bırakma · kontrol (1 bekle, 2 başla / devam)
+```
+
+X and Y are `integer(metres × 100)` as little-endian int16. (The table calls
+the control byte "Byte3"; the packet is three bytes, so it is byte 2.)
+
+**The mission.** The durum byte is the mission's phase:
+
+| durum | when |
+|---|---|
+| 1 hazır | no task |
+| 2 görev alındı | a task arrived; the robot is **held** until the PLC answers that packet with kontrol 2 |
+| 3 yüksüz | driving to Ax |
+| 4 yüklü | leaving Ax (ALIMx read on the way out, or **Yük alındı** on /plc) |
+| 5 fabrika komutu | **KAPI1** read heading for the door (or **KAPI2** on the way back): **held** until the PLC answers a durum-5 packet with kontrol 2 |
+| 6 dönüş | leaving Bx (BIRAKx on the way out, or **Yük bırakıldı**) |
+| 7 hata | the motor board cannot be reached |
+| 8 acil stop | /plc's button or Space |
+
+The route is planned the moment a task arrives — `START → Ax → Bx → START`
+through the door both ways — and shown on /plc, /panel and /dashboard. The lap
+ends when BASLA has been read on the way home and the robot is stopped (or
+**Başlangıca vardı**); the PLC then has to say bekle, or name another task,
+before the same one is taken again.
+
+"Held" is enforced where the wheels are driven, not on a page: on the ESP32
+bench every drive path (keys, gears, /follow) resolves to zero with enable up,
+and on the Ender rover the stream of G-code chunks stops and `/api/marlin/run`
+answers **423** while held. A kontrol 1 that arrives while the robot is driving
+anywhere else is not a stop order — the PLC answers every packet, and most of
+those answers are about a door the robot is nowhere near.
+
+Two things the specification leaves open are decided in `public/plc.js` and
+written down there: a station byte of 0 in PAKET_TX means "no task yet", and
+until the first QR the robot reports the start area's coordinates (/plc marks
+them as an assumption).
+
+What this does **not** do is steer. The mission knows the route, the turn at the
+next junction and when to wait, and it stops the wheels when it must; following
+the line and taking the turn is still the pilot's job on /follow.
+
+```
+node server.js --marlin --plc                           the competition: Ender board, real PLC
+node server.js --marlin --plc --plc-bind 192.168.100.10 ...and refuse to send from any other address
+node server.js --fake --plc-sim                         the whole mission on a desk, simulator inside
+node server.js --marlin --plc-sim --field deneme        the practice field
+node plc_sim.js --task 2,3 --gate-wait 3000             a stand-in PLC on its own (npm run plc-sim)
+npm run test:plc                                        packets, a full lap, UDP, both servers
+```
+
+Setting the Pi's address, with NetworkManager (Raspberry Pi OS Bookworm):
+
+```
+sudo nmcli con mod "<the field wifi>" ipv4.method manual \
+  ipv4.addresses 192.168.100.10/24 ipv4.gateway 192.168.100.1
+sudo nmcli con up "<the field wifi>"
+```
+
+The simulator (`plc_sim.js`, `--plc-sim`) checks that every packet is 7 bytes
+with a valid durum, records a timeout after a second of silence, and in its
+automatic mode plays the factory: task and start at the start line, the door
+shut for three seconds and then open, the next task after a finished lap. Its
+manual mode answers with whatever is set on /plc. It is a rehearsal tool —
+what the organisers' PLC does at the door, and when, is theirs.
 
 ### Reading QR codes
 
@@ -1236,7 +1336,9 @@ is the board's own. Just keep something sending at ~20 Hz.
 // dashboard
 {"cmd": "route_reset"}                          // the map starts again from here
 {"cmd": "field_mission", "targets": ["A2", "B3"]}  // the stops to call at, in order
-{"cmd": "field_qr",      "text": "q5"}          // a code read by hand — rehearsal only
+{"cmd": "field_qr",      "text": "KAPI1"}       // a code read by hand — rehearsal only
+{"cmd": "plc", "event": "picked"}                // picked · dropped · home · estop · release · reset
+{"cmd": "plc", "sim": {"auto": false, "control": 2}}  // the built-in simulator, by hand
 {"cmd": "lidar_reset",   "room": "default"}     // forget the LiDAR map, relay and pages
 ```
 
@@ -1251,7 +1353,8 @@ Five things are readable over plain HTTP, all read-only:
 | `GET /camera/stream.mjpg` | the webcam, as `multipart/x-mixed-replace`. Point an `<img>` at it. A viewer that is not keeping up has frames **dropped** rather than queued: a live view a minute behind is worse than one that skipped a second |
 | `GET /camera/frame.jpg` | the latest single frame, for anything that does not want a stream |
 | `GET /api/route` | the whole path and its marks, once — see the map, above |
-| `GET /api/field` | the competition field: nodes, edges and where each QR stands. Static for a whole competition, so it is fetched once rather than repeated ten times a second |
+| `GET /api/field` | the field in use: nodes, edges, walls and where each QR stands and what it says. Static for a whole competition, so it is fetched once rather than repeated ten times a second |
+| `GET /api/plc` | the mission, the PLC link (last PAKET_TX / PAKET_RX, counts, errors) and the simulator if there is one. The status frame carries the same as `plc` |
 | `GET /api/wheels` | the wheel trim, for the two pages with no socket |
 | `GET /api/lidar` | every LiDAR relay room: senders, viewers, frames, fps, how stale. The status frame carries the default room as `lidar` |
 
@@ -1318,13 +1421,24 @@ Status comes back at 10 Hz, plus one immediately after each command carrying
   // `pose.known` is false until a code has been read: an unlocalised robot is
   // somewhere, not at the origin
   "field": {
-    "qr": "q5", "from": "D3", "to": "GATE", "sure": true, "known": true,
-    "pose": {"known": true, "x": 4.02, "y": 0, "bearing": 90, "dead": 0.12},
-    "turn": {"node": "GATE", "dir": "straight", "deg": 0, "label": "düz get",
-             "then": "D4", "dist": 1.6},
-    "plan": ["START","D1","D2","A2","D2","D3","GATE","D4","D6","B3"],
-    "stops": ["A2","B3"], "step": 6, "on_plan": true,
+    "map": "yarisma", "qr": "q5", "text": "KAPI1",
+    "from": "D3", "to": "GATE", "sure": true, "known": true,
+    "pose": {"known": true, "x": 6.72, "y": 4.5, "bearing": 90, "dead": 0.12},
+    "turn": {"node": "GATE", "dir": "straight", "deg": 0, "label": "düz devam et",
+             "then": "D4", "dist": 2.7},
+    "plan": ["START","D1","D2","A2","D2","D3","GATE","D4","B3","D4","GATE","D3","D2","D1","START"],
+    "stops": ["A2","B3","START"], "step": 6, "on_plan": true,
     "reads": 4, "strays": 1, "unknown": null, "seen": [ … ]
+  },
+
+  // the factory automation PLC — see /plc
+  "plc": {
+    "mission": {"phase": "gate", "code": 5, "label": "Fabrika otomasyon sistemi komutu bekleniyor",
+                "hold": "kapı: PLC devam komutu bekleniyor", "task": {"a": 2, "b": 3}, …},
+    "link": {"enabled": true, "host": "192.168.100.100", "port": 1515, "connected": true,
+             "tx": {"code": 5, "hex": "05 02 03 a0 02 c2 01", …},
+             "rx": {"a": 2, "b": 3, "control": 1, "replyTo": 5, …}, …},
+    "sim": null
   },
 
   // the Pi's own three
@@ -1514,7 +1628,9 @@ That is the whole setup on a Pi with the printer plugged in: it finds the
 port, opens it, and prints a URL. Open the URL, hold a key, the gantry moves.
 
 Its pages are `/` (hold WASD), plus `/vision`, `/follow` and `/tune` — the same
-three the ESP32 serves, documented in Part I. The DAC pages (`/manual`,
+three the ESP32 serves, documented in Part I — and `/lidar` and `/plc`. The QR
+reader, the field and the PLC mission run here too (see Part I), without dead
+reckoning: between two codes the position is the last code's. The DAC pages (`/manual`,
 `/drive`, `/pins`, `/setup`, `/obstacle`, `/dashboard`) are about two analog
 pins and a competition field, so they are not served in this mode.
 ---
@@ -1943,7 +2059,12 @@ printer's, and the third is what both machines run.
 | `public/obstacle.html` | forward sonar: drive, stop, wait, carry on |
 | `public/dashboard.html` | everything at once: speed, volts, ESP32 + Pi, camera, obstacle, QR, the field map and the next turn |
 | `public/route.js` | dead reckoning: two wheel percentages → a path. Pure |
-| `public/field.js` | the competition field: the graph, QR localisation, the plan and the turns. Pure |
+| `public/field.js` | the competition and practice fields (ek şartname): the graph, the QR texts, localisation, the plan and the turns. Pure |
+| `public/plc.js` | the PLC protocol (PAKET_TX / PAKET_RX) and the mission's durum 1–8. Pure |
+| `public/plc.html` | /plc: the link, the packets byte by byte, the mission, the field map, the simulator |
+| `plc_link.js` | the UDP socket to the PLC, on a fixed one-second clock |
+| `plc_sim.js` | a stand-in PLC: the same protocol from the other side, in the server or on its own |
+| `plc_run.js` | the mission wired into a server: holds the wheels, hears the QR reads |
 | `public/lift.js` | the lift's two buttons and their dead-man, shared by /drive and /dashboard |
 | `public/cam.js` | where a page gets its pictures from: the Pi, this browser, or a file |
 | `esp32/ws_dac/` | the wifi firmware |
@@ -2029,7 +2150,8 @@ worth running without them.
 | `test/test_analyse.mjs` | the log analysis, 54 checks, no browser |
 | `test/test_sonar.mjs` | the sonar logic, 29 checks, no browser |
 | `test/test_route.mjs` | dead reckoning, 43 checks, no browser |
-| `test/test_field.mjs` | the field graph, QR localisation and the turns, 105 checks, no browser |
+| `test/test_field.mjs` | the field graph against the ek şartname, the QR texts, localisation and the turns, 131 checks, no browser |
+| `test/test_plc.mjs` | PAKET_TX / PAKET_RX byte for byte, a full lap through the real field with the door both ways, the link against the simulator over UDP, and both servers holding their wheels — 99 checks |
 | `test/test_camera.mjs` | JPEG framing, a real QR decode, the Pi stats — 45 checks |
 | `test/test_lidar.mjs` | the SCN1 encoder byte-for-byte against the vector webscan's Swift test pins, the grid and motion gate, the simulator's map against its true walls, the relay end to end on both machines, ARKit's tracking flags, and the mDNS announcement appearing and withdrawing — 94 checks |
 | `test/test_vision.mjs` | vision suite, 28 checks — real browser, synthetic tracks |

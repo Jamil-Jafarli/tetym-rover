@@ -209,7 +209,7 @@
       <a href="/">ana sayfa</a><a href="/dashboard">panel (mobil)</a><a href="/drive">sür</a>
       <a href="/follow">takip</a><a href="/vision">kamera</a><a href="/tune">analiz</a>
       <a href="/obstacle">engel</a><a href="/setup">kurulum</a><a href="/pins">pinler</a>
-      <a href="/manual">manuel</a><a href="/lidar">lidar</a>
+      <a href="/manual">manuel</a><a href="/lidar">lidar</a><a href="/plc">plc</a>
     </nav>
     <div class="row" style="gap:10px">
       <span id="clock">--:--:--</span>
@@ -706,9 +706,11 @@ $('clearPlan').addEventListener('click', () => {
   sendWs({ cmd: 'field_mission', targets: [] });
 });
 $('resetRoute').addEventListener('click', () => sendWs({ cmd: 'route_reset' }));
+// The codes as they are printed (Tablo 2) — BASLA, ALIM1, … — so a rehearsal
+// goes through the same text matching the camera's reads do.
 for (const q of fieldQrs(FIELD)) {
   const o = document.createElement('option');
-  o.value = q.qr; o.textContent = `test: ${q.qr} okundu`;
+  o.value = q.text || q.qr; o.textContent = `test: ${q.text || q.qr} okundu`;
   $('qrTest').appendChild(o);
 }
 // A rehearsal tool, so it springs back after every pick.

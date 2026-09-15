@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot · Fabrika otomasyonu (PLC)</title>
+<style>
+  :root{
+    color-scheme:light;
+    --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570;
+    --accent:#2da44e; --warn:#bf8700; --stop:#cf222e; --idle:#0969da; --soft:#eef1f5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  a{color:var(--idle)}
+  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 20px;
+    background:var(--panel);border-bottom:1px solid var(--line)}
+  header h1{font-size:17px;margin:0;font-weight:650}
+  header .sp{flex:1}
+  main{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;padding:16px 20px;max-width:1500px;margin:0 auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;min-width:0}
+  .card h2{font-size:11.5px;margin:0 0 10px;font-weight:650;letter-spacing:.6px;text-transform:uppercase;color:var(--dim)}
+  .c4{grid-column:span 4} .c5{grid-column:span 5} .c7{grid-column:span 7} .c8{grid-column:span 8} .c12{grid-column:span 12}
+  @media (max-width:1100px){ .c4,.c5,.c7,.c8{grid-column:span 12} }
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--dim);display:inline-block;flex:none}
+  .dot.ok{background:var(--accent)} .dot.bad{background:var(--stop)} .dot.go{background:var(--warn)}
+  .muted{color:var(--dim)}
+  .mono{font:12.5px ui-monospace,Menlo,Consolas,monospace}
+  .code{display:flex;align-items:center;gap:14px}
+  .code .n{font:700 46px/1 ui-monospace,Menlo,Consolas,monospace;width:64px;height:64px;border-radius:12px;
+    display:flex;align-items:center;justify-content:center;background:var(--soft);flex:none}
+  .code .n.c1{background:#e7f3ff;color:var(--idle)} .code .n.c3,.code .n.c4,.code .n.c6{background:#dafbe1;color:var(--accent)}
+  .code .n.c2,.code .n.c5{background:#fff8c5;color:var(--warn)} .code .n.c7,.code .n.c8{background:#ffebe9;color:var(--stop)}
+  .code b{font-size:17px;display:block}
+  .kv{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;margin-top:12px}
+  .kv div{min-width:0}
+  .kv span{display:block;font-size:11.5px;color:var(--dim)}
+  .kv b{font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+  .hold{margin-top:12px;padding:8px 10px;border-radius:8px;background:#fff8c5;color:#7d4e00;font-weight:600}
+  .hold.estop{background:#ffebe9;color:var(--stop)}
+  .btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  button,select{font:600 13px inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);
+    border-radius:9px;padding:8px 12px;cursor:pointer}
+  button:hover{border-color:var(--idle)}
+  button:disabled{opacity:.45;cursor:default;border-color:var(--line)}
+  button.danger{background:var(--stop);border-color:var(--stop);color:#fff}
+  button.on{border-color:var(--idle);color:var(--idle);background:#e7f3ff}
+  table{border-collapse:collapse;width:100%}
+  td,th{text-align:left;padding:5px 6px;border-bottom:1px solid var(--soft);vertical-align:top}
+  th{font-size:11.5px;color:var(--dim);font-weight:600}
+  .bytes{display:flex;gap:4px;flex-wrap:wrap}
+  .bytes i{font:600 12.5px ui-monospace,Menlo,Consolas,monospace;font-style:normal;background:var(--soft);
+    border-radius:6px;padding:3px 6px;text-align:center;min-width:34px}
+  .bytes i small{display:block;font:500 9.5px ui-sans-serif,system-ui;color:var(--dim)}
+  .log{max-height:220px;overflow:auto;font-size:13px}
+  .log div{padding:3px 0;border-bottom:1px solid var(--soft)}
+  .log time{color:var(--dim);font:12px ui-monospace,Menlo,Consolas,monospace;margin-right:8px}
+  .mapwrap{overflow-x:auto}
+  svg{display:block;width:100%;height:auto;min-width:560px}
+  .qrs{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .qrs button{font:600 12px ui-monospace,Menlo,Consolas,monospace;padding:6px 9px}
+  .note{font-size:12.5px;color:var(--dim);margin:8px 0 0}
+  .warnc{color:var(--warn)} .bad{color:var(--stop)} .ok{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Fabrika otomasyonu · PLC</h1>
+  <span class="dot" id="wsDot"></span><span class="muted" id="wsText">sunucuya bağlanıyor…</span>
+  <span class="sp"></span>
+  <span class="muted" id="fieldName">–</span>
+  <a href="/">ana sayfa</a>
+</header>
+
+<main>
+  <!-- ══ the mission ══ -->
+  <section class="card c5">
+    <h2>Robot durumu (PAKET_TX byte 0)</h2>
+    <div class="code">
+      <div class="n" id="code">–</div>
+      <div style="min-width:0"><b id="codeLabel">–</b><span class="muted" id="phaseText">–</span></div>
+    </div>
+    <div class="hold" id="hold" hidden>–</div>
+    <div class="kv">
+      <div><span>Görev</span><b id="task">yok</b></div>
+      <div><span>Bu aşamada</span><b id="phaseTime">–</b></div>
+      <div><span>PLC'ye giden konum</span><b id="pose">–</b></div>
+      <div><span>Son QR</span><b id="lastQr">–</b></div>
+      <div><span>Rota</span><b id="plan" title="">–</b></div>
+      <div><span>Sıradaki</span><b id="turn">–</b></div>
+    </div>
+    <div class="btns">
+      <button id="bPicked" title="Robot yükü aldı — yüklü harekete geç (4)">Yük alındı</button>
+      <button id="bDropped" title="Robot yükü bıraktı — başlangıca dönüşe geç (6)">Yük bırakıldı</button>
+      <button id="bHome" title="Robot başlangıç alanında — göreve hazır (1)">Başlangıca vardı</button>
+      <button id="bReset" title="Görevi bırak, hazıra dön">Görevi sıfırla</button>
+      <button id="bEstop" class="danger">ACİL STOP</button>
+    </div>
+    <p class="note">Yük alma ve bırakma, robot istasyon kolundan QR okuyarak çıktığında kendiliğinden de işlenir.
+      Kapıda bekleme, KAPI1/KAPI2 kapıya doğru okununca başlar.</p>
+  </section>
+
+  <!-- ══ the link ══ -->
+  <section class="card c7">
+    <h2>PLC bağlantısı · UDP</h2>
+    <div class="kv" style="margin-top:0;grid-template-columns:repeat(4,1fr)">
+      <div><span>Durum</span><b id="linkState">–</b></div>
+      <div><span>PLC adresi</span><b id="linkAddr" class="mono">–</b></div>
+      <div><span>Gönderilen / alınan</span><b id="linkCount">–</b></div>
+      <div><span>Son cevap</span><b id="linkAge">–</b></div>
+    </div>
+    <table style="margin-top:12px">
+      <tr><th style="width:120px">PAKET_TX</th><td><div class="bytes" id="txBytes"></div><div class="muted" id="txText">–</div></td></tr>
+      <tr><th>PAKET_RX</th><td><div class="bytes" id="rxBytes"></div><div class="muted" id="rxText">–</div></td></tr>
+    </table>
+    <p class="note" id="linkNote">–</p>
+  </section>
+
+  <!-- ══ the field ══ -->
+  <section class="card c8">
+    <h2 id="mapTitle">Saha</h2>
+    <div class="mapwrap"><svg id="map" role="img" aria-label="Saha haritası"></svg></div>
+    <div class="qrs" id="qrs"></div>
+    <p class="note">Düğmeler bir QR'ın okunduğunu elle bildirir — yalnızca prova için; gerçek okuyucu kameradır.</p>
+  </section>
+
+  <!-- ══ events ══ -->
+  <section class="card c4">
+    <h2>Görev günlüğü</h2>
+    <div class="log" id="events"><div class="muted">henüz olay yok</div></div>
+  </section>
+
+  <!-- ══ the simulator ══ -->
+  <section class="card c12" id="simCard" hidden>
+    <h2>PLC simülatörü (bu sunucuda)</h2>
+    <div class="kv" style="margin-top:0;grid-template-columns:repeat(6,1fr)">
+      <div><span>Mod</span><b id="simMode">–</b></div>
+      <div><span>Verdiği görev</span><b id="simTask">–</b></div>
+      <div><span>Paket</span><b id="simCount">–</b></div>
+      <div><span>En uzun ara</span><b id="simGap">–</b></div>
+      <div><span>Zaman aşımı</span><b id="simTimeouts">–</b></div>
+      <div><span>Hatalı paket</span><b id="simBad">–</b></div>
+    </div>
+    <div class="btns">
+      <button id="sAuto">Otomatik senaryo</button>
+      <button id="sManual">Elle</button>
+      <select id="sA"><option value="1">A1</option><option value="2">A2</option><option value="3">A3</option></select>
+      <select id="sB"><option value="1">B1</option><option value="2">B2</option><option value="3">B3</option></select>
+      <button id="sWait">Kontrol 1 · Bekle</button>
+      <button id="sGo">Kontrol 2 · Başla / devam</button>
+    </div>
+    <div class="log" id="simLog" style="margin-top:10px;max-height:140px"></div>
+  </section>
+</main>
+
+<script src="/field.js"></script>
+<script src="/plc.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmt = (v, n = 2) => (v == null || !Number.isFinite(Number(v)) ? '–' : Number(v).toFixed(n));
+const clock = (at) => at ? new Date(at).toLocaleTimeString('tr-TR', { hour12: false }) : '';
+
+let ws = null;
+let map = FIELD;
+let mapName = null;
+
+function sendWs(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/`);
+  ws.onopen = () => { $('wsDot').className = 'dot ok'; $('wsText').textContent = 'sunucuya bağlı'; };
+  ws.onclose = () => {
+    $('wsDot').className = 'dot bad'; $('wsText').textContent = 'sunucu bağlantısı yok — yeniden deneniyor';
+    setTimeout(connect, 1500);
+  };
+  ws.onmessage = (ev) => {
+    let s; try { s = JSON.parse(ev.data); } catch { return; }
+    if (s.type === 'status') paint(s);
+  };
+}
+
+// ── painting ─────────────────────────────────────────────────────────
+const PHASE_TR = {
+  ready: 'görev bekleniyor', accepted: 'görev alındı — PLC başlat komutu bekleniyor',
+  to_pick: 'alım istasyonuna gidiyor', to_drop: 'bırakma noktasına gidiyor',
+  gate: 'kapıda — fabrika komutu bekleniyor', returning: 'başlangıç alanına dönüyor',
+};
+
+function bytesHtml(hex, names) {
+  const parts = String(hex || '').split(' ').filter(Boolean);
+  return parts.map((h, i) => `<i>${esc(h)}<small>${esc(names[i] || `b${i}`)}</small></i>`).join('');
+}
+
+function paint(s) {
+  const f = s.field || {};
+  if (f.map && f.map !== mapName) {
+    mapName = f.map;
+    map = FIELDS[f.map] || FIELD;
+    drawStatic();
+  }
+  const p = s.plc || {};
+  const m = p.mission || {};
+  const l = p.link || {};
+
+  $('fieldName').textContent = `${map.label} · ${map.w} × ${map.h} m`;
+  $('code').textContent = m.code ?? '–';
+  $('code').className = `n c${m.code}`;
+  $('codeLabel').textContent = m.label || '–';
+  $('phaseText').textContent = m.estop ? 'acil stop basılı' : m.fault ? `hata: ${m.fault}` : PHASE_TR[m.phase] || '–';
+  $('hold').hidden = !m.hold;
+  $('hold').textContent = m.hold ? `Robot tutuluyor: ${m.hold}` : '';
+  $('hold').className = 'hold' + (m.estop ? ' estop' : '');
+  $('task').textContent = m.task ? `A${m.task.a} → B${m.task.b}` : (m.done ? `yok (son: A${m.done.a} → B${m.done.b})` : 'yok');
+  $('phaseTime').textContent = m.phase_s != null ? `${fmt(m.phase_s, 0)} s` : '–';
+  $('pose').textContent = m.pose ? `${fmt(m.pose.x)}, ${fmt(m.pose.y)} m` + (m.pose.known ? '' : ' (tahmin: başlangıç)') : '–';
+  $('lastQr').textContent = f.qr ? `${f.text || f.qr} · ${f.from}→${f.to}` : 'henüz okunmadı';
+  $('plan').textContent = (f.plan || []).join(' › ') || '–';
+  $('plan').title = $('plan').textContent;
+  $('turn').textContent = f.turn ? `${f.turn.node}: ${f.turn.label}` : '–';
+  $('bEstop').textContent = m.estop ? 'Acil stopu kaldır' : 'ACİL STOP';
+  $('bEstop').className = m.estop ? 'on' : 'danger';
+  $('bPicked').disabled = m.phase !== 'to_pick';
+  $('bDropped').disabled = m.phase !== 'to_drop';
+  $('bHome').disabled = m.phase !== 'returning';
+  $('bReset').disabled = !m.task;
+
+  // The link.
+  if (!l.enabled) {
+    $('linkState').innerHTML = '<span class="muted">kapalı</span>';
+    $('linkAddr').textContent = '–';
+    $('linkNote').textContent = 'PLC bağlantısı açık değil. Yarışmada sunucu --plc ile başlatılır; '
+      + 'masada denemek için --plc-sim.';
+  } else {
+    $('linkState').innerHTML = l.connected ? '<span class="ok">bağlı</span>'
+      : l.bound ? '<span class="warnc">cevap yok</span>' : '<span class="bad">soket yok</span>';
+    $('linkAddr').textContent = `${l.host}:${l.port}`;
+    $('linkNote').textContent = (l.error ? `Hata: ${l.error}. ` : '')
+      + `Robot IP ${p.robot_ip || '192.168.100.10'} (elle), ağ geçidi 192.168.100.1, bilgisayar 192.168.100.20. `
+      + `Paket her ${l.period_ms} ms'de gider; en geç gönderim ${fmt(l.late_ms, 0)} ms.`
+      + (l.rx_bad ? ` ${l.rx_bad} geçersiz cevap (${l.rx_bad_last ? l.rx_bad_last.reason : ''}).` : '');
+  }
+  $('linkCount').textContent = l.enabled ? `${l.tx_count ?? 0} / ${l.rx_count ?? 0}` : '–';
+  $('linkAge').textContent = l.rx_age_s != null ? `${fmt(l.rx_age_s, 1)} s önce` : '–';
+
+  const tx = l.tx;
+  $('txBytes').innerHTML = tx ? bytesHtml(tx.hex, ['durum', 'alım', 'bırakma', 'X lsb', 'X msb', 'Y lsb', 'Y msb']) : '';
+  $('txText').textContent = tx
+    ? `${tx.code} · ${PLC_CODE_LABEL[tx.code] || '?'} · A${tx.a || '–'} → B${tx.b || '–'} · X ${fmt(tx.x)} m, Y ${fmt(tx.y)} m`
+    : 'henüz gönderilmedi';
+  const rx = l.rx;
+  $('rxBytes').innerHTML = rx ? bytesHtml(rx.hex, ['alım', 'bırakma', 'kontrol']) : '';
+  $('rxText').textContent = rx
+    ? `A${rx.a || '–'} → B${rx.b || '–'} · kontrol ${rx.control}: ${PLC_CONTROL_LABEL[rx.control] || '?'} · durum ${rx.replyTo} paketine cevap`
+    : 'henüz cevap gelmedi';
+
+  // Events.
+  const ev = (m.events || []).slice().reverse();
+  $('events').innerHTML = ev.length
+    ? ev.map((e) => `<div><time>${clock(e.at)}</time>${esc(e.text)}</div>`).join('')
+    : '<div class="muted">henüz olay yok</div>';
+
+  // The simulator.
+  const sim = p.sim;
+  $('simCard').hidden = !sim;
+  if (sim) {
+    $('simMode').textContent = sim.error ? `hata: ${sim.error}` : sim.auto ? 'otomatik senaryo' : 'elle';
+    $('simTask').textContent = sim.task ? `A${sim.task.a} → B${sim.task.b}` + (sim.auto ? '' : ` · kontrol ${sim.control}`) : '–';
+    $('simCount').textContent = sim.count;
+    $('simGap').textContent = `${sim.max_gap_ms} ms`;
+    $('simTimeouts').textContent = sim.timeouts + (sim.lost ? ' · şu an kopuk' : '');
+    $('simBad').textContent = sim.bad;
+    $('sAuto').className = sim.auto ? 'on' : '';
+    $('sManual').className = sim.auto ? '' : 'on';
+    $('simLog').innerHTML = (sim.log || []).slice().reverse()
+      .map((e) => `<div><time>${clock(e.at)}</time>${esc(e.text)}</div>`).join('');
+  }
+
+  drawLive(f, m);
+}
+
+// ── the map ──────────────────────────────────────────────────────────
+const S = 60;          // svg units per metre
+const PAD = 0.5;
+const sx = (x) => (x + PAD) * S;
+const sy = (y) => (map.h - y + PAD) * S;
+
+function drawStatic() {
+  const svg = $('map');
+  svg.setAttribute('viewBox', `0 0 ${(map.w + PAD * 2) * S} ${(map.h + PAD * 2) * S}`);
+  $('mapTitle').textContent = `${map.label} — ${map.w} × ${map.h} m, ek şartname`;
+  const parts = [];
+  parts.push(`<rect x="${sx(0)}" y="${sy(map.h)}" width="${map.w * S}" height="${map.h * S}" fill="#fafbfc"/>`);
+  for (let x = 1; x < map.w; x++) parts.push(`<line x1="${sx(x)}" y1="${sy(0)}" x2="${sx(x)}" y2="${sy(map.h)}" stroke="#eef1f5" stroke-width="2"/>`);
+  for (let y = 1; y < map.h; y++) parts.push(`<line x1="${sx(0)}" y1="${sy(y)}" x2="${sx(map.w)}" y2="${sy(y)}" stroke="#eef1f5" stroke-width="2"/>`);
+  for (const [x1, y1, x2, y2] of map.walls || []) {
+    parts.push(`<line x1="${sx(x1)}" y1="${sy(y1)}" x2="${sx(x2)}" y2="${sy(y2)}" stroke="#1c2128" stroke-width="7" stroke-linecap="round"/>`);
+  }
+  for (const [x1, y1, x2, y2] of map.doors || []) {
+    parts.push(`<line x1="${sx(x1)}" y1="${sy(y1)}" x2="${sx(x2)}" y2="${sy(y2)}" stroke="#bf8700" stroke-width="7" stroke-dasharray="14 8"/>`);
+  }
+  parts.push('<g id="legs"></g>');
+  for (const e of map.edges) {
+    const a = fieldNode(e.a, map), b = fieldNode(e.b, map);
+    parts.push(`<line x1="${sx(a.x)}" y1="${sy(a.y)}" x2="${sx(b.x)}" y2="${sy(b.y)}" stroke="#1f6feb" stroke-opacity=".35" stroke-width="10"/>`);
+  }
+  for (const n of map.nodes) {
+    const big = n.kind === 'start' ? [1.0, 1.9] : n.kind === 'pick' || n.kind === 'drop' ? [0.715, 0.615] : null;
+    if (big) {
+      const vertical = !map.edges.some((e) => (e.a === n.id || e.b === n.id)
+        && Math.abs(fieldNode(e.a === n.id ? e.b : e.a, map).y - n.y) < 0.01);
+      const [w, h] = vertical ? big : [big[1], big[0]];
+      const fill = n.kind === 'start' ? '#e7f3ff' : n.kind === 'pick' ? '#dafbe1' : '#fbefff';
+      parts.push(`<rect x="${sx(n.x - w / 2)}" y="${sy(n.y + h / 2)}" width="${w * S}" height="${h * S}" fill="${fill}" stroke="#57606a" stroke-width="3" rx="6"/>`);
+      parts.push(`<text x="${sx(n.x)}" y="${sy(n.y) + 9}" text-anchor="middle" font-size="26" font-weight="700" fill="#1c2128">${esc(n.kind === 'start' ? 'BAŞ' : n.id)}</text>`);
+    } else {
+      const col = n.kind === 'gate' ? '#bf8700' : '#57606a';
+      parts.push(`<circle cx="${sx(n.x)}" cy="${sy(n.y)}" r="11" fill="#fff" stroke="${col}" stroke-width="4"/>`);
+      parts.push(`<text x="${sx(n.x) + 14}" y="${sy(n.y) + 34}" font-size="21" fill="${col}" font-weight="600">${esc(n.kind === 'gate' ? 'KAPI' : n.id)}</text>`);
+    }
+  }
+  for (const q of fieldQrs(map)) {
+    parts.push(`<rect x="${sx(q.x) - 13}" y="${sy(q.y) - 13}" width="26" height="26" fill="#1c2128" rx="3"/>`);
+    parts.push(`<rect x="${sx(q.x) - 6}" y="${sy(q.y) - 6}" width="12" height="12" fill="#fff"/>`);
+    const vertical = Math.abs(fieldNode(q.a, map).x - fieldNode(q.b, map).x) < 0.01;
+    const tx = vertical ? sx(q.x) - 20 : sx(q.x);
+    const ty = vertical ? sy(q.y) + 7 : sy(q.y) - 22;
+    parts.push(`<text x="${tx}" y="${ty}" text-anchor="${vertical ? 'end' : 'middle'}" font-size="20" font-weight="700" fill="#0969da" font-family="ui-monospace,Menlo,Consolas,monospace">${esc(q.text || q.qr)}</text>`);
+  }
+  parts.push('<g id="robot"></g>');
+  svg.innerHTML = parts.join('');
+
+  $('qrs').innerHTML = fieldQrs(map).map((q) =>
+    `<button data-text="${esc(q.text || q.qr)}" title="${esc(q.qr)}: ${esc(q.a)}–${esc(q.b)}">${esc(q.text || q.qr)}</button>`).join('');
+}
+
+function drawLive(f, m) {
+  const legs = $('legs'), robot = $('robot');
+  if (!legs || !robot) return;
+  const plan = f.plan || [];
+  const out = [];
+  for (let i = 0; i + 1 < plan.length; i++) {
+    const a = fieldNode(plan[i], map), b = fieldNode(plan[i + 1], map);
+    if (!a || !b) continue;
+    const done = i + 1 < (f.step || 0);
+    out.push(`<line x1="${sx(a.x)}" y1="${sy(a.y)}" x2="${sx(b.x)}" y2="${sy(b.y)}" stroke="${done ? '#8c959f' : '#2da44e'}" stroke-width="16" stroke-linecap="round" stroke-opacity=".55"/>`);
+  }
+  legs.innerHTML = out.join('');
+
+  const pose = f.pose && f.pose.known ? f.pose : null;
+  if (!pose) { robot.innerHTML = ''; return; }
+  const r = (pose.bearing || 0) * Math.PI / 180;
+  const x = sx(pose.x), y = sy(pose.y);
+  const tip = [x + Math.sin(r) * 34, y - Math.cos(r) * 34];
+  const col = m.estop || m.fault ? '#cf222e' : m.hold ? '#bf8700' : '#0969da';
+  robot.innerHTML = `<circle cx="${x}" cy="${y}" r="20" fill="${col}" fill-opacity=".9"/>`
+    + `<line x1="${x}" y1="${y}" x2="${tip[0]}" y2="${tip[1]}" stroke="${col}" stroke-width="7" stroke-linecap="round"/>`;
+}
+
+// ── controls ─────────────────────────────────────────────────────────
+const plcEvent = (e) => sendWs({ cmd: 'plc', event: e });
+$('bPicked').onclick = () => plcEvent('picked');
+$('bDropped').onclick = () => plcEvent('dropped');
+$('bHome').onclick = () => plcEvent('home');
+$('bReset').onclick = () => { if (confirm('Görev bırakılsın mı?')) plcEvent('reset'); };
+$('bEstop').onclick = () => plcEvent($('bEstop').textContent === 'ACİL STOP' ? 'estop' : 'release');
+$('qrs').onclick = (e) => {
+  const b = e.target.closest('button[data-text]');
+  if (b) sendWs({ cmd: 'field_qr', text: b.dataset.text });
+};
+$('sAuto').onclick = () => sendWs({ cmd: 'plc', sim: { auto: true } });
+$('sManual').onclick = () => sendWs({ cmd: 'plc', sim: { auto: false, a: $('sA').value, b: $('sB').value } });
+$('sA').onchange = $('sB').onchange = () => sendWs({ cmd: 'plc', sim: { a: $('sA').value, b: $('sB').value } });
+$('sWait').onclick = () => sendWs({ cmd: 'plc', sim: { auto: false, control: 1 } });
+$('sGo').onclick = () => sendWs({ cmd: 'plc', sim: { auto: false, control: 2 } });
+// Space is the emergency stop here too, as on every driving page.
+addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) {
+    e.preventDefault(); plcEvent('estop');
+  }
+});
+
+drawStatic();
+connect();
+</script>
+</body>
+</html>

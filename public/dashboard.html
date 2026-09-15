@@ -144,7 +144,7 @@
       <span class="muted">
         <a href="/drive">sür</a> · <a href="/follow">takip</a> ·
         <a href="/obstacle">engel</a> · <a href="/vision">kamera</a> ·
-        <a href="/setup">kurulum</a>
+        <a href="/setup">kurulum</a> · <a href="/plc">plc</a>
       </span>
     </div>
     <div class="muted" id="reason" style="margin-top:10px">–</div>
@@ -767,7 +767,7 @@ $('clearPlan').addEventListener('click', () => {
 // no fix at all.
 for (const q of fieldQrs(FIELD)) {
   const o = document.createElement('option');
-  o.value = q.qr; o.textContent = `test: ${q.qr} okundu`;
+  o.value = q.text || q.qr; o.textContent = `test: ${q.text || q.qr} okundu`;
   $('qrTest').appendChild(o);
 }
 $('qrTest').addEventListener('change', () => {
