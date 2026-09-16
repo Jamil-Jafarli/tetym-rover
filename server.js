@@ -57,6 +57,7 @@ import { advertise } from './lidar_discovery.js';
 import { startCompetition } from './plc_run.js';
 import { Gpio } from './gpio.js';
 import { Buzzer } from './buzzer.js';
+import { ScenarioRunner } from './scenario_run.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Where the saved tuning lives. TETYM_FOLLOW_FILE moves it, which is how the
@@ -474,8 +475,13 @@ async function main() {
   // request can arrive.
   // held() is read per request, so the rover being declared further down is
   // fine: the PLC mission's brake covers the keyboard too.
-  const api = marlinApi({ link, jog, onManual: () => replayer.cancel('əl ilə sürüldü'),
-                          held: () => rover.holdReason });
+  // A G-code scenario from /plc (scenario_run.js) running is a hold too: a key
+  // held under it would put two sources of moves into one planner. The halt
+  // button ends one.
+  const api = marlinApi({ link, jog,
+    onManual: () => { replayer.cancel('əl ilə sürüldü'); scenarios.stop('DUR (/gcode)'); },
+    held: () => rover.holdReason
+      || (scenarios.running ? `senaryo çalışıyor: ${scenarios.run.label}` : null) });
 
   // --trace mirrors the link's log to the console. The page shows the same
   // thing, but a terminal can be scrolled back, piped and pasted.
@@ -519,7 +525,7 @@ async function main() {
                     '/mission.js': 'mission.js', '/actuator.js': 'actuator.js',
                     '/teach.js': 'teach.js', '/qrview.js': 'qrview.js',
                     '/lidarmotor.js': 'lidarmotor.js', '/qrnav.js': 'qrnav.js',
-                    '/radar.js': 'radar.js', '/plc.js': 'plc.js',
+                    '/radar.js': 'radar.js', '/plc.js': 'plc.js', '/scenario.js': 'scenario.js',
                     // The LiDAR map's decoder and drawing, for /lidar and /dashboard.
                     '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js' };
 
@@ -634,7 +640,8 @@ async function main() {
   const replayer = new Replayer({ link, jog });
   const cargoApi = routesApi({ book, recorder, replayer,
                                want: () => cargoWant, run: (slot) => askCargo(slot),
-                               armed: () => rover.running });
+                               // A /plc scenario driving counts as busy too.
+                               armed: () => rover.running || scenarios.running });
 
   const server = http.createServer((req, res) => {
     const url = (req.url || '/').split('?')[0];
@@ -729,6 +736,13 @@ async function main() {
   const rover = new Rover({ link, jog, replayer });
   rover.setCfg(followCfg);
 
+  // Scenarios: the team's own G-code for each leg of a lap, started from /plc.
+  // Not to be confused with the taught routes (routes.js, /gcode's Ssenarilər):
+  // only one of the two may drive at a time.
+  const scenarios = new ScenarioRunner({ link, jog,
+    blocked: () => (rover.holdAll ? 'acil stop basılı'
+      : replayer.active ? `yaddaşdan yol sürülür: ${replayer.st.route || ''}` : null) });
+
   // The Pi's own pins: the reversing buzzer first of all. Driven from the
   // demand rather than from a page, so it sounds with no browser open.
   const gpio = new Gpio({ enabled: args.gpio });
@@ -742,10 +756,12 @@ async function main() {
     map: FIELD,
     pose: () => nav.status().field.pose,
     setMission: (stops) => nav.setMission(stops, 'START'),
-    hold: (reason, all) => rover.hold(reason, all),
+    // Bekle / the door pause a /plc scenario after the command in progress,
+    // the same way they pause a taught route; e-stop ends it (estop below).
+    hold: (reason, all) => { rover.hold(reason, all); scenarios.hold(all ? null : reason); },
     armed: () => rover.running,
     fault: () => (link.connected ? null : 'motor kartı bağlı değil'),
-    estop: () => rover.stop('acil stop'),
+    estop: () => { scenarios.stop('acil stop'); rover.stop('acil stop'); },
   });
 
   // Every path but /ws, which is the LiDAR relay — see lidar_relay.js.
@@ -778,6 +794,7 @@ async function main() {
         radar: radar.status(),
         plc: competition.status(),
         buzzer: buzzer.status(),
+        scenario: scenarios.status(),
       }));
     };
     const pusher = setInterval(send, 100);
@@ -788,11 +805,13 @@ async function main() {
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       switch (msg.cmd) {
         case 'start':
+          if (scenarios.stop('sürüş başladı')) console.log('scenario stopped: driving started');
           rover.start();
           console.log('START — following');
           break;
         case 'stop':
         case 'idle':
+          if (scenarios.stop('DUR')) console.log('scenario stopped');
           rover.stop(msg.cmd === 'idle' ? 'idle' : 'stopped');
           console.log('STOP');
           break;
@@ -800,7 +819,22 @@ async function main() {
         // One command per frame, carrying what the vision loop decided. The
         // server does not steer; it clamps, paces and stops.
         case 'follow':
+          if (scenarios.running) break;       // START above already ended it
           rover.setAuto(msg.p25, msg.p26, msg.reason);
+          break;
+
+        // ── scenarios ──
+        // The text is the saved one, not one sent with the command: what runs
+        // is what /plc shows as saved, and what the next person will see.
+        case 'scenario_run': {
+          const text = (followCfg.scenarios || {})[msg.id] || '';
+          const res = scenarios.start(msg.id, text);
+          console.log(res.ok ? `scenario ${msg.id}: started`
+                             : `scenario ${msg.id}: refused — ${res.why}`);
+          break;
+        }
+        case 'scenario_stop':
+          if (scenarios.stop('DUR düğmesi')) console.log('scenario stopped');
           break;
 
         case 'follow_cfg':
@@ -837,6 +871,7 @@ async function main() {
         // /follow by hand: W A S D and the fork, both repeated at 20 Hz while
         // held and let go by the rover's own 400 ms dead-man when they stop.
         case 'keys': {
+          if (scenarios.running && (msg.keys || []).length) scenarios.stop('elle sürüş (W A S D)');
           const had = rover.keys.join('');
           rover.setKeys(msg.keys, msg.pct, msg.swap === true);
           if (rover.keys.join('') !== had) {
@@ -906,6 +941,7 @@ async function main() {
           // A recording on /gcode listens to the wire; this replay would end
           // up taught back into it.
           if (recorder.active) { replayer.fail(msg.id, '/gcode-da yazılır — əvvəl bitir', route); break; }
+          if (scenarios.running) { replayer.fail(msg.id, `/plc senaryosu çalışıyor: ${scenarios.run.label}`, route); break; }
           try { segs = book.get(msg.slot, msg.leg); }
           catch (e) { replayer.fail(msg.id, e.message, route); break; }
           rover.replay(msg.id, segs, route);
@@ -954,6 +990,8 @@ async function main() {
       // The last page gone is a released dead-man for the lift too: nothing
       // is left that could show it running, or stop it.
       if (rover.clients === 0 && act.running) act.stop();
+      // Nothing keeps driving once nobody is watching — a scenario included.
+      if (rover.clients === 0) scenarios.stop('tarayıcı kapandı');
       if (rover.clients === 0 && runLog.active) {
         const done = runLog.stop();
         if (done) console.log(`saved on disconnect: ${path.basename(done.file)}`);
@@ -1049,6 +1087,7 @@ async function main() {
     closing = true;
     console.log('\nshutting down — letting the last move finish');
     competition.close();
+    scenarios.stop('sunucu kapanıyor');
     rover.close();
     clearInterval(buzzerTimer);
     buzzer.close();
