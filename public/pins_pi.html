@@ -353,11 +353,47 @@ function paintErrors(d) {
     : d.file ? `Kalıcı kayıt: ${d.file}` : 'Kalıcı kayıt kapalı (quru rejim).';
 }
 
+// Never left on "yükleniyor…": if the list cannot be had, the card says why
+// and what to do about it. The usual why is a server still running the code
+// from before `git pull` — pages are read from disk on every request, so this
+// card is new while the route behind it is not there yet.
+function errorsUnavailable(title, how) {
+  eLast = null;
+  $('eDot').className = 'dot bad';
+  $('eTxt').textContent = title;
+  $('errCard').classList.add('has');
+  $('eNow').innerHTML = '';
+  $('eFilters').innerHTML = '';
+  $('eRows').innerHTML = `<tr><td colspan="6"><b class="bad">${esc(title)}</b><br>${how}</td></tr>`;
+  $('eFile').textContent = '';
+}
+
 async function loadErrors() {
+  let r;
   try {
-    const r = await fetch('/api/pins/log');
-    if (r.ok) paintErrors(await r.json());
-  } catch { $('eTxt').textContent = 'sunucuya ulaşılamadı'; }
+    r = await fetch('/api/pins/log', { cache: 'no-store' });
+  } catch {
+    errorsUnavailable('sunucuya ulaşılamadı', 'Robotun sunucusu kapalı ya da ağ bağlantısı yok. Sunucuyu başlatın, sayfa kendiliğinden yenilenir.');
+    return;
+  }
+  if (r.status === 404) {
+    errorsUnavailable('sunucu eski kodla çalışıyor',
+      'Bu kart yeni, ama çalışan sunucuda <code>/api/pins/log</code> yok — <code>git pull</code> '
+      + "yapıldı fakat sunucu yeniden başlatılmadı. Pi'de sunucuyu durdurun (Ctrl+C) ve tekrar "
+      + 'başlatın: <code>node server.js</code>. Sayfa 2 saniyede bir kendini yeniler.');
+    return;
+  }
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    errorsUnavailable(`sunucu hata verdi (HTTP ${r.status})`,
+      `Sunucunun cevabı: <code>${esc(body.slice(0, 300) || r.statusText)}</code>. Pi'deki sunucu terminalinde hata satırı olmalı.`);
+    return;
+  }
+  try {
+    paintErrors(await r.json());
+  } catch (e) {
+    errorsUnavailable('cevap okunamadı', `<code>${esc(e.message)}</code>`);
+  }
 }
 $('eFilters').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-f]');

@@ -155,6 +155,19 @@ console.log('\nPi pin yolu — pinctrl önce, sysfs çipin tabanıyla');
      've bir kez günlüğe yazılıyor');
 }
 
+console.log('\n/pins sayfası — betik ayrıştırılıyor, eski sunucuda takılmıyor');
+{
+  // A syntax error in the page script is a card stuck on "yükleniyor…" forever,
+  // with nothing on the page to say so. Parsed here, with no browser.
+  const html = fs.readFileSync(path.join(ROOT, 'public', 'pins_pi.html'), 'utf8');
+  const script = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'));
+  let parsed = null;
+  try { new Function(script); parsed = true; } catch (e) { parsed = e.message; }
+  ok(parsed === true, `sayfa betiği geçerli JavaScript  (${parsed === true ? 'tamam' : parsed})`);
+  ok(/r\.status === 404/.test(script) && /sunucu eski kodla/.test(script),
+     '404 gelirse kart «sunucu yeniden başlatılmadı» diyor, yükleniyor…da kalmıyor');
+}
+
 console.log('\nSunucu — /api/pins/log');
 {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pinlog-srv-'));
