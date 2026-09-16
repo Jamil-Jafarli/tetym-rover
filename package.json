@@ -8,7 +8,7 @@
     "start": "node server.js",
     "serve": "node server.js --no-connect",
     "list": "node server.js --list",
-    "test": "node test/test_marlin.mjs && node test/test_globals.mjs && node test/test_pilot.mjs && node test/test_field.mjs && node test/test_plc.mjs && node test/test_buzzer.mjs && node test/test_scenario.mjs && node test/test_qrnav.mjs && node test/test_mission.mjs && node test/test_cargo.mjs && node test/test_lidar.mjs && node test/test_lidar_motor.mjs && node test/test_radar.mjs && node test/test_analyse.mjs && node test/test_sonar.mjs && node test/test_camera.mjs && node test/test_qrwarp.mjs && node test/test_vision.mjs && node test/test_serial.mjs && node test/test_pages.mjs",
+    "test": "node test/test_marlin.mjs && node test/test_globals.mjs && node test/test_pilot.mjs && node test/test_field.mjs && node test/test_plc.mjs && node test/test_buzzer.mjs && node test/test_pinlog.mjs && node test/test_scenario.mjs && node test/test_qrnav.mjs && node test/test_mission.mjs && node test/test_cargo.mjs && node test/test_lidar.mjs && node test/test_lidar_motor.mjs && node test/test_radar.mjs && node test/test_analyse.mjs && node test/test_sonar.mjs && node test/test_camera.mjs && node test/test_qrwarp.mjs && node test/test_vision.mjs && node test/test_serial.mjs && node test/test_pages.mjs",
     "test:marlin": "node test/test_marlin.mjs",
     "test:lidar": "node test/test_lidar.mjs",
     "test:lidar-motor": "node test/test_lidar_motor.mjs",

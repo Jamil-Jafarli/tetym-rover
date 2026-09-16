@@ -42,7 +42,7 @@ import { FollowLog, LOG_DIR } from './follow_log.js';
 import { Camera, CAMERA_DEFAULTS, PLACEHOLDER_JPEG } from './camera.js';
 import { MarlinLink, Jogger, listPorts, bestPort, explainSerialError,
          DEFAULT_BAUD } from './marlin.js';
-import { marlinApi, reply } from './marlin_http.js';
+import { marlinApi, reply, readBody } from './marlin_http.js';
 import { Rover } from './rover.js';
 import { QrReader, QrLooker } from './qr.js';
 import { Actuator, ACTUATOR_DEFAULTS, actuatorApi, actuatorCommand } from './actuator.js';
@@ -57,6 +57,7 @@ import { advertise } from './lidar_discovery.js';
 import { startCompetition } from './plc_run.js';
 import { Gpio } from './gpio.js';
 import { Buzzer } from './buzzer.js';
+import { PinLog } from './pinlog.js';
 import { ScenarioRunner } from './scenario_run.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -611,8 +612,13 @@ async function main() {
     qr.error = 'QR oxuma söndürülüb (--no-qr)';
   }
 
+  // Every pin failure — buzzer and noted pins, lift, lidar motor — kept for
+  // /pins, where the modules' own "last error" would have cleared it by the
+  // time anybody looked. See pinlog.js.
+  const pinLog = new PinLog({ file: args.gpio ? path.join(LOG_DIR, 'pins.log') : null });
+
   // ── the lift ──────────────────────────────────────────────────────
-  const act = new Actuator({ enabled: args.actuator,
+  const act = new Actuator({ enabled: args.actuator, log: pinLog,
                              maxRunMs: Math.max(0, args.actMaxS || 0) * 1000 });
   act.init();
   const actApi = actuatorApi(act);
@@ -621,7 +627,7 @@ async function main() {
   // Nothing is spawned until the first START; until then the Pi's own
   // pull-downs hold all three pins low. See lidar.js. (The LiDAR *map*, from
   // the phone, is lidarMap above.)
-  const lidar = new Lidar({ enabled: args.lidar, volts: args.lidarV,
+  const lidar = new Lidar({ enabled: args.lidar, volts: args.lidarV, log: pinLog,
                             supplyV: args.lidarSupply, dropV: args.lidarDrop });
   const lidarHttp = lidarApi(lidar);
 
@@ -663,7 +669,32 @@ async function main() {
     // What this machine serves, for the hub to build its tiles from — a page
     // that is not served is not offered — and the Pi's pin notes.
     if (url === '/api/pages') { reply(res, 200, { machine: 'marlin', pages: Object.keys(PAGES) }); return; }
-    if (url === '/api/pins') { reply(res, 200, { pins: followCfg.pins || [], buzzer: buzzer.status() }); return; }
+    if (url === '/api/pins') {
+      reply(res, 200, { pins: followCfg.pins || [], buzzer: buzzer.status(),
+                        errors: { total: pinLog.total, counts: pinLog.status(0).counts } });
+      return;
+    }
+    // The pin error log: GET the list, POST {action:"clear"} to start again.
+    // Alongside it, what each module says is wrong RIGHT NOW, which can be
+    // nothing while the list shows it failing a minute ago.
+    if (url === '/api/pins/log') {
+      if (req.method === 'POST') {
+        readBody(req).then((d) => {
+          if (d.action !== 'clear') { reply(res, 400, { error: 'action must be clear' }); return; }
+          pinLog.clear();
+          console.log('pin log cleared');
+          reply(res, 200, pinLog.status());
+        }).catch((e) => reply(res, 400, { error: String(e.message || e) }));
+        return;
+      }
+      const act0 = act.status(), lid0 = lidar.status(), g0 = gpio.status();
+      reply(res, 200, { ...pinLog.status(), now: {
+        pins: { err: g0.error, backend: g0.backend, dry: !args.gpio, writes: g0.writes, failed: g0.failed },
+        lift: { err: act0.err, dry: act0.dry, pins: act0.pins, writes: act0.writes },
+        lidar: { err: lid0.err, dry: lid0.dry, pins: lid0.pins, writes: lid0.writes },
+      } });
+      return;
+    }
     if (url === '/api/plc') { reply(res, 200, competition.status()); return; }
 
     // The whole trail, once. The status frame carries only where the rover is
@@ -745,7 +776,7 @@ async function main() {
 
   // The Pi's own pins: the reversing buzzer first of all. Driven from the
   // demand rather than from a page, so it sounds with no browser open.
-  const gpio = new Gpio({ enabled: args.gpio });
+  const gpio = new Gpio({ enabled: args.gpio, log: pinLog });
   const buzzer = new Buzzer({ gpio, cfg: followCfg });
   const buzzerTimer = setInterval(() => buzzer.setReversing(rover.reversing), 100);
   buzzerTimer.unref?.();
@@ -936,13 +967,16 @@ async function main() {
         // /follow's cargo run reached a taught leg: drive it from memory.
         // Answered through `replay` in the status, under the page's own id.
         case 'replay': {
-          const route = `yuva ${msg.slot}, ${ROUTE_LEGS[msg.leg] || msg.leg}`;
+          const route = `yuva ${msg.slot}, ${ROUTE_LEGS[msg.leg] || msg.leg}`
+            + (msg.part != null ? `, hissə ${Number(msg.part) + 1}` : '');
           let segs = null;
           // A recording on /gcode listens to the wire; this replay would end
           // up taught back into it.
           if (recorder.active) { replayer.fail(msg.id, '/gcode-da yazılır — əvvəl bitir', route); break; }
           if (scenarios.running) { replayer.fail(msg.id, `/plc senaryosu çalışıyor: ${scenarios.run.label}`, route); break; }
-          try { segs = book.get(msg.slot, msg.leg); }
+          // A scenario with F steps is asked for a part at a time: the moves
+          // between two F steps. Without a part, the whole leg, as before.
+          try { segs = msg.part != null ? book.part(msg.slot, msg.part) : book.get(msg.slot, msg.leg); }
           catch (e) { replayer.fail(msg.id, e.message, route); break; }
           rover.replay(msg.id, segs, route);
           console.log(`replay: ${route}`);

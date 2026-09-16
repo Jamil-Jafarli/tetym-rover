@@ -19,6 +19,13 @@
  * of that: a single wrong turn near the end meant driving the whole way again
  * from the start area, and there was no way to try the first half alone.
  *
+ * A step can also be F: "follow the line until this QR code is read" — the
+ * same F /follow starts following with, put where it belongs in the way there.
+ * The server cannot drive one (it has no camera), so a scenario with F steps is
+ * cut into PARTS at them — parts(n): taught moves, F, taught moves, … — and
+ * /follow's cargo run asks the server for each run of moves by its part number
+ * and follows the line itself in between (missionCargo(), 'lineqr').
+ *
  * To the rest of the system a scenario is still one leg. get(n, 'to') joins
  * the steps, and the Replayer aggregates what it is given (aggregate(), below),
  * so "W 400" in step 1 and "W 300" in step 2 are driven as one continuous
@@ -84,6 +91,11 @@ export const ROUTE_LEGS = { to: 'başlanğıc → yuva', out: 'yuva → qapı' }
 export const SLOT_NAMES = { 1: 'A1', 2: 'A2', 3: 'A3' };
 /** The longest typed step: past a few metres a blind move is not worth trusting. */
 export const TYPED_MAX_MM = 5000;
+/** The longest QR text an F step waits for; the şartname's are six letters. */
+export const FOLLOW_QR_MAX = 64;
+
+/** A step that is "follow the line to this QR", not moves. */
+export const isFollowStep = (s) => !!(s && s.how === 'follow' && s.qr);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -344,7 +356,9 @@ export class RouteBook {
   steps(slot) {
     const to = (this.data[String(checkSlot(slot))] || {}).to;
     if (!to) return [];
-    if (Array.isArray(to.steps)) return to.steps.filter((s) => s && Array.isArray(s.segs) && s.segs.length);
+    if (Array.isArray(to.steps)) {
+      return to.steps.filter((s) => isFollowStep(s) || (s && Array.isArray(s.segs) && s.segs.length));
+    }
     return Array.isArray(to.segs) && to.segs.length ? [{ at: to.at, how: 'drive', segs: to.segs }] : [];
   }
 
@@ -364,10 +378,40 @@ export class RouteBook {
     return n;
   }
 
+  /**
+   * The scenario cut at its F steps: [{kind:'path', segs, steps:[i…]} |
+   * {kind:'follow', qr, key, step:i}], in order. Consecutive taught steps are
+   * one path part, so the rover does not stop between them — exactly as get()
+   * joins a scenario with no F in it.
+   */
+  parts(slot) {
+    const out = [];
+    this.steps(slot).forEach((s, i) => {
+      if (isFollowStep(s)) { out.push({ kind: 'follow', qr: s.qr, key: qrKey(s.qr), step: i }); return; }
+      const last = out[out.length - 1];
+      if (last && last.kind === 'path') { last.segs.push(...s.segs); last.steps.push(i); }
+      else out.push({ kind: 'path', segs: [...s.segs], steps: [i] });
+    });
+    return out;
+  }
+
+  /** One path part's moves, for /follow's cargo run to have driven. */
+  part(slot, i) {
+    const parts = this.parts(slot);
+    const n = Number(i);
+    const p = Number.isInteger(n) ? parts[n] : null;
+    if (!p) throw new Error(`${SLOT_NAMES[checkSlot(slot)]}: hissə ${n + 1} yoxdur (${parts.length} hissə var)`);
+    if (p.kind !== 'path') throw new Error(`${SLOT_NAMES[checkSlot(slot)]}: hissə ${n + 1} F addımıdır — onu kamera sürür`);
+    return p.segs;
+  }
+
+  /** Whether the scenario has any F step — then only /follow can drive it whole. */
+  hasFollow(slot) { return this.steps(slot).some(isFollowStep); }
+
   /** Leg "to" is every step, joined; leg "out" is its one recording. */
   get(slot, leg) {
     if (checkLeg(leg) === 'to') {
-      const all = this.steps(slot).flatMap((s) => s.segs);
+      const all = this.steps(slot).flatMap((s) => (isFollowStep(s) ? [] : s.segs));
       return all.length ? all : null;
     }
     const l = (this.data[String(checkSlot(slot))] || {}).out;
@@ -375,7 +419,28 @@ export class RouteBook {
   }
 
   /** One step's moves, to drive it on its own. */
-  stepSegs(slot, i) { return this.steps(slot)[this._checkStep(slot, i)].segs; }
+  stepSegs(slot, i) {
+    const s = this.steps(slot)[this._checkStep(slot, i)];
+    if (isFollowStep(s)) {
+      throw new Error(`addım ${Number(i) + 1} F addımıdır (xətti ${s.qr}-a qədər izlə) — kamera lazımdır, /follow-da sına`);
+    }
+    return s.segs;
+  }
+
+  /**
+   * Add an F step: follow the line until `qr` is read. At `i` (replacing that
+   * step) or, with `i` null, as the new last step.
+   */
+  setFollowStep(slot, i, qr) {
+    const text = String(qr ?? '').trim().slice(0, FOLLOW_QR_MAX);
+    if (!text) throw new Error('F addımı üçün QR mətni yaz — məs. KAPI1');
+    if (!qrKey(text)) throw new Error(`«${text}» QR mətni kimi oxunmur`);
+    const steps = this.steps(slot);
+    const step = { at: new Date().toISOString(), how: 'follow', qr: text };
+    if (i == null || Number(i) >= steps.length) steps.push(step);
+    else steps[this._checkStep(slot, i)] = step;
+    this._setSteps(slot, steps);
+  }
 
   /** Leg "to" set whole is a scenario of one step. */
   set(slot, leg, segs) {
@@ -453,8 +518,26 @@ export class RouteBook {
         out[n][leg] = segs ? { ...legSummary(segs), at: s[leg].at,
                                plan: legSummary(aggregate(segs)).list } : null;
       }
+      const steps = this.steps(n);
+      // A scenario of nothing but F steps has no moves, and is still taught.
+      if (!out[n].to && steps.length) {
+        out[n].to = { ...legSummary([]), at: s.to && s.to.at, plan: [] };
+      }
       if (out[n].to) {
-        out[n].to.steps = this.steps(n).map((st) => ({ ...legSummary(st.segs), how: st.how || 'drive', at: st.at }));
+        out[n].to.steps = steps.map((st) => (isFollowStep(st)
+          ? { moves: 0, chunks: 0, mm: 0, list: [`F → ${st.qr}`], how: 'follow', qr: st.qr, at: st.at }
+          : { ...legSummary(st.segs), how: st.how || 'drive', at: st.at }));
+        // What /follow drives, part by part: runs of moves the server replays,
+        // with the F steps between them that the camera follows.
+        const parts = this.parts(n);
+        out[n].to.parts = parts.map((p) => (p.kind === 'follow'
+          ? { kind: 'follow', qr: p.qr, key: p.key }
+          : { kind: 'path', plan: legSummary(aggregate(p.segs)).list }));
+        out[n].to.follow = parts.some((p) => p.kind === 'follow');
+        if (out[n].to.follow) {
+          out[n].to.plan = parts.flatMap((p) => (p.kind === 'follow'
+            ? [`F→${p.qr}`] : legSummary(aggregate(p.segs)).list));
+        }
       }
     }
     return out;
@@ -615,6 +698,8 @@ export class Replayer {
  *   POST {action:"cancel"}                     stop recording and throw it away
  *   POST {action:"clear", slot, leg}           forget a taught leg (or a whole scenario)
  *   POST {action:"step_add", slot, key, mm, feed?}   a typed scenario step
+ *   POST {action:"step_add", slot, key:"F", qr, step?}  an F step: follow the line
+ *                                              until that QR is read (step: replace it)
  *   POST {action:"step_del", slot, step}       forget one scenario step
  *   POST {action:"step_move", slot, step, by}  reorder: by -1 up, +1 down
  *   POST {action:"test", slot, step?}          drive one step, or the whole scenario,
@@ -651,7 +736,8 @@ export function routesApi({ book, recorder, replayer, want, run, armed = () => f
           break;
         }
         case 'step_add':
-          book.setStep(d.slot, null, typedStep(d.key, d.mm, d.feed), 'typed');
+          if (String(d.key || '').trim().toUpperCase() === 'F') book.setFollowStep(d.slot, d.step ?? null, d.qr);
+          else book.setStep(d.slot, null, typedStep(d.key, d.mm, d.feed), 'typed');
           break;
         case 'step_del':
           book.removeStep(d.slot, d.step);
@@ -664,6 +750,12 @@ export function routesApi({ book, recorder, replayer, want, run, armed = () => f
           if (armed()) throw new Error('/follow roveri sürür — orada DAYAN, sonra sına');
           const n = checkSlot(d.slot);
           const one = d.step != null;
+          // The server has no camera: a whole scenario with an F in it can
+          // only be driven by /follow, which follows the line at the F.
+          if (!one && book.hasFollow(n)) {
+            throw new Error(`${SLOT_NAMES[n]} ssenarisində F addımı var — xətt izləmə kamera istəyir. `
+              + `Tək addımları ▶ ilə sına, bütövünü /follow-da «${SLOT_NAMES[n]} YÜKÜNƏ GET» ilə`);
+          }
           const segs = one ? book.stepSegs(n, d.step) : book.get(n, 'to');
           if (!segs) throw new Error(`${SLOT_NAMES[n]} ssenarisi öyrədilməyib`);
           const route = `${SLOT_NAMES[n]} ssenarisi` + (one ? `, addım ${Number(d.step) + 1}` : '');

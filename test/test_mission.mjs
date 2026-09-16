@@ -624,6 +624,50 @@ console.log('\nYaddaşdan yol — yarımçıq qalsa və ya heç başlamasa');
   ok(bad.phase === 'idle', `yuva 4 — ${bad.why}`);
 }
 
+console.log('\nF addımlı ssenari — hissə-hissə: yaddaş, xətt QR-a qədər, yaddaş');
+{
+  const parts = [{ kind: 'path' }, { kind: 'follow', qr: 'KAPI1', key: qrKey('KAPI1') }, { kind: 'path' }];
+  const st = missionCargo(missionState(), 2, { qrKey: 'ALIM2', have: { to: true }, parts, runId: 9 });
+  eq(st.q.slice(0, 4).map((m) => m.kind), ['path', 'lineqr', 'path', 'seek'],
+     'növbə: hissə 1 yaddaşdan, F xətt izləmə, hissə 3 yaddaşdan, sonra xətti axtarır');
+
+  let res = missionStep(st, { dt: CARGO_DT });
+  ok(res.replay && res.replay.part === 0 && res.replay.leg === 'to', 'hissə 1 serverdən part: 0 ilə istənir');
+  res = missionStep(st, { dt: CARGO_DT, replay: { id: res.replay.id, done: true } });
+  ok(res.move === 'lineqr' && res.phase === 'run' && !res.drive,
+     'hissə bitdi → F: pilot sürür (təkərlərə mission toxunmur)');
+
+  // KAPI1 was last seen before the F began: somewhere else. Not the end.
+  res = missionStep(st, { dt: CARGO_DT, dLeftMm: 20, dRightMm: 20,
+                          qr: { key: qrKey('KAPI1'), text: 'KAPI1', seen_age_s: 5 } });
+  ok(res.move === 'lineqr', 'F başlamazdan əvvəl görünmüş KAPI1 sayılmır');
+  // Another code on the way is not a stop either.
+  res = missionStep(st, { dt: CARGO_DT, dLeftMm: 20, dRightMm: 20,
+                          qr: { key: qrKey('BASLA'), text: 'BASLA', seen_age_s: 0 } });
+  ok(res.move === 'lineqr' && res.phase === 'run', 'yolda başqa QR (BASLA) dayandırmır');
+  res = missionStep(st, { dt: CARGO_DT, dLeftMm: 20, dRightMm: 20,
+                          qr: { key: qrKey('KAPI1'), text: 'KAPI1', seen_age_s: 0 } });
+  ok(res.move === 'path', `KAPI1 oxundu → növbəti hissə (${res.why})`);
+  res = missionStep(st, { dt: CARGO_DT });
+  ok(res.replay && res.replay.part === 2, 'hissə 3 serverdən part: 2 ilə istənir');
+
+  // Following with the code never read: stops rather than following off the field.
+  const lost = missionCargo(missionState(), 2, { qrKey: 'ALIM2', have: { to: true }, parts, runId: 10 });
+  let r2 = missionStep(lost, { dt: CARGO_DT });
+  r2 = missionStep(lost, { dt: CARGO_DT, replay: { id: r2.replay.id, done: true } });
+  for (let i = 0; i < 5000 && r2.phase !== 'lost'; i++) {
+    r2 = missionStep(lost, { dt: CARGO_DT, dLeftMm: 40, dRightMm: 40 });
+  }
+  ok(r2.phase === 'lost' && /KAPI1 oxunmadı/.test(r2.why), `QR heç oxunmasa dayanır — ${r2.why}`);
+
+  // No F in it: one taught leg, asked for as before.
+  const plain = missionCargo(missionState(), 2, { qrKey: 'ALIM2', have: { to: true },
+                                                    parts: [{ kind: 'path' }], runId: 11 });
+  const p1 = missionStep(plain, { dt: CARGO_DT });
+  ok(plain.q[0].kind === 'path' && plain.q[1].kind === 'seek' && p1.replay.part === undefined,
+     'F-siz ssenari əvvəlki kimi bir yoldur (part yoxdur)');
+}
+
 console.log('\nXəttin sonu heç gəlmirsə dayanır');
 {
   const r = cargoRun({ stub: 20 });

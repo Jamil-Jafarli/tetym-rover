@@ -99,6 +99,7 @@
  * after that is seen, and is the same queue of moves with six more kinds:
  *
  *   path    a taught leg, driven by the server; this only waits for it
+ *   lineqr  an F step of the scenario: follow the line until a QR is read
  *   qr      the slot's QR, read while moving — creep along the line until it
  *           has been; the wrong code is a stop
  *   align   put the axle on the row the QR codes stand on
@@ -475,7 +476,7 @@ function missionPhaseOf(st) {
   const mv = missionMove(st);
   if (!mv) return 'done';
   if (mv.kind === 'seek') return 'seek';
-  if (mv.kind === 'follow' || mv.kind === 'trace') return 'run';
+  if (mv.kind === 'follow' || mv.kind === 'trace' || mv.kind === 'lineqr') return 'run';
   if (mv.kind === 'wait') return 'gate';
   if (mv.kind === 'path') return 'path';
   if (mv.kind === 'qr') return 'qr';
@@ -589,6 +590,9 @@ function missionStep(st, obs, cfg) {
       break;
     case 'trace':
       missionTraceStep(st, mv, o, c);
+      break;
+    case 'lineqr':
+      missionLineQrStep(st, mv, o, c);
       break;
     case 'lift':
       missionLiftStep(st, mv, o);
@@ -973,6 +977,9 @@ function missionResume(st) {
  *                   null for none. routes.js picks it (RouteBook.via()).
  *                   Absent: the slot's own, if it has one.
  * @param opt.runId  names this run's replays; anything unique per run
+ * @param opt.parts  the scenario cut at its F steps (routes.js's parts()):
+ *                   [{kind:'path'} | {kind:'follow', qr, key}]. Absent, or with
+ *                   no F in it: the scenario is one taught leg, as before.
  */
 function missionCargo(st, slot, opt = {}, cfg, map) {
   const c = { ...MISSION_DEFAULTS, ...(cfg || {}) };
@@ -1031,8 +1038,18 @@ function missionCargo(st, slot, opt = {}, cfg, map) {
   st.via = via;
   st.runId = opt.runId || 1;
   st.qrWant = keys[n];
+  // The way to the line: the scenario, one taught leg — or, when it has F
+  // steps, its parts in order: taught moves driven by the server (by part
+  // number), and between them the line followed here until the F's QR is read.
+  const parts = Array.isArray(opt.parts) && opt.parts.some((p) => p && p.kind === 'follow')
+    ? opt.parts : null;
+  const toLeg = parts
+    ? parts.map((p, i) => (p.kind === 'follow'
+      ? { kind: 'lineqr', want: p.key, text: p.qr }
+      : { kind: 'path', leg: 'to', slot: via, part: i }))
+    : [{ kind: 'path', leg: 'to', slot: via }];
   st.q = [
-    { kind: 'path', leg: 'to', slot: via },
+    ...toLeg,
     { kind: 'seek' },
     ...row,
     { kind: 'qr', want: st.qrWant, slot: n },
@@ -1215,6 +1232,8 @@ function missionPathStep(st, mv, o) {
   // Whose leg: a run that reaches its slot along the QR row drives the
   // NEIGHBOUR's scenario (missionCargo()), so the slot is on the move itself.
   const slot = mv.slot || st.cargo;
+  // A scenario with F steps is driven a part at a time; the part rides along.
+  const part = mv.part != null ? mv.part : undefined;
   st.drive = { p25: 0, p26: 0 };
   const r = o.replay;
   if (r && r.id === id) {
@@ -1231,14 +1250,14 @@ function missionPathStep(st, mv, o) {
       missionNextMove(st);
       return;
     }
-    st.replay = { id, slot, leg: mv.leg };
+    st.replay = { id, slot, leg: mv.leg, part };
     // Paused by a PLC bekle: the server holds the route where it is and carries
     // on from there on devam, so this page just keeps waiting for ITS done.
     st.why = r.paused ? `fasilə — ${r.held || 'PLC bekle'} · ${r.seg}/${r.of}`
                       : `yaddaşdan gedir — ${r.seg}/${r.of}`;
     return;
   }
-  st.replay = { id, slot, leg: mv.leg };
+  st.replay = { id, slot, leg: mv.leg, part };
   st.why = mv.leg === 'out' ? 'qapıya yol başlayır'
          : slot !== st.cargo ? `A${slot} ssenarisi başlayır — oradan QR sırası ilə A${st.cargo}-ə`
          : `yuva ${st.cargo}-ə yol başlayır`;
@@ -1330,6 +1349,38 @@ function missionTraceStep(st, mv, o, c) {
     return;
   }
   st.why = `xətti izləyir — ${m.done.toFixed(2)} m`;
+}
+
+/**
+ * An F step of the scenario: follow the line until its QR is read.
+ *
+ * The pilot steers — nothing here touches the wheels — and this decides when
+ * it is over: a read of the wanted code that happened after the step began.
+ * "After" matters: the same code seen on the way to the line, or before an
+ * earlier F, is somewhere else, and ending on it would stop the rover before
+ * it has followed anything. Other codes on the way mean nothing — a line can
+ * pass several — so they are not a stop.
+ *
+ * The limit is `traceMaxM` of ground: past that the code was missed, and a
+ * rover following a line with nothing to end it would follow it off the field.
+ */
+function missionLineQrStep(st, mv, o, c) {
+  if (!st.man) st.man = { done: 0, from: st.runT };
+  const m = st.man;
+  m.done += Math.abs(st.pose.ds);
+  const q = o.qr;
+  const readAt = q && q.key === mv.want && q.seen_age_s != null ? st.runT - q.seen_age_s : null;
+  if (readAt != null && q.seen_age_s <= c.qrFreshS && readAt >= m.from) {
+    st.why = `F: ${mv.text} oxundu — xətt izləmə bitdi (${m.done.toFixed(2)} m)`;
+    missionNextMove(st);
+    return;
+  }
+  if (m.done >= c.traceMaxM) {
+    st.phase = 'lost';
+    st.why = `F: ${mv.text} oxunmadı — xətlə ${m.done.toFixed(2)} m getdi`;
+    return;
+  }
+  st.why = `F: xətti ${mv.text}-a qədər izləyir — ${m.done.toFixed(2)} m`;
 }
 
 /** Run the lift for a measured time, standing still. */

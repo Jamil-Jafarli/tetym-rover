@@ -335,6 +335,56 @@ console.log('\nSsenarilər — başlanğıcdan yuvaya yol, addım-addım');
   ok(threw && !rec.active, 'qapı yolunun addımları yoxdur');
 }
 
+console.log('\nF addımı — ssenaridə «xətti bu QR-a qədər izlə»');
+{
+  const file = path.join(os.tmpdir(), `routes-f-${process.pid}.json`);
+  try { fs.unlinkSync(file); } catch { /* none */ }
+  const s1 = [{ x: 80, y: -80, f: 6000, n: 3 }];
+  const s2 = [{ x: 40, y: 40, f: 3000, n: 2 }];
+  const s3 = [{ x: -80, y: 80, f: 6000, n: 1 }];
+  const book = new RouteBook(file);
+  book.setStep(2, null, s1, 'drive');
+  book.setFollowStep(2, null, 'KAPI1');
+  book.setStep(2, null, s2, 'typed');
+  book.setStep(2, null, s3, 'typed');
+
+  const parts = book.parts(2);
+  eq(parts.map((p) => p.kind), ['path', 'follow', 'path'],
+     'ssenari F-də hissələrə bölünür: hərəkətlər, F, hərəkətlər');
+  eq(parts[2].steps, [2, 3], 'F-dən sonrakı iki addım bir hissədir — aralarında dayanmır');
+  eq(book.part(2, 0), s1, 'hissə 1: F-dən əvvəlki hərəkətlər');
+  eq(book.part(2, 2), [...s2, ...s3], 'hissə 3: F-dən sonrakılar, birlikdə');
+  ok(parts[1].qr === 'KAPI1' && parts[1].key === qrKey('KAPI1'), 'F hissəsi QR mətnini və açarını daşıyır');
+  let threw = '';
+  try { book.part(2, 1); } catch (e) { threw = e.message; }
+  ok(/F addımıdır/.test(threw), `F hissəsini server sürmür — ${threw}`);
+  threw = '';
+  try { book.stepSegs(2, 1); } catch (e) { threw = e.message; }
+  ok(/kamera lazımdır/.test(threw), 'F addımını ▶ ilə tək sürmək olmur, səbəbi yazılır');
+  eq(book.get(2, 'to'), [...s1, ...s2, ...s3], 'get() F-siz hərəkətləri verir — köhnə istifadəçilər üçün');
+  ok(book.hasFollow(2) && !book.hasFollow(1), 'ssenaridə F olub-olmadığı bilinir');
+
+  const sum = new RouteBook(file).summary()[2];
+  ok(sum.to.follow === true && sum.to.steps[1].how === 'follow' && sum.to.steps[1].list[0] === 'F → KAPI1',
+     'diskdən oxunur, xülasədə F addımı görünür');
+  eq(sum.to.parts.map((p) => p.kind), ['path', 'follow', 'path'], 'xülasə /follow üçün hissələri verir');
+  ok(sum.to.plan.includes('F→KAPI1'), `sürüləcək plan F-i göstərir (${sum.to.plan.join(' → ')})`);
+
+  book.moveStep(2, 1, -1);
+  eq(book.parts(2).map((p) => p.kind), ['follow', 'path'], 'F addımı yuxarı: indi başda, hərəkətlər birləşir');
+  book.setFollowStep(2, 0, 'ALIM2');
+  ok(book.parts(2)[0].qr === 'ALIM2', 'F addımı başqa QR ilə əvəzlənir');
+  threw = '';
+  try { book.setFollowStep(2, null, '   '); } catch (e) { threw = e.message; }
+  ok(/QR mətni yaz/.test(threw), 'QR mətni olmayan F addımı olmur');
+
+  const only = new RouteBook(null);
+  only.setFollowStep(1, null, 'KAPI1');
+  ok(only.summary()[1].to && only.summary()[1].to.steps.length === 1 && only.via(1) === 1,
+     'yalnız F addımından ibarət ssenari də öyrədilmiş sayılır');
+  fs.unlinkSync(file);
+}
+
 console.log('\nAqreqator — eyni istiqamətdə ardıcıl hərəkətlər bir hərəkətdir');
 {
   eq(aggregate([{ x: 80, y: -80, f: 6000, n: 3 }]), [{ x: 80, y: -80, f: 6000, n: 3 }],
@@ -593,6 +643,21 @@ console.log('\nSunucu — /api/qr, /api/actuator, /api/cargo');
     ok(c.routes[3].to.steps[0].list.join() === 'D 120', 'addım yuxarı');
     c = (await post('/api/cargo', { action: 'clear', slot: 3, leg: 'to' })).body;
     ok(c.routes[3].to === null, 'bütün ssenari silinir');
+
+    // An F step, over HTTP.
+    await post('/api/cargo', { action: 'step_add', slot: 1, key: 'W', mm: 300 });
+    c = (await post('/api/cargo', { action: 'step_add', slot: 1, key: 'F', qr: 'KAPI1' })).body;
+    ok(c.routes[1].to.steps[1].how === 'follow' && c.routes[1].to.follow,
+       'step_add key F → F addımı (xətti KAPI1-a qədər izlə)');
+    const noQr = await post('/api/cargo', { action: 'step_add', slot: 1, key: 'F', qr: '' });
+    ok(noQr.code === 400 && /QR mətni/.test(noQr.body.error), 'QR mətnsiz F → 400');
+    const whole = await post('/api/cargo', { action: 'test', slot: 1 });
+    ok(whole.code === 400 && /F addımı var/.test(whole.body.error),
+       `F-li ssenarini /gcode bütöv sürmür — kamera yoxdur (${whole.body.error})`);
+    const fOne = await post('/api/cargo', { action: 'test', slot: 1, step: 1 });
+    ok(fOne.code === 400 && /kamera lazımdır/.test(fOne.body.error), 'F addımını tək də sürmür');
+    c = (await post('/api/cargo', { action: 'clear', slot: 1, leg: 'to' })).body;
+    ok(c.routes[1].to === null, 'F-li ssenari də silinir');
 
     const WS = (await import('ws')).default;
     const status = await new Promise((resolve) => {

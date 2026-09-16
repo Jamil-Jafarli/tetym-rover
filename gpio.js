@@ -61,9 +61,11 @@ export class Gpio {
    * @param {boolean} [opts.enabled]  false is dry: what was asked for is kept
    *   and shown, no pin is touched — for a laptop, and for the test suites,
    *   which run on the Pi itself (the same idea as --no-actuator)
+   * @param {{add: Function}} [opts.log]  where failures are kept (pinlog.js)
    */
-  constructor({ enabled = true } = {}) {
+  constructor({ enabled = true, log = null } = {}) {
     this.enabled = enabled;
+    this.log = log || { add() {} };
     this.backend = null;         // 'sysfs' | 'pinctrl' | 'none'
     this.error = null;
     this.state = new Map();      // pin -> 0/1, what we last asked for
@@ -100,6 +102,7 @@ export class Gpio {
       this.error = 'ne /sys/class/gpio yazılabiliyor ne de pinctrl var '
                  + '(Raspberry Pi OS Bookworm: sudo apt install raspi-gpio, '
                  + 'ya da sunucuyu gpio grubundaki bir kullanıcıyla çalıştırın)';
+      this.log.add({ source: 'pins', action: 'pin erişimi', message: `${this.error} — pinctrl: ${err}` });
       this.backend = 'none';
       return this.backend;
     })();
@@ -130,12 +133,19 @@ export class Gpio {
       } catch (err) {
         this.failed++;
         this.error = `GPIO${n}: ${err.message || err}`;
+        this.log.add({ source: 'pins', pin: n, action: `sysfs ${v ? 'HIGH' : 'LOW'}`,
+                       message: String(err.message || err) });
         return false;
       }
     }
 
     const err = await run('pinctrl', ['set', String(n), 'op', v ? 'dh' : 'dl']);
-    if (err) { this.failed++; this.error = `GPIO${n}: ${err}`; return false; }
+    if (err) {
+      this.failed++;
+      this.error = `GPIO${n}: ${err}`;
+      this.log.add({ source: 'pins', pin: n, action: `pinctrl ${v ? 'dh' : 'dl'}`, message: err });
+      return false;
+    }
     this.writes++;
     return true;
   }

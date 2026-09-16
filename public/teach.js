@@ -18,6 +18,16 @@
  * driving the rest again — or typed in («W 400 mm») instead of driven. The
  * steps joined are the leg /follow's cargo run drives from memory.
  *
+ * A step can also be F — «follow the line until this QR is read», the F that
+ * starts following on /follow — put wherever the way there has a line on it:
+ *
+ *   A2   1  W 480
+ *        2  F → KAPI1      the line, until KAPI1 is under the camera
+ *        3  D 120
+ *
+ * The server has no camera, so an F step is not driven from this page: /follow
+ * follows the line there, between the taught parts (routes.js's parts()).
+ *
  * Leg 2 — the start of the line → the door — is still one recording. The part
  * in between is not taught, it is SEEN: /follow finds the line, reads the
  * slot's QR, follows the paint to the load, turns round, lifts, and follows it
@@ -54,6 +64,12 @@ function teachMount(el) {
           <button class="sm" data-t="addStep">+ Yazılı addım</button>
         </span>
       </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
+        <kbd style="font:600 12px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-bottom-width:2px;border-radius:6px;padding:2px 7px">F</kbd>
+        <span class="muted">xətti izlə, bu QR oxunana qədər:</span>
+        <input type="text" data-t="fqr" placeholder="məs. KAPI1" autocomplete="off" spellcheck="false" style="width:130px">
+        <button class="sm" data-t="addFollow">+ F addımı</button>
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
         <button data-t="test">▶ Ssenarini sına</button>
         <button data-t="stop">■ Dayandır</button>
@@ -79,6 +95,9 @@ function teachMount(el) {
       görmək üçün bura gəl». Roveri başlanğıc sahəsinə qoy, <b>+ Addım öyrət</b>-ə
       bas, W A S D ilə bir parça sür (məs. düz irəli) və <b>Bitir və saxla</b>.
       Sonra növbəti addım — dönmə, yenə irəli — kamera yuvanın xəttini görənə qədər.
+      <b>F addımı</b> — /follow-dakı F kimi: rover xətti izləyir və yazdığın QR
+      oxunanda dayanıb növbəti addıma keçir. Onu kamera sürür, ona görə yalnız
+      /follow-da işləyir; ssenarinin qalan addımları yenə yaddaşdan gedir.
       <b>▶</b> bir addımı tək sürür (rover o addımın başladığı yerdə olmalıdır),
       <b>↻</b> onu yenidən öyrədir. Addımı yazmaq da olar: <b>W 400 mm</b>; A/D üçün
       mm hər təkərin yoludur, dərəcə deyil. <b>▶ Ssenarini sına</b> yalnız sürür —
@@ -91,6 +110,8 @@ function teachMount(el) {
       QR sırası ilə keçir. 90° dönmələr QR sırasında olur, yükdən 1.5 m aralı:
       1.20 m-lik rover orada fırlananda yükə dəymir.</p>`;
   const q = (k) => el.querySelector(`[data-t="${k}"]`);
+  // A QR text is typed by a person and drawn into the step list: escaped.
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const NAME = { 1: 'A1', 2: 'A2', 3: 'A3' };
   const LEGS = { to: '1 · Başlanğıc → yuva', out: '2 · Yuva → qapı' };
   let slot = 1, st = null, msg = '', drawn = { steps: null, out: null };
@@ -140,17 +161,23 @@ function teachMount(el) {
     if (drawn.steps === sig) return;
     drawn.steps = sig;
     const off = busy ? 'disabled' : '';
-    q('steps').innerHTML = steps.map((s, i) => `
-      <li style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;border:1px solid var(--line);border-radius:10px;padding:7px 9px">
+    q('steps').innerHTML = steps.map((s, i) => {
+      const f = s.how === 'follow';
+      return `
+      <li style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;border:1px solid ${f ? 'var(--idle, #0969da)' : 'var(--line)'};border-radius:10px;padding:7px 9px">
         <b style="min-width:22px">${i + 1}.</b>
-        <span class="mono" style="flex:1;min-width:130px;font-size:12.5px">${s.list.join(', ')}</span>
-        <span class="muted" style="font-size:11px">${s.how === 'typed' ? 'yazılıb' : 'sürülüb'}</span>
-        <button class="sm" data-do="test" data-i="${i}" title="yalnız bu addımı sür" ${off}>▶</button>
+        <span class="mono" style="flex:1;min-width:130px;font-size:12.5px">${f
+          ? `F — xətti izlə → <b>${esc(s.qr)}</b>` : s.list.join(', ')}</span>
+        <span class="muted" style="font-size:11px">${f ? 'xətt izləmə' : s.how === 'typed' ? 'yazılıb' : 'sürülüb'}</span>
+        <button class="sm" data-do="test" data-i="${i}" ${f
+          ? 'title="F addımını kamera sürür — /follow-da «YÜKÜNƏ GET» ilə sına" disabled'
+          : `title="yalnız bu addımı sür" ${off}`}>▶</button>
         <button class="sm" data-do="rec" data-i="${i}" title="bu addımı yenidən öyrət" ${off}>↻</button>
         <button class="sm" data-do="up" data-i="${i}" title="yuxarı" ${busy || i === 0 ? 'disabled' : ''}>↑</button>
         <button class="sm" data-do="down" data-i="${i}" title="aşağı" ${busy || i === steps.length - 1 ? 'disabled' : ''}>↓</button>
         <button class="sm" data-do="del" data-i="${i}" title="sil" ${off}>✕</button>
-      </li>`).join('')
+      </li>`;
+    }).join('')
       || '<li class="muted" style="font-size:12.5px">Heç bir addım yoxdur — ssenari öyrədilməyib.</li>';
   }
 
@@ -205,13 +232,16 @@ function teachMount(el) {
     paintOut(r, busy);
     q('recStep').disabled = busy;
     q('addStep').disabled = busy;
+    q('addFollow').disabled = busy;
     q('clearAll').disabled = busy || !r.to;
-    q('test').disabled = busy || !r.to;
+    // With an F step the whole scenario needs the camera: /follow drives it.
+    q('test').disabled = busy || !r.to || !!(r.to && r.to.follow);
     // A slot with no scenario of its own has nothing to test here — its way
     // there is a neighbour's scenario plus the QR row, which only /follow can
     // drive. Said on the button, because a greyed-out ▶ read as "broken".
     q('test').title = !r.to && r.via != null
       ? `${NAME[slot]}-in öz ssenarisi yoxdur — «${NAME[slot]} YÜKÜNƏ GET» ${NAME[r.via]} ssenarisini, sonra QR sırasını sürür`
+      : r.to && r.to.follow ? 'Ssenaridə F addımı var — bütövünü /follow-da «YÜKÜNƏ GET» ilə sına; tək addımları ▶ ilə'
       : '';
     q('stop').disabled = !driving;
 
@@ -281,6 +311,12 @@ function teachMount(el) {
                       : (typeof feedrate === 'function' ? feedrate() : undefined);
     call({ action: 'step_add', slot, key, mm: Number(q('mm').value), feed });
   };
+  q('addFollow').onclick = () => {
+    const text = q('fqr').value.trim();
+    if (!text) { msg = 'F addımı üçün QR mətni yaz — məs. KAPI1'; paint(); q('fqr').focus(); return; }
+    call({ action: 'step_add', slot, key: 'F', qr: text });
+  };
+  q('fqr').addEventListener('keydown', (e) => { if (e.key === 'Enter') q('addFollow').click(); });
   q('clearAll').onclick = () => {
     if (confirm(`${NAME[slot]} ssenarisinin bütün addımları silinsin?`)) call({ action: 'clear', slot, leg: 'to' });
   };

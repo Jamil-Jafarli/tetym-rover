@@ -41,6 +41,18 @@
   .warnbox{border-color:var(--warn);background:#fff8c5}
   .note{font-size:13px;color:var(--dim);margin:10px 0 0}
   .pinno{font:600 13px ui-monospace,Menlo,monospace;background:var(--soft);border-radius:6px;padding:4px 7px}
+  .errcard.has{border-color:var(--stop)}
+  .now{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:12px}
+  .now > div{border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
+  .now b{display:block;font-size:14px}
+  .now .msg{font-size:13px;margin-top:4px;word-break:break-word}
+  .errlog{max-height:420px;overflow:auto;margin-top:10px}
+  .errlog td{font-size:13px}
+  .errlog td.t{font:12px ui-monospace,Menlo,monospace;color:var(--dim);white-space:nowrap}
+  .errlog td.m{word-break:break-word}
+  .cnt{font:600 12px ui-monospace,Menlo,monospace;background:#ffebe9;color:var(--stop);border-radius:6px;padding:2px 6px}
+  .filters button{padding:7px 10px;font-size:13px}
+  .filters button.sel{border-color:var(--idle);color:var(--idle);background:#e7f3ff}
 </style>
 </head>
 <body>
@@ -58,6 +70,32 @@
       <span class="row" style="gap:7px"><span class="dot" id="gDot"></span><span class="muted" id="gTxt">–</span></span>
     </div>
     <p class="note" id="gNote">–</p>
+  </div>
+
+  <!-- ══ what went wrong ══ -->
+  <div class="card errcard" id="errCard">
+    <div class="between">
+      <span class="lbl">Pin hataları</span>
+      <span class="row" style="gap:7px"><span class="dot" id="eDot"></span><span class="muted" id="eTxt">–</span></span>
+    </div>
+    <p class="muted" style="margin:8px 0 0">Buzzer ve not edilen pinler, lift (GPIO10/22) ve LiDAR motoru
+      (L298N) — her hata burada kalır, sonraki başarılı yazma onu silmez. Aynı hata tekrar
+      ederse tek satırda sayılır. Sunucu yeniden başlasa da <code>logs/pins.log</code>'da durur.</p>
+
+    <div class="now" id="eNow"></div>
+
+    <div class="between" style="margin-top:14px">
+      <div class="row filters" id="eFilters"></div>
+      <button id="eClear" class="danger">Günlüğü temizle</button>
+    </div>
+    <div class="errlog">
+      <table>
+        <thead><tr><th style="width:150px">Zaman</th><th style="width:140px">Nerede</th><th style="width:70px">Pin</th>
+          <th style="width:140px">İşlem</th><th>Hata</th><th style="width:60px">Kez</th></tr></thead>
+        <tbody id="eRows"><tr><td colspan="6" class="muted">yükleniyor…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="note" id="eFile">–</p>
   </div>
 
   <!-- ══ the reversing buzzer ══ -->
@@ -258,6 +296,83 @@ $('add').addEventListener('click', () => {
   $('newPin').value = ''; $('newLabel').value = '';
   drawRows(); savePins();
 });
+
+// ── the error log ────────────────────────────────────────────────────
+let eFilter = 'all';
+let eLast = null;
+
+const hhmmss = (t) => new Date(t).toLocaleTimeString('tr-TR', { hour12: false });
+const dayTime = (t) => {
+  const d = new Date(t);
+  const today = new Date().toDateString() === d.toDateString();
+  return today ? hhmmss(t) : `${d.toLocaleDateString('tr-TR')} ${hhmmss(t)}`;
+};
+const ago = (t) => {
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  return s < 60 ? `${s} s önce` : s < 3600 ? `${Math.round(s / 60)} dk önce` : `${Math.round(s / 3600)} sa önce`;
+};
+
+function paintErrors(d) {
+  eLast = d;
+  const src = d.sources || {};
+  const total = Object.values(d.counts || {}).reduce((a, b) => a + b, 0);
+  $('eDot').className = 'dot ' + (total ? 'bad' : 'ok');
+  $('eTxt').textContent = total ? `${total} hata · ${ago(d.entries[0] ? d.entries[0].lastAt : Date.now())} son`
+                                : `hata yok · ${dayTime(d.since)}'den beri`;
+  $('errCard').classList.toggle('has', total > 0);
+
+  // What each part says is wrong right now.
+  const now = d.now || {};
+  const pinsOf = (k) => k === 'lift' && now.lift ? `GPIO${now.lift.pins.en} / GPIO${now.lift.pins.dir}`
+    : k === 'lidar' && now.lidar ? `GPIO${now.lidar.pins.pwm} / ${now.lidar.pins.in1} / ${now.lidar.pins.in2}`
+    : now.pins && now.pins.backend ? `yol: ${now.pins.backend}` : '';
+  $('eNow').innerHTML = Object.keys(src).map((k) => {
+    const n = now[k] || {};
+    const state = n.dry ? '<span class="muted">quru rejim — pin sürülmüyor</span>'
+      : n.err ? `<span class="bad">şu an hata var</span>` : '<span class="ok">şu an sorun yok</span>';
+    return `<div><b>${esc(src[k])}</b><span class="muted" style="font-size:12px">${esc(pinsOf(k))}</span>
+      <div class="msg">${state}${n.err ? `<br><code>${esc(n.err)}</code>` : ''}</div>
+      <div class="muted" style="font-size:12px;margin-top:4px">günlükte ${(d.counts || {})[k] || 0} hata`
+      + `${n.writes && n.writes.length ? ` · son yazma: <code>${esc(n.writes[n.writes.length - 1])}</code>` : ''}</div></div>`;
+  }).join('');
+
+  $('eFilters').innerHTML = [['all', `Hepsi (${total})`], ...Object.keys(src).map((k) => [k, `${src[k]} (${(d.counts || {})[k] || 0})`])]
+    .map(([k, label]) => `<button data-f="${k}" class="${eFilter === k ? 'sel' : ''}">${esc(label)}</button>`).join('');
+
+  const rows = (d.entries || []).filter((e) => eFilter === 'all' || e.source === eFilter);
+  $('eRows').innerHTML = rows.map((e) => `<tr>
+      <td class="t" title="ilk: ${esc(dayTime(e.at))}">${esc(dayTime(e.lastAt))}</td>
+      <td>${esc(src[e.source] || e.source)}</td>
+      <td>${e.pin == null ? '–' : `<span class="pinno">GPIO${e.pin}</span>`}</td>
+      <td class="t">${esc(e.action || '–')}</td>
+      <td class="m">${e.level === 'warn' ? '⚠ ' : ''}${esc(e.message)}</td>
+      <td>${e.count > 1 ? `<span class="cnt">×${e.count}</span>` : '1'}</td></tr>`).join('')
+    || `<tr><td colspan="6" class="muted">${eFilter === 'all' ? 'Kayıtlı hata yok.' : 'Bu kısımda hata yok.'}</td></tr>`;
+
+  $('eFile').textContent = d.file_err ? `Dosyaya yazılamadı: ${d.file_err}`
+    : d.file ? `Kalıcı kayıt: ${d.file}` : 'Kalıcı kayıt kapalı (quru rejim).';
+}
+
+async function loadErrors() {
+  try {
+    const r = await fetch('/api/pins/log');
+    if (r.ok) paintErrors(await r.json());
+  } catch { $('eTxt').textContent = 'sunucuya ulaşılamadı'; }
+}
+$('eFilters').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-f]');
+  if (!b) return;
+  eFilter = b.dataset.f;
+  if (eLast) paintErrors(eLast);
+});
+$('eClear').addEventListener('click', async () => {
+  if (!confirm('Pin hata günlüğü temizlensin mi? (logs/pins.log dosyası silinmez)')) return;
+  const r = await fetch('/api/pins/log', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                           body: JSON.stringify({ action: 'clear' }) });
+  if (r.ok) loadErrors();
+});
+loadErrors();
+setInterval(loadErrors, 2000);
 
 drawRows();
 connect();

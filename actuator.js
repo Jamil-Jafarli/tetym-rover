@@ -68,9 +68,11 @@ export class Actuator {
    *            touched. What `--no-actuator` and the tests use — a test suite
    *            that toggles real GPIO on the machine it runs on is not a test.
    *   set      (pin, level) => Promise — a stand-in for pinctrl
+   *   log      where failures are kept (pinlog.js)
    */
   constructor(cfg = {}) {
     this.cfg = { ...ACTUATOR_DEFAULTS, ...cfg };
+    this.log = cfg.log || { add() {} };
     this.enabled = cfg.enabled !== false;
     this._set = cfg.set || pinctrl;
 
@@ -99,6 +101,8 @@ export class Actuator {
           this.err = null;
         } catch (e) {
           this.err = String(e.message || e);
+          // Kept past the next write that works: see pinlog.js.
+          this.log.add({ source: 'lift', pin, action: `pinctrl ${level}`, message: this.err });
         }
       }
     };

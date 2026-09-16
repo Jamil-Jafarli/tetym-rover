@@ -1499,6 +1499,18 @@ still save for the robot.
 `--no-gpio` makes it dry — what was asked for is kept and shown, no pin is
 touched — which is how the test suites run on the robot's own Pi.
 
+**Pin hataları** (top of /pins) is every pin failure, kept: the buzzer and the
+noted pins (`gpio.js`), the lift on GPIO10/22 (`actuator.js`) and the lidar
+motor's L298N (`lidar.js`). Each module still shows its *last* error, which the
+next write that works clears — right for a status light, useless for finding
+a pinctrl that fails twice a minute. So every failure also goes to `pinlog.js`:
+time, where, pin, the write that failed, the message. The same failure again
+within 10 s is one row with a count (×12), not a screen of copies; filters by
+part; **Günlüğü temizle** starts it again. Alongside, what each part says is
+wrong right now. New entries are appended to `logs/pins.log` as JSON lines, so
+what happened before a restart is still there (not with `--no-gpio`).
+`GET /api/pins/log` is the same list; `POST {"action":"clear"}` clears it.
+
 ### One page to start from — `/`
 
 Typing the robot's address lands on the hub: the link status, what the wheels
@@ -3371,6 +3383,26 @@ here"*, taught **one step at a time**:
   wheels, no camera, no QR. Any key, **Space** or **■ Dayandır** stops it
   (`/api/marlin/run`, `jog` and `halt` all cancel a replay first), and it is
   refused while `/follow` has the rover armed.
+- **+ F addımı** adds *follow the line until this QR is read* — the same F that
+  starts following on `/follow`, put where the way there has a line on it:
+
+  ```
+   A2   1. W 480               yazılıb
+        2. F — xətti izlə → KAPI1   xətt izləmə
+        3. D 120               yazılıb
+  ```
+
+  The server has no camera, so the scenario is cut into **parts** at its F
+  steps (`RouteBook.parts()`): taught moves, F, taught moves. /follow's cargo
+  run asks the server for each run of moves by its part number (`replay` with
+  `part`) and follows the line itself in between (`lineqr` in mission.js).
+  The F ends on a read of its code made *after* the F began — the same code
+  seen earlier was somewhere else — and other codes on the way do not stop it;
+  past `traceMaxM` of line with no read, the run stops rather than following
+  the line off the field. Consecutive moves between two F steps are still one
+  part and are not stopped between. An F step cannot be driven from `/gcode`:
+  its ▶ is off, and **▶ Ssenarini sına** is refused for a scenario with one —
+  drive it with **YÜKÜNƏ GET** on /follow.
 
 To the cargo run a scenario is still one leg: the steps are joined and then
 **aggregated** (`aggregate()` in `routes.js`) — consecutive moves in the same

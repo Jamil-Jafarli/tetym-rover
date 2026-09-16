@@ -55,9 +55,11 @@ export class Lidar {
    *   enabled  false = dry run: state kept and reported, nothing spawned.
    *            What `--no-lidar` and the tests use.
    *   send     (line) => void — a stand-in for the helper process
+   *   log      where failures are kept (pinlog.js)
    */
   constructor(cfg = {}) {
     this.cfg = { ...LIDAR_DEFAULTS, ...cfg };
+    this.log = cfg.log || { add() {} };
     this.enabled = cfg.enabled !== false;
     this._stub = cfg.send || null;
     this.volts = this._clamp(this.cfg.volts);
@@ -103,6 +105,7 @@ export class Lidar {
                     { stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
       this.err = String(e.message || e);
+      this.log.add({ source: 'lidar', pin: pwmPin, action: 'lidar_pwm.py başlat', message: this.err });
       return null;
     }
     this._proc = p;
@@ -114,14 +117,18 @@ export class Lidar {
       while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i).trim();
         buf = buf.slice(i + 1);
-        if (line.startsWith('err ')) this.err = line.slice(4);
-        else if (line.startsWith('ok')) this.err = null;
+        if (line.startsWith('err ')) {
+          this.err = line.slice(4);
+          this.log.add({ source: 'lidar', pin: pwmPin, action: this.writes[this.writes.length - 1] || null,
+                         message: this.err });
+        } else if (line.startsWith('ok')) this.err = null;
       }
     });
     p.stderr.on('data', (d) => { tail = (tail + d).slice(-400); });
     p.stdin.on('error', () => { /* the exit handler says what happened */ });
     p.on('error', (e) => {
       this.err = e.code === 'ENOENT' ? 'python3 tapılmadı' : String(e.message || e);
+      this.log.add({ source: 'lidar', pin: pwmPin, action: 'lidar_pwm.py başlat', message: this.err });
     });
     p.on('exit', (code) => {
       if (this._proc === p) this._proc = null;
@@ -130,7 +137,9 @@ export class Lidar {
       if (this.running) this.running = false;
       if (code) {
         const why = tail.trim().split('\n').pop();
-        this.err = this.err || `lidar_pwm.py dayandı (${code})${why ? ': ' + why : ''}`;
+        const died = `lidar_pwm.py dayandı (${code})${why ? ': ' + why : ''}`;
+        this.log.add({ source: 'lidar', pin: pwmPin, action: 'lidar_pwm.py', message: died });
+        this.err = this.err || died;
       }
     });
     return p;

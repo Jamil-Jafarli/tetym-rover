@@ -633,6 +633,10 @@ function cargoGo(slot, tell = true, id = Date.now()) {
   missionCargo(mst, slot, { qrKey: r ? r.qr_key : 'ALIM' + slot, keys,
                             via: r ? r.via : null,
                             have: { to: !!(r && r.to), out: !!(r && r.out) },
+                            // The scenario's F steps, if it has any: the run
+                            // follows the line to their QR between taught parts.
+                            parts: r && r.via != null && routes[r.via] && routes[r.via].to
+                              ? routes[r.via].to.parts : null,
                             runId: id });
   mOut = missionOut(mst);
   if (tell) sendWs({ cmd: 'cargo', slot, id });
@@ -1233,7 +1237,8 @@ function loop() {
   // taught leg (by id, once), and run the lift (by state, on each change).
   if (armed && mOut.replay && mOut.replay.id !== replaySent) {
     replaySent = mOut.replay.id;
-    sendWs({ cmd: 'replay', id: mOut.replay.id, slot: mOut.replay.slot, leg: mOut.replay.leg });
+    sendWs({ cmd: 'replay', id: mOut.replay.id, slot: mOut.replay.slot, leg: mOut.replay.leg,
+             part: mOut.replay.part });
   }
   const actWant = armed ? mOut.act : null;
   if (actWant !== actSent) {
