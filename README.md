@@ -1170,6 +1170,45 @@ The path is fetched once over HTTP (`GET /api/route`) and appended to from the
 status stream, because sending 1 500 points ten times a second to say the last
 one moved 5 cm is how a dashboard becomes the reason the robot stutters.
 
+### Scenarios — G-code for each leg of the lap (`/plc`)
+
+The **Senaryolar** card on /plc holds the team's own G-code for each leg:
+
+| group | scenarios |
+|---|---|
+| Alımdan kapıya | A1 → kapı, A2 → kapı, A3 → kapı |
+| Kapı | kapıdan geçiş (B tarafına) |
+| Yük bırakma | kapıdan B1 / B2 / B3 · yük bırak |
+| Dönüş | B1 / B2 / B3 → kapı, kapıdan geri geçiş, kapı → başlangıç |
+
+One Marlin command per line, `;` and `( … )` for comments. Saved in
+`follow.json` under `scenarios`, started with **Kaydet ve çalıştır**, stopped
+with **DUR**. They run only when started by hand — the PLC mission does not
+start them.
+
+How it runs (`scenario_run.js`), and why:
+
+- **a command at a time**, and an `M400` after every move, so the next line
+  waits for the robot to finish rather than for Marlin to *plan* the move.
+  The progress on the card is the line the robot is on, and DUR stops after
+  the move in progress instead of after sixteen already queued.
+- **`G91` at the end and after DUR**, so the next W press is relative again
+  even if the scenario switched to `G90`.
+- **a typo stops it before it starts**: every line is checked first and the
+  bad one is shown with its number; nothing half-runs. `M112` and the EEPROM
+  commands (`M500`–`M502`) are refused.
+- **one source of moves**: W A S D, START on /follow, STOP anywhere, the /gcode
+  page's halt, the PLC e-stop and closing the last browser all stop a running
+  scenario; /gcode's hold-to-drive answers 423 while one runs.
+- **Ender only**: the ESP32 bench does not speak G-code, and the card says so.
+
+**Satır hesaplayıcı** writes the lines: type the wheel circumference and the
+distance between the wheels once (saved as `scenario_geom`), then *İleri /
+Geri* by mm, *Sola / Sağa dön* by degrees, *Fork yukarı / aşağı* by mm, *Bekle*
+by seconds. It uses the board's own mm per revolution and /gcode's direction
+swaps, so `İleri 500` on a 200 mm wheel with 40 mm/tur is
+`G1 X-100.00 Y100.00 F3000`.
+
 ### The reversing buzzer, and the Pi's own pins — `/pins`
 
 A forklift that backs up silently is the one hazard here that is not a software
@@ -2115,6 +2154,8 @@ printer's, and the third is what both machines run.
 | `public/obstacle.html` | forward sonar: drive, stop, wait, carry on |
 | `public/dashboard.html` | everything at once: speed, volts, ESP32 + Pi, camera, obstacle, QR, the field map and the next turn |
 | `public/route.js` | dead reckoning: two wheel percentages → a path. Pure |
+| `public/scenario.js` | scenarios: the 12 legs, checking the text, what goes to the board, the helper's lines. Pure |
+| `scenario_run.js` | running a scenario on the Ender board, a command at a time, and stopping it |
 | `gpio.js` | the Pi's output pins: sysfs, pinctrl, or an honest "this machine has none" |
 | `buzzer.js` | the reversing buzzer: the beep pattern and which pins it drives |
 | `public/pins_pi.html` | /pins: the buzzer's settings and the pin notes |
@@ -2210,6 +2251,7 @@ worth running without them.
 | `test/test_sonar.mjs` | the sonar logic, 29 checks, no browser |
 | `test/test_route.mjs` | dead reckoning, 43 checks, no browser |
 | `test/test_field.mjs` | the field graph against the ek şartname, the QR texts, localisation and the turns, 131 checks, no browser |
+| `test/test_scenario.mjs` | the text, the M400s and G91, the helper's lines, the runner stopping and refusing, and the server saving and reporting — 46 checks |
 | `test/test_buzzer.mjs` | the beep pattern, which pins go high, what counts as reversing, and the server refusing a pin nobody wrote down — 37 checks |
 | `test/test_plc.mjs` | PAKET_TX / PAKET_RX byte for byte, a full lap through the real field with the door both ways, the link against the simulator over UDP, and both servers holding their wheels — 99 checks |
 | `test/test_camera.mjs` | JPEG framing, a real QR decode, the Pi stats — 45 checks |

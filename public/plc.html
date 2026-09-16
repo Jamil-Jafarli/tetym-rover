@@ -62,6 +62,19 @@
   .qrs button{font:600 12px ui-monospace,Menlo,Consolas,monospace;padding:6px 9px}
   .note{font-size:12.5px;color:var(--dim);margin:8px 0 0}
   .warnc{color:var(--warn)} .bad{color:var(--stop)} .ok{color:var(--accent)}
+  .scgrid{display:grid;grid-template-columns:260px 1fr;gap:16px}
+  @media (max-width:900px){ .scgrid{grid-template-columns:1fr} }
+  .sclist{display:flex;flex-direction:column;gap:4px}
+  .sclist .grp{font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--dim);margin:8px 0 2px}
+  .sclist button{text-align:left;display:flex;justify-content:space-between;gap:8px;font-weight:500}
+  .sclist button.sel{border-color:var(--idle);background:#e7f3ff}
+  .sclist button small{color:var(--dim);font-weight:500}
+  #scText{width:100%;min-height:240px;resize:vertical;font:13px/1.5 ui-monospace,Menlo,Consolas,monospace;
+    border:1px solid var(--line);border-radius:9px;padding:10px;color:var(--ink);background:#fbfcfd}
+  .helper{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+  .helper input{width:78px;font:500 13px inherit;border:1px solid var(--line);border-radius:8px;padding:7px 8px}
+  .scerr{color:var(--stop);font-size:13px;margin-top:6px}
+  .scrun{margin-top:8px;padding:8px 10px;border-radius:8px;background:#dafbe1;font-weight:600}
 </style>
 </head>
 <body>
@@ -131,6 +144,59 @@
     <div class="log" id="events"><div class="muted">henüz olay yok</div></div>
   </section>
 
+  <!-- ══ scenarios ══ -->
+  <section class="card c12" id="scCard">
+    <h2>Senaryolar — her etap için G-code</h2>
+    <p class="note" style="margin-top:-4px">Her satır bir Marlin komutu (G1, G4, M400 …); <code>;</code> sonrası
+      açıklamadır. Her hareketten sonra robotun bitirmesi beklenir, DUR mevcut hareketten sonra durdurur.
+      Senaryo çalışırken W A S D, takip ya da /gcode senaryoyu durdurur.</p>
+    <div class="scgrid">
+      <div class="sclist" id="scList"></div>
+      <div style="min-width:0">
+        <div class="between" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+          <b id="scTitle">–</b>
+          <span class="muted" id="scSaved">–</span>
+        </div>
+        <textarea id="scText" spellcheck="false" placeholder="; örnek: A2'den kapıya
+G91                 ; göreli hareket
+G1 X-120 Y120 F3000 ; ileri
+G1 X-40 Y-40 F2000  ; sağa dön
+G4 P500             ; yarım saniye bekle"></textarea>
+        <div class="scerr" id="scErr"></div>
+        <div class="btns" style="margin-top:8px">
+          <button id="scSave">Kaydet</button>
+          <button id="scRun" class="danger" style="background:var(--accent);border-color:var(--accent)">Kaydet ve çalıştır</button>
+          <button id="scStop">DUR</button>
+        </div>
+        <div class="scrun" id="scRunning" hidden>–</div>
+        <p class="note" id="scLast">–</p>
+
+        <details style="margin-top:10px">
+          <summary class="muted" style="cursor:pointer">Satır hesaplayıcı — mm ve dereceden G-code</summary>
+          <div class="helper">
+            <span class="muted">Teker çevresi</span><input type="number" id="gCirc" min="1" step="1" placeholder="mm">
+            <span class="muted">Tekerler arası</span><input type="number" id="gTrack" min="1" step="1" placeholder="mm">
+            <span class="muted">Hız</span><input type="number" id="gFeed" min="1" step="100" placeholder="mm/dk">
+            <span class="muted" id="gRev">kart: – mm/tur</span>
+          </div>
+          <div class="helper">
+            <input type="number" id="hDist" value="500" step="10"><span class="muted">mm</span>
+            <button data-h="forward">İleri</button><button data-h="back">Geri</button>
+            <input type="number" id="hDeg" value="90" step="5"><span class="muted">°</span>
+            <button data-h="left">Sola dön</button><button data-h="right">Sağa dön</button>
+          </div>
+          <div class="helper">
+            <input type="number" id="hLift" value="50" step="5"><span class="muted">mm</span>
+            <button data-h="liftUp">Fork yukarı</button><button data-h="liftDown">Fork aşağı</button>
+            <input type="number" id="hWait" value="1" step="0.5"><span class="muted">s</span>
+            <button data-h="wait">Bekle</button>
+          </div>
+          <p class="note" id="hNote">Düğmeler satırı imlecin olduğu yere ekler. Çevre ve tekerler arası mesafe kaydedilir.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
   <!-- ══ the simulator ══ -->
   <section class="card c12" id="simCard" hidden>
     <h2>PLC simülatörü (bu sunucuda)</h2>
@@ -156,6 +222,7 @@
 
 <script src="/field.js"></script>
 <script src="/plc.js"></script>
+<script src="/scenario.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -279,6 +346,7 @@ function paint(s) {
   }
 
   drawLive(f, m);
+  paintScenario(s);
 }
 
 // ── the map ──────────────────────────────────────────────────────────
@@ -381,6 +449,150 @@ addEventListener('keydown', (e) => {
     e.preventDefault(); plcEvent('estop');
   }
 });
+
+// ── scenarios ────────────────────────────────────────────────────────
+let scSel = SCENARIO_SLOTS[0].id;
+let scSavedAll = {};          // what the server has
+let scDirty = false;          // the editor differs from what is saved
+let scBoard = null;           // /api/marlin/status, for mm per revolution and invert
+let scSeededGeom = false;
+let scLastStatus = null;      // the newest status, for the helper's fork settings
+
+function scSaved(id) { return scSavedAll[id] || ''; }
+
+function drawScList() {
+  let group = null;
+  $('scList').innerHTML = SCENARIO_SLOTS.map((sl) => {
+    const head = sl.group !== group ? `<div class="grp">${esc(sl.group)}</div>` : '';
+    group = sl.group;
+    const n = scenarioParse(scSaved(sl.id)).commands.length;
+    return head + `<button data-sc="${sl.id}" class="${sl.id === scSel ? 'sel' : ''}">`
+      + `<span>${esc(sl.label)}</span><small>${n ? n + ' satır' : 'boş'}</small></button>`;
+  }).join('');
+}
+
+function selectSc(id) {
+  if (scDirty && !confirm('Kaydedilmemiş değişiklikler silinsin mi?')) return;
+  scSel = id;
+  $('scText').value = scSaved(id);
+  scDirty = false;
+  drawScList();
+  checkSc();
+}
+
+function checkSc() {
+  const slot = scenarioSlot(scSel);
+  $('scTitle').textContent = slot ? slot.label : '–';
+  const p = scenarioParse($('scText').value);
+  $('scErr').innerHTML = p.errors.map((e) =>
+    `satır ${e.line}: <code>${esc(e.text)}</code> — ${esc(e.why)}`).join('<br>');
+  scDirty = $('scText').value !== scSaved(scSel);
+  $('scSaved').textContent = scDirty ? 'kaydedilmedi' : (p.commands.length ? `kayıtlı · ${p.commands.length} komut` : 'boş');
+  return p;
+}
+
+function saveSc() {
+  const p = checkSc();
+  if (p.errors.length) return false;
+  scSavedAll = { ...scSavedAll, [scSel]: $('scText').value };
+  sendWs({ cmd: 'follow_cfg', cfg: { scenarios: scSavedAll } });
+  scDirty = false;
+  checkSc(); drawScList();
+  return true;
+}
+
+$('scList').onclick = (e) => { const b = e.target.closest('button[data-sc]'); if (b) selectSc(b.dataset.sc); };
+$('scText').addEventListener('input', checkSc);
+$('scSave').onclick = saveSc;
+$('scRun').onclick = () => { if (saveSc()) setTimeout(() => sendWs({ cmd: 'scenario_run', id: scSel }), 150); };
+$('scStop').onclick = () => sendWs({ cmd: 'scenario_stop' });
+
+function paintScenario(s) {
+  scLastStatus = s;
+  const cfg = s.follow_cfg || {};
+  const saved = cfg.scenarios || {};
+  if (JSON.stringify(saved) !== JSON.stringify(scSavedAll)) {
+    scSavedAll = saved;
+    if (!scDirty) $('scText').value = scSaved(scSel);
+    drawScList(); checkSc();
+  }
+  const g = cfg.scenario_geom || {};
+  if (!scSeededGeom) {
+    scSeededGeom = true;
+    $('gCirc').value = g.circumference || '';
+    $('gTrack').value = g.track || '';
+    $('gFeed').value = g.feed || 3000;
+  }
+  const sc = s.scenario || {};
+  const supported = sc.supported !== false;
+  $('scRun').disabled = !supported || !!sc.running;
+  $('scRunning').hidden = !sc.running;
+  if (sc.running) {
+    $('scRunning').textContent = `▶ ${sc.running.label} · ${sc.running.step}/${sc.running.total}`
+      + ` · ${sc.running.current || ''} · ${fmt(sc.running.seconds, 1)} s`;
+  }
+  const l = sc.last, r = sc.refused;
+  $('scLast').innerHTML = !supported
+    ? 'Bu kart (ESP32) G-code bilmez — senaryolar Ender kartıyla çalışır.'
+    : r ? `<span class="bad">Çalışmadı (${esc((scenarioSlot(r.id) || {}).label || r.id)}): ${esc(r.why)}</span>`
+        + (r.errors || []).map((e) => `<br>satır ${e.line}: ${esc(e.why)}`).join('')
+    : l ? `Son: ${esc(l.label)} — ${esc(l.result)}${l.why ? ' (' + esc(l.why) + ')' : ''}, `
+        + `${l.step}/${l.total} komut, ${fmt(l.seconds, 1)} s`
+    : 'henüz çalıştırılmadı';
+}
+
+// The helper: board geometry from the board itself, so a line is right for
+// the steps/mm and direction swaps actually on it.
+function loadBoard() {
+  fetch('/api/marlin/status').then((r) => (r.ok ? r.json() : null)).then((b) => {
+    scBoard = b;
+    const rev = b && b.mm_per_rev && (b.mm_per_rev.X || b.mm_per_rev);
+    $('gRev').textContent = rev ? `kart: ${rev} mm/tur` : 'kart: bilinmiyor';
+  }).catch(() => { $('gRev').textContent = 'kart: bu makinede G-code yok'; });
+}
+function geom() {
+  const lift = (scLastStatus && scLastStatus.follow_cfg && scLastStatus.follow_cfg.lift) || {};
+  const rev = scBoard && scBoard.mm_per_rev && (scBoard.mm_per_rev.X || scBoard.mm_per_rev);
+  return {
+    circumference: Number($('gCirc').value), track: Number($('gTrack').value),
+    feed: Number($('gFeed').value) || 3000, mmPerRev: Number(rev),
+    invert: (scBoard && scBoard.invert) || {}, liftFeed: lift.feed || 240, liftInvert: !!lift.invert,
+  };
+}
+for (const id of ['gCirc', 'gTrack', 'gFeed']) {
+  $(id).addEventListener('change', () => sendWs({ cmd: 'follow_cfg', cfg: { scenario_geom: {
+    circumference: Number($('gCirc').value) || null, track: Number($('gTrack').value) || null,
+    feed: Number($('gFeed').value) || 3000 } } }));
+}
+document.querySelector('#scCard details').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-h]');
+  if (!b) return;
+  const kind = b.dataset.h;
+  const g = geom();
+  const line = kind === 'liftUp' ? scenarioLine('lift', Number($('hLift').value), g)
+    : kind === 'liftDown' ? scenarioLine('lift', -Number($('hLift').value), g)
+    : kind === 'wait' ? scenarioLine('wait', Number($('hWait').value), g)
+    : kind === 'left' || kind === 'right' ? scenarioLine(kind, Number($('hDeg').value), g)
+    : scenarioLine(kind, Number($('hDist').value), g);
+  if (!line) {
+    $('hNote').textContent = !g.mmPerRev ? 'Kartın mm/tur değeri bilinmiyor — Ender kartı bağlı olmalı.'
+      : 'Önce teker çevresini' + (kind === 'left' || kind === 'right' ? ' ve tekerler arası mesafeyi' : '') + ' yazın.';
+    return;
+  }
+  const ta = $('scText');
+  const at = ta.selectionStart ?? ta.value.length;
+  const before = ta.value.slice(0, at), after = ta.value.slice(at);
+  const sep = before && !before.endsWith('\n') ? '\n' : '';
+  ta.value = before + sep + line + '\n' + after;
+  ta.selectionStart = ta.selectionEnd = (before + sep + line + '\n').length;
+  ta.focus();
+  checkSc();
+});
+
+drawScList();
+checkSc();
+loadBoard();
+setInterval(loadBoard, 10000);
 
 drawStatic();
 connect();

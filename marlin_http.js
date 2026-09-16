@@ -88,7 +88,7 @@ export function resolveVector(data) {
   return out;
 }
 
-export function marlinApi({ link, jog, held = () => null }) {
+export function marlinApi({ link, jog, held = () => null, onHalt = () => {} }) {
   /** POST bodies, by route. Throwing here turns into a 4xx below. */
   async function post(path, data) {
     // The PLC mission's brake covers the keyboard too: a robot waiting at the
@@ -158,6 +158,7 @@ export function marlinApi({ link, jog, held = () => null }) {
         // because it waits its turn behind the very move it is cancelling.
         // Shortening the stop by one chunk was never worth that.
         jog.stop();
+        onHalt();                 // a scenario in progress stops too
         link.drain();
         link.send('M114');
         return [200, { ok: true }];

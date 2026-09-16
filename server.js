@@ -84,6 +84,7 @@ import { advertise } from './lidar_discovery.js';
 import { startCompetition } from './plc_run.js';
 import { Gpio } from './gpio.js';
 import { Buzzer } from './buzzer.js';
+import { ScenarioRunner } from './scenario_run.js';
 
 // The competition field, straight out of the module the pages load — one copy
 // of the graph, served to anything that asks for it. See public/field.js.
@@ -596,7 +597,11 @@ async function runMarlin(args) {
   const link = new MarlinLink();
   const jog = new Jogger(link);
   // held() is read per request, so the rover being declared further down is fine.
-  const api = marlinApi({ link, jog, held: () => rover.holdReason });
+  const api = marlinApi({ link, jog,
+    // A key held on /gcode while a scenario drives would put two sources of
+    // moves into one planner: refused, with the reason, until it ends.
+    held: () => rover.holdReason || (scenarios.running ? `senaryo çalışıyor: ${scenarios.run.label}` : null),
+    onHalt: () => scenarios.stop('DUR (/gcode)') });
 
   // --trace mirrors the link's log to the console. The page shows the same
   // thing, but a terminal can be scrolled back, piped and pasted.
@@ -645,7 +650,7 @@ async function runMarlin(args) {
                     '/sonar.js': 'sonar.js', '/cam.js': 'cam.js',
                     '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js',
                     '/field.js': 'field.js', '/plc.js': 'plc.js',
-                    '/wheels.js': 'wheels.js' };
+                    '/scenario.js': 'scenario.js' };
 
   const lidar = new LidarRelay({ room: args.lidarRoom });
   const lidarSim = args.lidarSim ? new LidarSim({ relay: lidar }).start() : null;
@@ -761,6 +766,10 @@ async function runMarlin(args) {
   const rover = new Rover({ link, jog });
   rover.setCfg(followCfg);
 
+  // Scenarios: the team's own G-code for each leg of a lap, started from /plc.
+  const scenarios = new ScenarioRunner({ link, jog,
+    blocked: () => (rover.holdAll ? 'acil stop basılı' : null) });
+
   // The Pi's own pins: the reversing buzzer first of all. Driven from the
   // demand rather than from a page, so it sounds with no browser open.
   const gpio = new Gpio();
@@ -776,7 +785,7 @@ async function runMarlin(args) {
     hold: (reason, all) => rover.hold(reason, all),
     armed: () => rover.running,
     fault: () => (link.connected ? null : 'motor kartı bağlı değil'),
-    estop: () => rover.stop('acil stop'),
+    estop: () => { scenarios.stop('acil stop'); rover.stop('acil stop'); },
   });
   const wss = new WebSocketServer({ noServer: true });
   routeUpgrades(server, { relay: lidar, wss });
@@ -799,6 +808,7 @@ async function runMarlin(args) {
         field: fieldStatus(fieldSt, null, fieldMap),
         plc: competition.status(),
         buzzer: buzzer.status(),
+        scenario: scenarios.status(),
       }));
     };
     const pusher = setInterval(send, 100);
@@ -809,11 +819,13 @@ async function runMarlin(args) {
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       switch (msg.cmd) {
         case 'start':
+          if (scenarios.stop('sürüş başladı')) console.log('scenario stopped: driving started');
           rover.start();
           console.log('START — following');
           break;
         case 'stop':
         case 'idle':
+          if (scenarios.stop('DUR')) console.log('scenario stopped');
           rover.stop(msg.cmd === 'idle' ? 'idle' : 'stopped');
           console.log('STOP');
           break;
@@ -821,7 +833,22 @@ async function runMarlin(args) {
         // One command per frame, carrying what the vision loop decided. The
         // server does not steer; it clamps, paces and stops.
         case 'follow':
+          if (scenarios.running) break;       // START above already ended it
           rover.setAuto(msg.p25, msg.p26, msg.reason);
+          break;
+
+        // ── scenarios ──
+        // The text is the saved one, not one sent with the command: what runs
+        // is what /plc shows as saved, and what the next person will see.
+        case 'scenario_run': {
+          const text = (followCfg.scenarios || {})[msg.id] || '';
+          const res = scenarios.start(msg.id, text);
+          console.log(res.ok ? `scenario ${msg.id}: started`
+                             : `scenario ${msg.id}: refused — ${res.why}`);
+          break;
+        }
+        case 'scenario_stop':
+          if (scenarios.stop('DUR düğmesi')) console.log('scenario stopped');
           break;
 
         case 'follow_cfg':
@@ -857,6 +884,7 @@ async function runMarlin(args) {
         // /follow by hand: W A S D and the fork, both repeated at 20 Hz while
         // held and let go by the rover's own 400 ms dead-man when they stop.
         case 'keys': {
+          if (scenarios.running && (msg.keys || []).length) scenarios.stop('elle sürüş (W A S D)');
           const had = rover.keys.join('');
           rover.setKeys(msg.keys, msg.pct, msg.swap === true);
           if (rover.keys.join('') !== had) {
@@ -925,6 +953,8 @@ async function runMarlin(args) {
     ws.on('close', () => {
       clearInterval(pusher);
       rover.clientLeft();
+      // Nothing keeps driving once nobody is watching — a scenario included.
+      if (rover.clients === 0) scenarios.stop('tarayıcı kapandı');
       if (rover.clients === 0 && runLog.active) {
         const done = runLog.stop();
         if (done) console.log(`saved on disconnect: ${path.basename(done.file)}`);
@@ -1010,6 +1040,7 @@ async function runMarlin(args) {
     closing = true;
     console.log('\nshutting down — letting the last move finish');
     competition.close();
+    scenarios.stop('sunucu kapanıyor');
     rover.close();
     clearInterval(buzzerTimer);
     buzzer.close();
@@ -1145,6 +1176,7 @@ async function main() {
                     '/wheels.js': 'wheels.js', '/route.js': 'route.js',
                     '/cam.js': 'cam.js', '/field.js': 'field.js',
                     '/lift.js': 'lift.js', '/plc.js': 'plc.js',
+                    '/scenario.js': 'scenario.js',
                     '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js' };
 
   // The LiDAR relay: scanners stream to /ws, pages draw what they stream. The
@@ -1266,6 +1298,7 @@ async function main() {
           lidar: lidar.status(),
           plc: competition.status(),
           buzzer: buzzer.status(),
+          scenario: { supported: false },
         }));
       }
     };
