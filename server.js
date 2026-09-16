@@ -82,6 +82,8 @@ import { LidarRelay, routeUpgrades } from './lidar_relay.js';
 import { LidarSim } from './lidar_sim.js';
 import { advertise } from './lidar_discovery.js';
 import { startCompetition } from './plc_run.js';
+import { Gpio } from './gpio.js';
+import { Buzzer } from './buzzer.js';
 
 // The competition field, straight out of the module the pages load — one copy
 // of the graph, served to anything that asks for it. See public/field.js.
@@ -91,7 +93,9 @@ const { FIELDS, fieldState, fieldSee, fieldMission, fieldClearMission, fieldStat
                           'fieldClearMission', 'fieldStatus']);
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const FOLLOW_FILE = path.join(HERE, 'follow.json');
+// Where the saved tuning lives. TETYM_FOLLOW_FILE moves it, which is how the
+// tests write settings without touching the robot's own follow.json.
+const FOLLOW_FILE = process.env.TETYM_FOLLOW_FILE || path.join(HERE, 'follow.json');
 
 /**
  * The follow page's sliders and calibration, saved server-side.
@@ -614,8 +618,10 @@ async function runMarlin(args) {
   // The ESP32's hub, manual, drive and pins pages are about two DAC pins, so
   // they are not here; everything that is about the road is.
   const PAGES = {
-    '/':       'gcode.html',   // hold WASD, G-code goes out
-    '/gcode':  'gcode.html',
+    // One page to start from, the same hub the ESP32 side has: status,
+    // then a tile to everything this machine serves.
+    '/':       'home.html',
+    '/gcode':  'gcode.html',   // hold WASD, G-code goes out
     '/vision': 'vision.html',  // camera -> line detection, look and tune
     '/follow': 'follow.html',  // the same detector, driving
     '/tune':   'tune.html',    // read a run back and say what to change
@@ -626,6 +632,8 @@ async function runMarlin(args) {
     // The competition: PLC link, mission, field. On both machines, because the
     // factory automation system talks to the robot, not to its motor board.
     '/plc':    'plc.html',
+    // The Pi's own pins: the reversing buzzer, and what is wired where.
+    '/pins':   'pins_pi.html',
   };
 
   // The road pages are shared with the ESP32 half, so they load what those
@@ -636,7 +644,8 @@ async function runMarlin(args) {
                     '/analyse.js': 'analyse.js', '/wheels.js': 'wheels.js',
                     '/sonar.js': 'sonar.js', '/cam.js': 'cam.js',
                     '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js',
-                    '/field.js': 'field.js', '/plc.js': 'plc.js' };
+                    '/field.js': 'field.js', '/plc.js': 'plc.js',
+                    '/wheels.js': 'wheels.js' };
 
   const lidar = new LidarRelay({ room: args.lidarRoom });
   const lidarSim = args.lidarSim ? new LidarSim({ relay: lidar }).start() : null;
@@ -691,6 +700,16 @@ async function runMarlin(args) {
 
     if (url === '/logs' || url.startsWith('/logs/')) { serveLogs(res, url); return; }
 
+    if (url === '/api/pages' || url === '/api/pins') {
+      const b = Buffer.from(JSON.stringify(url === '/api/pages'
+        ? { machine: 'marlin', pages: Object.keys(PAGES) }
+        : { pins: followCfg.pins || [], buzzer: buzzer.status() }));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
+                           'Content-Length': b.length, 'Cache-Control': 'no-store' });
+      res.end(b);
+      return;
+    }
+
     if (url === '/api/field' || url === '/api/plc') {
       const b = Buffer.from(JSON.stringify(url === '/api/field' ? fieldMap : competition.status()));
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
@@ -742,6 +761,13 @@ async function runMarlin(args) {
   const rover = new Rover({ link, jog });
   rover.setCfg(followCfg);
 
+  // The Pi's own pins: the reversing buzzer first of all. Driven from the
+  // demand rather than from a page, so it sounds with no browser open.
+  const gpio = new Gpio();
+  const buzzer = new Buzzer({ gpio, cfg: followCfg });
+  const buzzerTimer = setInterval(() => buzzer.setReversing(rover.reversing), 100);
+  buzzerTimer.unref?.();
+
   competition = startCompetition(args, {
     map: fieldMap,
     field: () => fieldSt,
@@ -772,6 +798,7 @@ async function runMarlin(args) {
         qr: qr.status(),
         field: fieldStatus(fieldSt, null, fieldMap),
         plc: competition.status(),
+        buzzer: buzzer.status(),
       }));
     };
     const pusher = setInterval(send, 100);
@@ -800,7 +827,32 @@ async function runMarlin(args) {
         case 'follow_cfg':
           followCfg = saveFollowCfg({ ...followCfg, ...(msg.cfg || {}) });
           rover.setCfg(followCfg);
+          buzzer.setCfg(followCfg);
           break;
+
+        // The buzzer, sounded on purpose: the only way to check the wiring
+        // without pushing the robot backwards.
+        case 'buzzer_test':
+          buzzer.test(Number(msg.ms) || 600);
+          console.log('buzzer test');
+          break;
+
+        // A pin set by hand from /pins. Only pins written down there as
+        // outputs: driving a number somebody typed in could be the serial
+        // console, the I²C bus, or something with a motor on it.
+        case 'pi_pin': {
+          const note = (followCfg.pins || []).find((p) => Number(p.pin) === Number(msg.pin));
+          if (!note || note.dir !== 'out') {
+            console.log(`pin refused: GPIO${msg.pin} is not a written-down output`);
+            break;
+          }
+          const on = msg.value ? 1 : 0;
+          gpio.set(note.pin, on).then((done) => {
+            console.log(`GPIO${note.pin} = ${on}`
+              + (done ? '' : ` (not driven: ${gpio.status().error || 'no backend'})`));
+          });
+          break;
+        }
 
         // /follow by hand: W A S D and the fork, both repeated at 20 Hz while
         // held and let go by the rover's own 400 ms dead-man when they stop.
@@ -887,12 +939,13 @@ async function runMarlin(args) {
   const shown = args.host === '0.0.0.0' ? 'localhost' : args.host;
   const base = `http://${shown}:${args.http}`;
   console.log(`\nRover control:  ${base}/`);
-  console.log(`  drive by hand:  ${base}/`);
+  console.log(`  drive by hand:  ${base}/gcode`);
   console.log(`  camera / line:  ${base}/vision`);
   console.log(`  follow a line:  ${base}/follow`);
   console.log(`  read a run back:${base}/tune`);
   console.log(`  lidar map:      ${base}/lidar`);
   console.log(`  plc / görev:    ${base}/plc`);
+  console.log(`  pi pinleri:     ${base}/pins`);
   console.log(`  field:          ${fieldMap.label} (${fieldMap.w} × ${fieldMap.h} m)`);
   competition.banner();
   if (camera.enabled && !args.qr) console.log('   qr reader: off (--no-qr)');
@@ -958,6 +1011,9 @@ async function runMarlin(args) {
     console.log('\nshutting down — letting the last move finish');
     competition.close();
     rover.close();
+    clearInterval(buzzerTimer);
+    buzzer.close();
+    await gpio.close();
     jog.stop();
     rover.stop('shutting down');
     for (const c of wss.clients) c.close();
@@ -1030,6 +1086,12 @@ async function main() {
   const qr = new QrReader();
   const sys = new RpiStats();
 
+  // The reversing buzzer on the Pi's own pins — the same one the rover has.
+  const gpio = new Gpio();
+  const buzzer = new Buzzer({ gpio, cfg: followCfg });
+  const buzzerTimer = setInterval(() => buzzer.setReversing(bench.reversing), 100);
+  buzzerTimer.unref?.();
+
   if (args.qr && qr.available) {
     camera.onGray((gray, w, h) => qr.feed(gray, w, h));
     // A code read is a thing that happened at a place — and on this field it
@@ -1062,7 +1124,8 @@ async function main() {
     '/follow': 'follow.html',  // the same detector, driving
     '/tune':   'tune.html',    // read a run back and say what to change
     '/obstacle': 'obstacle.html',  // the forward HC-SR04, as a stop
-    '/pins':   'pins.html',    // the spare pins, by hand
+    '/pins':   'pins.html',    // the ESP32's spare pins, by hand
+    '/pi-pins': 'pins_pi.html',  // the Pi's own pins and the reversing buzzer
     '/setup':  'setup.html',   // what to measure, in order, and where it goes
     '/dashboard': 'dashboard.html',  // everything at once, on one screen
     '/panel':  'panel.html',   // the same, plus driving, fixed at 1920 × 1080
@@ -1115,6 +1178,16 @@ async function main() {
     // than repeated in a status frame ten times a second. A page could read
     // FIELD out of /field.js instead — this exists so anything that is not a
     // browser (a phone, curl, the firmware one day) can have the map too.
+    if (url === '/api/pages' || url === '/api/pins') {
+      const b = Buffer.from(JSON.stringify(url === '/api/pages'
+        ? { machine: 'esp32', pages: Object.keys(PAGES) }
+        : { pins: followCfg.pins || [], buzzer: buzzer.status() }));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
+                           'Content-Length': b.length, 'Cache-Control': 'no-store' });
+      res.end(b);
+      return;
+    }
+
     if (url === '/api/field' || url === '/api/plc') {
       const b = Buffer.from(JSON.stringify(url === '/api/field' ? bench.fieldMap : competition.status()));
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
@@ -1192,6 +1265,7 @@ async function main() {
           rpi: sysSnap,
           lidar: lidar.status(),
           plc: competition.status(),
+          buzzer: buzzer.status(),
         }));
       }
     };
@@ -1274,7 +1348,30 @@ async function main() {
           // business now, so a page editing them has to reach the brake and
           // the map, not just the file.
           bench.setCfg(followCfg);
+          buzzer.setCfg(followCfg);
           break;
+
+        case 'buzzer_test':
+          buzzer.test(Number(msg.ms) || 600);
+          console.log('buzzer test');
+          break;
+
+        // A pin set by hand from /pins. Only pins written down there as
+        // outputs: driving a number somebody typed in could be the serial
+        // console, the I²C bus, or something with a motor on it.
+        case 'pi_pin': {
+          const note = (followCfg.pins || []).find((p) => Number(p.pin) === Number(msg.pin));
+          if (!note || note.dir !== 'out') {
+            console.log(`pin refused: GPIO${msg.pin} is not a written-down output`);
+            break;
+          }
+          const on = msg.value ? 1 : 0;
+          gpio.set(note.pin, on).then((done) => {
+            console.log(`GPIO${note.pin} = ${on}`
+              + (done ? '' : ` (not driven: ${gpio.status().error || 'no backend'})`));
+          });
+          break;
+        }
         case 'route_reset':
           bench.resetRoute();
           console.log('route reset — map starts here');
@@ -1362,6 +1459,7 @@ async function main() {
     console.log(`  read a run back:${base}/tune`);
     console.log(`  obstacle stop:  ${base}/obstacle`);
     console.log(`  spare pins:     ${base}/pins`);
+    console.log(`  pi pins:        ${base}/pi-pins`);
     console.log(`  lidar map:      ${base}/lidar`);
     console.log(`  plc / görev:    ${base}/plc`);
     console.log(`  field:          ${bench.fieldMap.label} (${bench.fieldMap.w} × ${bench.fieldMap.h} m)`);
@@ -1412,6 +1510,9 @@ async function main() {
     closing = true;
     console.log('\nshutting down — outputs to idle');
     clearInterval(sysTimer);
+    clearInterval(buzzerTimer);
+    buzzer.close();
+    await gpio.close();
     competition.close();
     for (const c of wss.clients) c.close();
     if (lidarSim) lidarSim.stop();

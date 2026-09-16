@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot · Pi pinleri ve geri vites buzzeri</title>
+<style>
+  :root{
+    color-scheme:light;
+    --bg:#f2f4f7; --panel:#fff; --line:#d6dce4; --ink:#1c2128; --dim:#5a6570;
+    --accent:#2da44e; --warn:#bf8700; --stop:#cf222e; --idle:#0969da; --soft:#eef1f5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:18px 16px 40px;background:var(--bg);color:var(--ink);
+    font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+  .wrap{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+  h1{font-size:22px;margin:0;font-weight:600}
+  a{color:var(--idle)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .lbl{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim)}
+  .muted{color:var(--dim);font-size:13.5px}
+  .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .between{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--dim);flex:none}
+  .dot.ok{background:var(--accent)} .dot.bad{background:var(--stop)} .dot.go{background:var(--warn)}
+  button,select,input{font:600 14px/1 inherit;color:var(--ink);background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  button{cursor:pointer}
+  button:hover{border-color:var(--idle)}
+  button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.danger{border-color:var(--stop);color:var(--stop)}
+  input[type=number]{width:84px}
+  input[type=text]{width:100%}
+  label.chk{display:flex;align-items:center;gap:8px;font-weight:500;color:var(--dim)}
+  table{border-collapse:collapse;width:100%;margin-top:10px}
+  th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--soft);vertical-align:middle}
+  th{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);font-weight:600}
+  td input{padding:7px 9px;font-weight:500}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-top:12px}
+  .big{font:600 19px/1.2 ui-monospace,Menlo,monospace}
+  .warnbox{border-color:var(--warn);background:#fff8c5}
+  .note{font-size:13px;color:var(--dim);margin:10px 0 0}
+  .pinno{font:600 13px ui-monospace,Menlo,monospace;background:var(--soft);border-radius:6px;padding:4px 7px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="between">
+    <h1>Raspberry Pi pinleri</h1>
+    <span class="muted"><a href="/">&larr; ana sayfa</a> · <span id="machine">–</span></span>
+  </div>
+
+  <!-- ══ can this machine drive a pin at all ══ -->
+  <div class="card" id="gpioCard">
+    <div class="between">
+      <span class="lbl">Pi çıkışları</span>
+      <span class="row" style="gap:7px"><span class="dot" id="gDot"></span><span class="muted" id="gTxt">–</span></span>
+    </div>
+    <p class="note" id="gNote">–</p>
+  </div>
+
+  <!-- ══ the reversing buzzer ══ -->
+  <div class="card">
+    <div class="between">
+      <span class="lbl">Geri vites buzzeri</span>
+      <span class="row" style="gap:7px"><span class="dot" id="bDot"></span><span class="muted" id="bTxt">–</span></span>
+    </div>
+    <p class="muted" style="margin:8px 0 0">Robot geri giderken iki pin birlikte
+      yüksek olur ve buzzer öter. Kural sürücüde değil sunucudadır: tarayıcı açık
+      olmasa da çalışır, tekerler geri dönmeye başladığı an öter.</p>
+
+    <div class="grid">
+      <div><span class="lbl">Pin 1 (BCM)</span><input type="number" id="pin1" min="0" max="27" step="1"></div>
+      <div><span class="lbl">Pin 2 (BCM)</span><input type="number" id="pin2" min="0" max="27" step="1" placeholder="yok"></div>
+      <div><span class="lbl">Bip süresi (ms)</span><input type="number" id="beepMs" min="50" max="5000" step="50"></div>
+      <div><span class="lbl">Bekleme (ms)</span><input type="number" id="gapMs" min="50" max="5000" step="50"></div>
+      <div><span class="lbl">Ses biçimi</span>
+        <select id="mode"><option value="beep">bip · bip · bip</option><option value="steady">sürekli</option></select></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="enable">Buzzer kapalı</button>
+      <button id="test">Sesi dene</button>
+      <label class="chk"><input type="checkbox" id="invert"> modül LOW'da ötüyor</label>
+      <span class="muted" id="bState">–</span>
+    </div>
+    <p class="note">Ucuz buzzer/röle modüllerinin çoğu LOW'da öter; sesi dene düğmesi
+      ötmüyorsa önce bu kutuyu işaretleyin. Ayarlar <code>follow.json</code>'a yazılır,
+      sunucu yeniden başlayınca da geçerlidir.</p>
+  </div>
+
+  <!-- ══ my pin notes ══ -->
+  <div class="card">
+    <div class="between">
+      <span class="lbl">Pin notlarım</span>
+      <span class="muted">her sayfada görünür · <code>/api/pins</code></span>
+    </div>
+    <p class="muted" style="margin:8px 0 0">Hangi kablo nereye gidiyor, burada yazılı
+      kalsın. Çıkış olarak işaretlenen pinleri buradan elle de sürebilirsiniz —
+      yalnızca burada yazılı olanları, yanlış bir pini sürmek kartı bozabilir.</p>
+    <table>
+      <thead><tr><th style="width:90px">Pin</th><th style="width:150px">Ad</th><th>Not</th>
+        <th style="width:110px">Yön</th><th style="width:150px">Durum</th><th style="width:44px"></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="row" style="margin-top:12px">
+      <input type="number" id="newPin" min="0" max="27" step="1" placeholder="GPIO">
+      <input type="text" id="newLabel" placeholder="ad (ör. buzzer +)" style="width:180px">
+      <button id="add">Ekle</button>
+      <span class="muted" id="saved">–</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+let ws = null, wsOpen = false, status = null;
+let pins = [];            // [{pin, label, note, dir}] — the saved notes
+let seeded = false;       // the form has been filled from the server once
+const send = (o) => { if (wsOpen) ws.send(JSON.stringify(o)); };
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/`);
+  ws.onopen = () => { wsOpen = true; };
+  ws.onclose = () => { wsOpen = false; $('gDot').className = 'dot bad'; $('gTxt').textContent = 'sunucu yok'; setTimeout(connect, 1000); };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (ev) => {
+    let s; try { s = JSON.parse(ev.data); } catch { return; }
+    if (s.type === 'status') paint(s);
+  };
+}
+
+function paint(s) {
+  status = s;
+  $('machine').textContent = s.machine === 'marlin' ? 'Ender kartı' : 'ESP32';
+  const b = s.buzzer || {};
+  const g = b.gpio || {};
+
+  $('gDot').className = 'dot ' + (g.available ? 'ok' : 'bad');
+  $('gTxt').textContent = g.available ? `hazır · ${g.backend}` : 'pin sürülemiyor';
+  $('gNote').textContent = g.available
+    ? `Pinler ${g.backend === 'sysfs' ? '/sys/class/gpio üzerinden' : 'pinctrl ile'} sürülüyor. `
+      + `${g.writes} yazma, ${g.failed} hata.`
+    : (g.error || 'Bu makinede Pi pinleri yok. Ayarlar yine de kaydedilir; robotun üzerinde çalışır.');
+
+  $('bDot').className = 'dot ' + (!b.enabled ? '' : b.sounding ? 'go' : 'ok');
+  $('bTxt').textContent = !b.enabled ? 'kapalı' : b.reversing ? 'GERİ — ötüyor' : 'açık, bekliyor';
+  $('bState').textContent = `robot ${b.reversing ? 'geri gidiyor' : 'geri gitmiyor'} · ${b.beeps || 0} bip`;
+  $('enable').textContent = b.enabled ? 'Buzzer açık' : 'Buzzer kapalı';
+  $('enable').className = b.enabled ? 'on' : '';
+  $('test').disabled = !b.enabled;
+
+  if (!seeded && b.pins) {
+    seeded = true;
+    $('pin1').value = b.pins[0] ?? '';
+    $('pin2').value = b.pins[1] ?? '';
+    $('beepMs').value = b.beepMs;
+    $('gapMs').value = b.gapMs;
+    $('mode').value = b.mode;
+    $('invert').checked = !!b.invert;
+  }
+
+  const saved = (s.follow_cfg && s.follow_cfg.pins) || [];
+  if (JSON.stringify(saved) !== JSON.stringify(pins)) { pins = saved; drawRows(); }
+  else drawLive(g);
+}
+
+// ── the buzzer's settings ────────────────────────────────────────────
+function buzzerCfg(extra = {}) {
+  const p = [Number($('pin1').value), Number($('pin2').value)]
+    .filter((n) => Number.isInteger(n) && n >= 0 && n <= 27);
+  return { buzzer: {
+    pins: p,
+    beepMs: Number($('beepMs').value) || 400,
+    gapMs: Number($('gapMs').value) || 400,
+    mode: $('mode').value,
+    invert: $('invert').checked,
+    enabled: (status && status.buzzer) ? status.buzzer.enabled : false,
+    ...extra,
+  } };
+}
+const saveBuzzer = (extra) => { send({ cmd: 'follow_cfg', cfg: buzzerCfg(extra) }); flash(); };
+for (const id of ['pin1', 'pin2', 'beepMs', 'gapMs', 'mode', 'invert']) {
+  $(id).addEventListener('change', () => saveBuzzer());
+}
+$('enable').addEventListener('click', () => saveBuzzer({ enabled: !(status && status.buzzer && status.buzzer.enabled) }));
+$('test').addEventListener('click', () => send({ cmd: 'buzzer_test', ms: 900 }));
+
+// ── the notes ────────────────────────────────────────────────────────
+function savePins() { send({ cmd: 'follow_cfg', cfg: { pins } }); flash(); }
+
+let flashAt = 0;
+function flash() {
+  flashAt = Date.now();
+  $('saved').textContent = 'kaydedildi';
+  setTimeout(() => { if (Date.now() - flashAt >= 1400) $('saved').textContent = ''; }, 1500);
+}
+
+function drawRows() {
+  $('rows').innerHTML = pins.map((p, i) => `
+    <tr data-i="${i}">
+      <td><span class="pinno">GPIO${esc(p.pin)}</span></td>
+      <td><input type="text" data-f="label" value="${esc(p.label || '')}"></td>
+      <td><input type="text" data-f="note" value="${esc(p.note || '')}" placeholder="nereye bağlı, ne yapıyor"></td>
+      <td><select data-f="dir">
+        <option value="out"${p.dir === 'out' ? ' selected' : ''}>çıkış</option>
+        <option value="in"${p.dir === 'in' ? ' selected' : ''}>giriş / not</option></select></td>
+      <td class="live"></td>
+      <td><button class="danger" data-del="${i}" title="sil">×</button></td>
+    </tr>`).join('') || '<tr><td colspan="6" class="muted">henüz not yok</td></tr>';
+  drawLive((status && status.buzzer && status.buzzer.gpio) || {});
+}
+
+function drawLive(g) {
+  const live = (g && g.pins) || {};
+  for (const tr of document.querySelectorAll('#rows tr[data-i]')) {
+    const p = pins[Number(tr.dataset.i)];
+    const cell = tr.querySelector('.live');
+    if (!p) continue;
+    if (p.dir !== 'out') { cell.innerHTML = '<span class="muted">–</span>'; continue; }
+    const on = live[p.pin] === 1;
+    const busy = (status && status.buzzer && (status.buzzer.pins || []).includes(Number(p.pin)));
+    cell.innerHTML = busy
+      ? `<span class="muted">buzzer · ${on ? 'yüksek' : 'düşük'}</span>`
+      : `<button data-set="${p.pin}" class="${on ? 'on' : ''}">${on ? 'yüksek' : 'düşük'}</button>`;
+  }
+}
+
+$('rows').addEventListener('change', (e) => {
+  const tr = e.target.closest('tr[data-i]');
+  if (!tr || !e.target.dataset.f) return;
+  pins[Number(tr.dataset.i)][e.target.dataset.f] = e.target.value;
+  savePins();
+});
+$('rows').addEventListener('click', (e) => {
+  const del = e.target.closest('button[data-del]');
+  if (del) {
+    pins.splice(Number(del.dataset.del), 1);
+    drawRows(); savePins();
+    return;
+  }
+  const set = e.target.closest('button[data-set]');
+  if (set) {
+    const pin = Number(set.dataset.set);
+    const on = set.classList.contains('on');
+    send({ cmd: 'pi_pin', pin, value: on ? 0 : 1 });
+  }
+});
+$('add').addEventListener('click', () => {
+  const pin = Number($('newPin').value);
+  if (!Number.isInteger(pin) || pin < 0 || pin > 27) { $('saved').textContent = 'GPIO 0–27 arası olmalı'; return; }
+  if (pins.some((p) => Number(p.pin) === pin)) { $('saved').textContent = 'bu pin zaten listede'; return; }
+  pins = [...pins, { pin, label: $('newLabel').value || '', note: '', dir: 'out' }]
+    .sort((a, b) => a.pin - b.pin);
+  $('newPin').value = ''; $('newLabel').value = '';
+  drawRows(); savePins();
+});
+
+drawRows();
+connect();
+</script>
+</body>
+</html>

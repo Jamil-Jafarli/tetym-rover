@@ -452,9 +452,12 @@ try {
   const log = await (await fetch(`${BASE}/api/marlin/log?since=0`)).json();
   ok(Array.isArray(log.lines) && typeof log.seq === 'number', 'the log is readable');
 
-  const page = await fetch(`${BASE}/`);
+  // / is the hub for both machines now; the hold-WASD page moved to /gcode.
+  const hub = await fetch(`${BASE}/`);
+  ok(hub.ok && /Robot kontrol/.test(await hub.text()), 'the hub is served at /');
+  const page = await fetch(`${BASE}/gcode`);
   const html = await page.text();
-  ok(page.ok && /Hold W A S D/.test(html), 'the page is served at /');
+  ok(page.ok && /Hold W A S D/.test(html), 'the hold-WASD page is served at /gcode');
   ok(/G1 X-100 Y100 F1000/.test(html), 'the page states the forward line it sends');
   ok((await fetch(`${BASE}/gcode`)).ok, '...and at /gcode, as it was before the merge');
 
@@ -500,7 +503,7 @@ try {
   ok(wrongVerb.status === 405, 'a GET where a POST belongs is a 405');
 
   // ...and the page is still served after all of that.
-  ok((await fetch(`${BASE}/`)).ok, 'the page still serves');
+  ok((await fetch(`${BASE}/gcode`)).ok, 'the page still serves');
 
   // /follow's keys and fork over the socket, and the server's own dead-man.
   const ws = new WebSocket('ws://127.0.0.1:8198/');

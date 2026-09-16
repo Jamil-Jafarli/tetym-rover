@@ -267,6 +267,18 @@ export class Rover {
     };
   }
 
+  /**
+   * True while the robot is actually backing up — both wheels asked to go
+   * backwards, and asked by something that is allowed to drive. Pivoting on
+   * the spot is not reversing: one wheel goes back, the robot does not.
+   * This is what sounds the buzzer; see buzzer.js.
+   */
+  get reversing() {
+    if (!this.running || this.holdReason) return false;
+    const [left, right] = this.demand;
+    return left <= -DEADBAND_PCT && right <= -DEADBAND_PCT;
+  }
+
   /** Ground speed and turn implied by a demand, for the UI and for tests. */
   motionFor(leftPct, rightPct) {
     const { dLeft, dRight } = this.chunkFor(leftPct, rightPct);
@@ -295,6 +307,7 @@ export class Rover {
       out: this.running ? this.demand.map((v) => Math.round(v * 10) / 10) : [0, 0],
       max_feed: this.maxFeed,
       chunk_ms: this.chunkMs,
+      reversing: this.reversing,
       keys: this.keys,
       lift: { dir: this.lift, feed: this.liftFeed, invert: this.liftInvert },
       jogging: this.jog.active,

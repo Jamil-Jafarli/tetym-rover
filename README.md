@@ -1170,6 +1170,40 @@ The path is fetched once over HTTP (`GET /api/route`) and appended to from the
 status stream, because sending 1 500 points ten times a second to say the last
 one moved 5 cm is how a dashboard becomes the reason the robot stutters.
 
+### The reversing buzzer, and the Pi's own pins — `/pins`
+
+A forklift that backs up silently is the one hazard here that is not a software
+fault: everything else it does is in front of it. So when both wheels are asked
+to go backwards, two of the Pi's pins go high and the buzzer sounds — decided in
+the server, from the same demand the motors get, so it sounds with no browser
+open. A pivot is not reversing (one wheel goes back, the robot does not), and a
+robot that is stopped or held by the PLC is not reversing either.
+
+`/pins` is where it is set up and where the wiring is written down:
+
+| | |
+|---|---|
+| **Geri vites buzzeri** | the pins (two by default), beep and gap in ms, steady instead of beeping, "modül LOW'da ötüyor" for the cheap boards that sound on LOW, and **Sesi dene** |
+| **Pin notlarım** | GPIO number, a name, a note, and whether it is an output. Saved in `follow.json`, shown on the hub page, served at `GET /api/pins` |
+
+Off until someone turns it on: no pin is driven before the wiring is described.
+Only pins written down as outputs can be driven by hand — a number typed into a
+page could be the serial console or the I²C bus. Driving them needs permission
+for the pins: `/sys/class/gpio` (the `gpio` group) or `pinctrl`; where there is
+neither — a laptop — the page says so instead of pretending, and the settings
+still save for the robot.
+
+On the ESP32 bench the same page is at `/pi-pins`; `/pins` there is still the
+ESP32's own GPIOs.
+
+### One page to start from — `/`
+
+Typing the robot's address lands on the hub: the link status, what the wheels
+are doing, the buzzer, the pin notes, and a tile to every page **this** machine
+serves — the tiles are built from `GET /api/pages`, so a page that is not
+served is not offered. On the Ender rover the hold-WASD G-code page moved from
+`/` to `/gcode`; everything else kept its address.
+
 ### Keys on /follow — following, hand driving and the fork
 
 | key | what it does |
@@ -2081,6 +2115,9 @@ printer's, and the third is what both machines run.
 | `public/obstacle.html` | forward sonar: drive, stop, wait, carry on |
 | `public/dashboard.html` | everything at once: speed, volts, ESP32 + Pi, camera, obstacle, QR, the field map and the next turn |
 | `public/route.js` | dead reckoning: two wheel percentages → a path. Pure |
+| `gpio.js` | the Pi's output pins: sysfs, pinctrl, or an honest "this machine has none" |
+| `buzzer.js` | the reversing buzzer: the beep pattern and which pins it drives |
+| `public/pins_pi.html` | /pins: the buzzer's settings and the pin notes |
 | `public/field.js` | the competition and practice fields (ek şartname): the graph, the QR texts, localisation, the plan and the turns. Pure |
 | `public/plc.js` | the PLC protocol (PAKET_TX / PAKET_RX) and the mission's durum 1–8. Pure |
 | `public/plc.html` | /plc: the link, the packets byte by byte, the mission, the field map, the simulator |
@@ -2173,6 +2210,7 @@ worth running without them.
 | `test/test_sonar.mjs` | the sonar logic, 29 checks, no browser |
 | `test/test_route.mjs` | dead reckoning, 43 checks, no browser |
 | `test/test_field.mjs` | the field graph against the ek şartname, the QR texts, localisation and the turns, 131 checks, no browser |
+| `test/test_buzzer.mjs` | the beep pattern, which pins go high, what counts as reversing, and the server refusing a pin nobody wrote down — 37 checks |
 | `test/test_plc.mjs` | PAKET_TX / PAKET_RX byte for byte, a full lap through the real field with the door both ways, the link against the simulator over UDP, and both servers holding their wheels — 99 checks |
 | `test/test_camera.mjs` | JPEG framing, a real QR decode, the Pi stats — 45 checks |
 | `test/test_lidar.mjs` | the SCN1 encoder byte-for-byte against the vector webscan's Swift test pins, the grid and motion gate, the simulator's map against its true walls, the relay end to end on both machines, ARKit's tracking flags, and the mDNS announcement appearing and withdrawing — 94 checks |

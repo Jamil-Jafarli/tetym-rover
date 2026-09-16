@@ -439,6 +439,19 @@ export class Bench {
    */
   stop() { this.running = false; this.lift = 0; }
 
+  /**
+   * True while the robot is actually backing up: both direction relays pulled
+   * in, and something on the pins. A pivot moves one relay, not both, and a
+   * robot that is stopped is not reversing however the relays are set.
+   * This is what sounds the buzzer; see buzzer.js.
+   */
+  get reversing() {
+    const [a, b, enabled] = this.resolve();
+    if (!enabled) return false;
+    const dir = this.dir;
+    return dir[0] === true && dir[1] === true && (a > 0 || b > 0);
+  }
+
   /** Everything that is being held, released. The lift is one of those. */
   idle() {
     this.running = false;
@@ -724,6 +737,7 @@ export class Bench {
       dir: this.dir,
       dir_settling: this.dirSettling,
       dir_name: Bench.dirName(this.dirWant),
+      reversing: this.reversing,
       set: [r1(this.p25), r1(this.p26)],       // percent the user typed
       out: [r1(outA), r1(outB)],               // percent actually streaming
       out_v: [r2(esp.pctToVolts(outA, this.vMax)),
