@@ -15,6 +15,7 @@ import path from 'node:path';
 
 import { PinLog, PIN_SOURCES } from '../pinlog.js';
 import { Actuator } from '../actuator.js';
+import { Gpio, sysfsBase } from '../gpio.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -88,6 +89,70 @@ console.log('\nLift — pinctrl hatası günlükte kalıyor, sonraki başarılı
   const e = log.status().entries[0];
   ok(e && e.source === 'lift' && e.pin === 10 && /izin reddedildi/.test(e.message) && e.action === 'pinctrl dl',
      `ama günlükte duruyor — GPIO10, pinctrl dl (${e && e.message})`);
+}
+
+console.log('\nPi pin yolu — pinctrl önce, sysfs çipin tabanıyla');
+{
+  // A fake /sys/class/gpio: nothing here reaches a real pin.
+  const fakeSysfs = (chips, preexport = []) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sysfs-'));
+    fs.writeFileSync(path.join(dir, 'export'), '');
+    fs.writeFileSync(path.join(dir, 'unexport'), '');
+    for (const [name, label, base, ngpio] of chips) {
+      fs.mkdirSync(path.join(dir, name));
+      fs.writeFileSync(path.join(dir, name, 'label'), label + '\n');
+      fs.writeFileSync(path.join(dir, name, 'base'), base + '\n');
+      fs.writeFileSync(path.join(dir, name, 'ngpio'), ngpio + '\n');
+    }
+    for (const n of preexport) {
+      fs.mkdirSync(path.join(dir, `gpio${n}`));
+      fs.writeFileSync(path.join(dir, `gpio${n}`, 'direction'), 'in');
+      fs.writeFileSync(path.join(dir, `gpio${n}`, 'value'), '0');
+    }
+    return dir;
+  };
+  const pi4 = [['gpiochip512', 'pinctrl-bcm2711', 512, 58], ['gpiochip570', 'raspberrypi-exp-gpio', 570, 8]];
+  const pi5 = [['gpiochip571', 'pinctrl-rp1', 571, 54], ['gpiochip512', 'gpio-brcmstb@107d508500', 512, 32]];
+
+  ok(sysfsBase(fakeSysfs(pi4)) === 512, 'Pi 4 (6.6+ çekirdek): GPIO0 = 512, GPIO17 = 529');
+  ok(sysfsBase(fakeSysfs(pi5)) === 571, 'Pi 5: pinctrl-rp1, GPIO0 = 571 — genişletici çip seçilmiyor');
+  ok(sysfsBase(fakeSysfs([])) === 0, 'eski çekirdek, çip yok: numaralar BCM ile aynı');
+
+  // pinctrl works: used, even with a writable sysfs next to it.
+  const calls = [];
+  const withPinctrl = new Gpio({ platform: 'linux', sysfs: fakeSysfs(pi4),
+    run: async (cmd, args) => { calls.push([cmd, ...args].join(' ')); return null; } });
+  ok(await withPinctrl.set(17, 1) && withPinctrl.status().backend === 'pinctrl',
+     'pinctrl çalışıyorsa sysfs yazılabilir olsa da pinctrl seçiliyor');
+  ok(calls.includes('pinctrl set 17 op dh'), 'BCM numarasıyla: pinctrl set 17 op dh');
+
+  // No pinctrl, Pi 4 sysfs: the write goes to gpio529, not gpio17.
+  const log = new PinLog();
+  const dir4 = fakeSysfs(pi4, [529]);
+  const g4 = new Gpio({ platform: 'linux', sysfs: dir4, log, run: async () => 'ENOENT' });
+  const done4 = await g4.set(17, 1);
+  ok(done4 && g4.status().backend === 'sysfs' && g4.status().sysfs_base === 512, 'pinctrl yoksa sysfs, taban 512');
+  ok(fs.readFileSync(path.join(dir4, 'gpio529', 'value'), 'utf8') === '1'
+     && fs.readFileSync(path.join(dir4, 'gpio529', 'direction'), 'utf8') === 'out',
+     'GPIO17 → gpio529: yön out, değer 1');
+  ok(!fs.existsSync(path.join(dir4, 'gpio17')), 'gpio17 diye bir şeye yazılmadı — ilk sürümün hatası buydu');
+  ok(log.status().entries.length === 0, 'hata yok');
+
+  // A pin whose directory never appears: logged with the sysfs number.
+  const g4b = new Gpio({ platform: 'linux', sysfs: fakeSysfs(pi4), log, run: async () => 'ENOENT' });
+  const done4b = await g4b.set(27, 1);
+  const e = log.status().entries[0];
+  ok(!done4b && e && e.pin === 27 && e.action === 'sysfs gpio539 HIGH',
+     `yazılamayan pin günlükte sysfs numarasıyla: ${e && e.action}`);
+  ok(fs.readFileSync(path.join(g4b.sysfs, 'export'), 'utf8') === '539', "export'a 17+512 değil 27+512 = 539 yazıldı");
+
+  // Neither: nothing driven, said once.
+  const log2 = new PinLog();
+  const none = new Gpio({ platform: 'linux', sysfs: path.join(os.tmpdir(), 'yok-boyle-bir-yer'), log: log2,
+                          run: async () => 'pinctrl: command not found' });
+  ok(!(await none.set(17, 1)) && none.status().backend === 'none', 'ikisi de yoksa pin sürülmüyor');
+  ok(log2.status().entries.length === 1 && /pinctrl/.test(log2.status().entries[0].message),
+     've bir kez günlüğe yazılıyor');
 }
 
 console.log('\nSunucu — /api/pins/log');

@@ -1492,9 +1492,13 @@ robot that is stopped or held by the PLC is not reversing either.
 Off until someone turns it on: no pin is driven before the wiring is described.
 Only pins written down as outputs can be driven by hand — a number typed into a
 page could be the serial console or the I²C bus. Driving them needs permission
-for the pins: `/sys/class/gpio` (the `gpio` group) or `pinctrl`; where there is
-neither — a laptop — the page says so instead of pretending, and the settings
-still save for the robot.
+for the pins: `pinctrl` first (it takes the BCM number, and it is what the lift
+uses), `/sys/class/gpio` (the `gpio` group) only when there is no pinctrl. On a
+6.6+ kernel the sysfs numbers are the header chip's base plus the BCM number —
+GPIO17 is `gpio529` on a Pi 4, `gpio588` on a Pi 5 — and `gpio.js` reads the base
+from `gpiochip*/label`; writing a bare `17` is refused by the kernel every time.
+Where there is neither — a laptop — the page says so instead of pretending, and
+the settings still save for the robot.
 
 `--no-gpio` makes it dry — what was asked for is kept and shown, no pin is
 touched — which is how the test suites run on the robot's own Pi.

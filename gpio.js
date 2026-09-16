@@ -20,8 +20,14 @@
  *             library is missing must not look like a buzzer that is quiet
  *             because the robot is going forwards.
  *
- * sysfs first, because writing a file beats spawning a process; pinctrl when
- * sysfs is not there. Both are probed once, on the first write, and the result
+ * pinctrl first. It takes the BCM number printed on the pinout, it is what the
+ * lift already drives GPIO10/22 with on this robot, and it works the same on
+ * every Pi OS kernel. sysfs only when there is no pinctrl — and then with the
+ * GPIO chip's base added: since kernel 6.6 the sysfs numbers are not the BCM
+ * numbers any more (GPIO17 is 529 on a Pi 4 and 588 on a Pi 5), so writing
+ * "17" to /sys/class/gpio/export is refused, every time, while the directory
+ * looks perfectly writable. That was this file's first version: sysfs chosen,
+ * 0 writes, every one failed. Probed once, on the first write, and the result
  * is what `status().backend` reports.
  *
  * Nothing here reads a pin. Inputs on the Pi would need a library and an
@@ -33,6 +39,22 @@ import { execFile } from 'node:child_process';
 import os from 'node:os';
 
 const SYSFS = '/sys/class/gpio';
+
+/**
+ * The base of the chip the 40-pin header is on, from /sys/class/gpio/gpiochip*:
+ * pinctrl-bcm2835 (Pi 1–3, Zero), pinctrl-bcm2711 (Pi 4), pinctrl-rp1 (Pi 5).
+ * 0 when there is no such chip — an old kernel numbering from zero.
+ */
+export function sysfsBase(root = SYSFS) {
+  let chips = [];
+  try { chips = fs.readdirSync(root).filter((d) => /^gpiochip\d+$/.test(d)); } catch { return 0; }
+  const read = (d, f) => { try { return fs.readFileSync(`${root}/${d}/${f}`, 'utf8').trim(); } catch { return ''; } };
+  const header = chips
+    .map((d) => ({ label: read(d, 'label'), base: Number(read(d, 'base')), ngpio: Number(read(d, 'ngpio')) }))
+    .filter((c) => /^pinctrl-(rp1|bcm2711|bcm2835|bcm2712)/.test(c.label) && Number.isFinite(c.base) && c.ngpio >= 28)
+    .sort((a, b) => a.base - b.base)[0];
+  return header ? header.base : 0;
+}
 
 /** BCM numbering, the numbers printed on every Pi pinout diagram. */
 export const GPIO_MIN = 0;
@@ -62,10 +84,17 @@ export class Gpio {
    *   and shown, no pin is touched — for a laptop, and for the test suites,
    *   which run on the Pi itself (the same idea as --no-actuator)
    * @param {{add: Function}} [opts.log]  where failures are kept (pinlog.js)
+   * @param {string} [opts.sysfs]      the sysfs GPIO directory — for the tests
+   * @param {string} [opts.platform]   os.platform(), overridable for the tests
+   * @param {Function} [opts.run]      (cmd, args) => Promise<error|null> — for the tests
    */
-  constructor({ enabled = true, log = null } = {}) {
+  constructor({ enabled = true, log = null, sysfs = SYSFS, platform = os.platform(), run: runner = run } = {}) {
     this.enabled = enabled;
     this.log = log || { add() {} };
+    this.sysfs = sysfs;
+    this.platform = platform;
+    this.run = runner;
+    this.base = 0;               // sysfs number of BCM GPIO0, when sysfs is used
     this.backend = null;         // 'sysfs' | 'pinctrl' | 'none'
     this.error = null;
     this.state = new Map();      // pin -> 0/1, what we last asked for
@@ -85,22 +114,23 @@ export class Gpio {
         this.backend = 'none';
         return this.backend;
       }
-      if (os.platform() !== 'linux') {
-        this.error = `${os.platform()} — Raspberry Pi değil, pinler sürülmüyor`;
+      if (this.platform !== 'linux') {
+        this.error = `${this.platform} — Raspberry Pi değil, pinler sürülmüyor`;
         this.backend = 'none';
         return this.backend;
       }
-      if (fs.existsSync(`${SYSFS}/export`)) {
+      const err = await this.run('pinctrl', ['get', '17']);
+      if (!err) { this.backend = 'pinctrl'; this.error = null; return this.backend; }
+      if (fs.existsSync(`${this.sysfs}/export`)) {
         try {
-          fs.accessSync(`${SYSFS}/export`, fs.constants.W_OK);
+          fs.accessSync(`${this.sysfs}/export`, fs.constants.W_OK);
+          this.base = sysfsBase(this.sysfs);
           this.backend = 'sysfs';
           return this.backend;
-        } catch { /* no permission; try the next one */ }
+        } catch { /* no permission either */ }
       }
-      const err = await run('pinctrl', ['get', '0']);
-      if (!err) { this.backend = 'pinctrl'; return this.backend; }
-      this.error = 'ne /sys/class/gpio yazılabiliyor ne de pinctrl var '
-                 + '(Raspberry Pi OS Bookworm: sudo apt install raspi-gpio, '
+      this.error = 'ne pinctrl çalışıyor ne de /sys/class/gpio yazılabiliyor '
+                 + '(Raspberry Pi OS: sudo apt install raspi-utils — pinctrl; '
                  + 'ya da sunucuyu gpio grubundaki bir kullanıcıyla çalıştırın)';
       this.log.add({ source: 'pins', action: 'pin erişimi', message: `${this.error} — pinctrl: ${err}` });
       this.backend = 'none';
@@ -121,25 +151,27 @@ export class Gpio {
     if (backend === 'none') return false;
 
     if (backend === 'sysfs') {
+      // BCM n is sysfs base + n: see the header.
+      const s = this.base + n;
       try {
         if (!this._exported.has(n)) {
-          if (!fs.existsSync(`${SYSFS}/gpio${n}`)) fs.writeFileSync(`${SYSFS}/export`, String(n));
-          fs.writeFileSync(`${SYSFS}/gpio${n}/direction`, 'out');
+          if (!fs.existsSync(`${this.sysfs}/gpio${s}`)) fs.writeFileSync(`${this.sysfs}/export`, String(s));
+          fs.writeFileSync(`${this.sysfs}/gpio${s}/direction`, 'out');
           this._exported.add(n);
         }
-        fs.writeFileSync(`${SYSFS}/gpio${n}/value`, String(v));
+        fs.writeFileSync(`${this.sysfs}/gpio${s}/value`, String(v));
         this.writes++;
         return true;
       } catch (err) {
         this.failed++;
         this.error = `GPIO${n}: ${err.message || err}`;
-        this.log.add({ source: 'pins', pin: n, action: `sysfs ${v ? 'HIGH' : 'LOW'}`,
+        this.log.add({ source: 'pins', pin: n, action: `sysfs gpio${s} ${v ? 'HIGH' : 'LOW'}`,
                        message: String(err.message || err) });
         return false;
       }
     }
 
-    const err = await run('pinctrl', ['set', String(n), 'op', v ? 'dh' : 'dl']);
+    const err = await this.run('pinctrl', ['set', String(n), 'op', v ? 'dh' : 'dl']);
     if (err) {
       this.failed++;
       this.error = `GPIO${n}: ${err}`;
@@ -156,6 +188,7 @@ export class Gpio {
       backend: this.backend,
       available: this.backend !== null && this.backend !== 'none',
       error: this.error,
+      sysfs_base: this.backend === 'sysfs' ? this.base : null,
       writes: this.writes,
       failed: this.failed,
       pins: Object.fromEntries(this.state),
@@ -167,7 +200,7 @@ export class Gpio {
     for (const pin of [...this.state.keys()]) await this.set(pin, 0);
     if (this.backend === 'sysfs') {
       for (const n of this._exported) {
-        try { fs.writeFileSync(`${SYSFS}/unexport`, String(n)); } catch { /* going away anyway */ }
+        try { fs.writeFileSync(`${this.sysfs}/unexport`, String(this.base + n)); } catch { /* going away anyway */ }
       }
       this._exported.clear();
     }
