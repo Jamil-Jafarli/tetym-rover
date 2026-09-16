@@ -14,13 +14,30 @@
  *   · a command written past the queue was acknowledged too, and that `ok` was
  *     read as permission to send a queued command, so the host ran one command
  *     ahead of the board from then on
+ *   · CHUNK_OVERLAP first shipped anchored to *now* every cycle, not to a
+ *     running prediction of the board's own timeline — every steady-state gap
+ *     between sends was `CHUNK_OVERLAP` of a chunk short of the time that
+ *     chunk actually takes to drain, so the fixture's simulated planner backed
+ *     up without bound for as long as the key was held (depth 1 -> 4 in an
+ *     11-move, two-second hold). It is meant to hold a steady lookahead, not a
+ *     growing one — see Jogger._loop() in marlin.js
+ *   · after that fix a held key STILL moved in slices on the rover. The next
+ *     chunk went out 75 % of the way through the current one, which had
+ *     started alone by then — and Marlin never re-plans a move it is
+ *     executing, so every chunk braked to zero at its end. This fixture timed
+ *     every move as its own trapezoid and could not see it. It now models
+ *     blending and logs "rest" whenever a move sets off from a standstill; a
+ *     hold that logs more than one moves in slices
  *
  * The fixture is Python because Node has no openpty; it is skipped if python3
  * is missing.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { HOLD_MARGIN_S } from '../marlin.js';
 
 if (spawnSync('python3', ['-c', 'import pty']).status !== 0) {
   console.log('\npython3 not available — skipping the serial test\n');
@@ -51,8 +68,12 @@ async function bringUp({ port, m400 = '1' }) {
     });
   });
 
+  // --no-actuator / --routes: this suite runs on the Pi itself, and must
+  // neither drive the real lift pins nor touch the routes somebody taught.
+  const routes = path.join(os.tmpdir(), `routes-serial-${process.pid}-${port}.json`);
   const server = spawn('node',
-    ['server.js', '--http', String(port), '--host', '127.0.0.1', '--port', devPath],
+    ['server.js', '--http', String(port), '--host', '127.0.0.1', '--port', devPath,
+     '--no-camera', '--no-actuator', '--no-lidar', '--no-advertise', '--routes', routes],
     { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
   server.stdout.on('data', (d) => { log.boot += d; });
   server.stderr.on('data', (d) => { log.boot += d; });
@@ -68,7 +89,7 @@ async function bringUp({ port, m400 = '1' }) {
       return { code: r.status, body: await r.json() };
     },
     status: async () => (await fetch(`http://127.0.0.1:${port}/api/marlin/status`)).json(),
-    kill: () => { server.kill(); board.kill(); },
+    kill: () => { server.kill(); board.kill(); rmSync(routes, { force: true }); },
   };
 }
 
@@ -107,6 +128,16 @@ function deepestPlanner(phase) {
   return depths.length ? Math.max(...depths) : 0;
 }
 
+/** How many moves set off from a standstill. A smooth hold has exactly one. */
+const restsIn = (lines) => lines.filter((l) => l.includes('rest — this move sets off')).length;
+const rests = (phase) => restsIn(slice(phase));
+
+// How deep a steady hold may leave the planner: the chunk running, the one
+// behind it, and as many more as fit in the lead — HOLD_MARGIN_S plus the
+// fixture's first-move delay, which the host does not know about and so is
+// early by.
+const maxDepth = (chunkS) => 2 + Math.ceil((HOLD_MARGIN_S + 0.1) / chunkS);
+
 try {
   const before = await status();
   ok(before.connected === true, 'the server opened the pty');
@@ -129,38 +160,58 @@ try {
   await mark(1);
   const run = await post('run', { axes: { X: -1, Y: 1 } });   // default speed
   ok(run.code === 200 && run.body.mode === 'stream', 'the hold starts');
-  ok(run.body.chunk_seconds < 1,
-     `one chunk is well under a second (${run.body.chunk_seconds?.toFixed(2)} s)`);
-  await sleep(2000);
+  // 1.5s is the same "getting long" threshold the page itself warns past
+  // (paintStopHint in gcode.html) — below it a chunk is still a stream, not
+  // one slow move at a time.
+  ok(run.body.chunk_seconds < 1.5,
+     `one chunk is well under the page's 1.5s warning threshold (${run.body.chunk_seconds?.toFixed(2)} s)`);
+  // Four seconds: two half chunks, two start-up gaps, and then long enough to
+  // see the steady state at the default 1.13 s chunk.
+  await sleep(4000);
   await post('halt', {});                          // the key comes up
   await sleep(600);
   await mark(2);
 
   const held = received(1);
   const moves = held.filter((l) => l.startsWith('G1 '));
-  ok(moves.length >= 4,
-     `a two second hold sent ${moves.length} moves, not one`);
-  ok(new Set(moves).size === 1, `every one of them identical: ${moves[0]}`);
-  ok(/^G1 X-[\d.]+ Y[\d.]+ F6000$/.test(moves[0] || ''),
-     'shaped the way the operator asked for, at the default speed');
+  // Scales with the chunk size rather than a fixed count, so a bigger default
+  // step (fewer, longer chunks per second) does not make this brittle.
+  const minMoves = Math.max(4, Math.floor(3500 / (run.body.chunk_seconds * 1000)));
+  ok(moves.length >= minMoves,
+     `a four second hold sent ${moves.length} moves, not one (expected >= ${minMoves})`);
+  ok(moves[0] === moves[1] && moves[0] !== moves[2],
+     `it sets off with two half chunks, so a tap is still one chunk: ${moves[0]}`);
+  ok(new Set(moves.slice(2)).size === 1, `then every one identical: ${moves[2]}`);
+  ok(/^G1 X-[\d.]+ Y[\d.]+ F6000$/.test(moves[2] || ''),
+     'shaped the way the operator asked for — X−, Y+, nothing inverted — at the default speed');
 
-  // ── nothing may accumulate ────────────────────────────────────────
-  // The complaint this is here for: the rover kept moving after the key came
-  // up, because chunks were sent at 0.8x the move time and the planner filled.
-  console.log('\nNothing accumulates in the planner');
-  const pairs = held.filter((l) => l.startsWith('G1 ') || l === 'M400');
-  ok(pairs.length >= 8 && pairs.every((l, i) => (i % 2 === 0) === l.startsWith('G1 ')),
-     `every move is followed by its own M400  (${pairs.length} lines, alternating)`);
-  ok(deepestPlanner(1) === 1,
-     `the board never held more than one move at a time (${deepestPlanner(1)})`);
+  // ── smooth, and a steady lookahead rather than a growing one ─────────
+  // The complaint this is here for, three times over: a rover that moved in
+  // visible slices because nothing was queued ahead (the M400 design); a rover
+  // that kept moving after the key came up because chunks went out faster than
+  // the board drained them (the first overlap, anchored to "now"); and a rover
+  // that moved in slices again because the next chunk arrived after the
+  // current one had started alone (the 75 % overlap).
+  console.log('\nThe planner blends: one chunk is always waiting behind the one running');
+  ok(!held.includes('M400'),
+     'chunks are no longer paired with M400 — nothing here waits for one to finish');
+  ok(rests(1) === 1,
+     `the rover set off from a standstill once, at the start — never between chunks (${rests(1)})`);
+  const chunk = run.body.chunk_seconds;
+  ok(deepestPlanner(1) <= maxDepth(chunk),
+     `the lookahead stays bounded (deepest ${deepestPlanner(1)}, at most ${maxDepth(chunk)})`);
+  ok(deepestPlanner(1) >= 3,
+     'and it is real — one running, one waiting behind it, the next arriving before it starts');
 
   const spacing = gaps(1);
-  const chunk = run.body.chunk_seconds;
-  ok(Math.min(...spacing) >= chunk,
-     `no move was sent before the previous had finished `
-     + `(closest ${Math.min(...spacing).toFixed(3)}s vs a ${chunk.toFixed(3)}s move)`);
-  ok(mean(spacing) < chunk * 1.6,
-     `...and not so much later that the machine stutters (mean ${mean(spacing).toFixed(3)}s)`);
+  // The halves go out back to back; after the start-up, one chunk per cruise
+  // time. Shorter and the schedule outruns the board (the first overlap bug);
+  // longer — the trapezoid, ramps included — and the planner starves.
+  ok(spacing[0] < 0.05, `the two halves go out back to back (gap ${spacing[0].toFixed(3)}s)`);
+  const steady = spacing.slice(3);
+  ok(steady.length >= 1 && steady.every((s) => Math.abs(s - chunk) < chunk * 0.1),
+     `then one chunk per cruise time (chunk ${chunk.toFixed(3)}s, gaps `
+     + `${steady.map((s) => s.toFixed(3))})`);
 
   // ── 2. the release ────────────────────────────────────────────────
   console.log('\nReleasing the key stops the stream');
@@ -178,8 +229,9 @@ try {
     await post('halt', {});
     await sleep(400);
     await mark(phase + 1);
-    return { predicted: r.body.chunk_seconds, measured: mean(gaps(phase)),
-             deepest: deepestPlanner(phase) };
+    // The start-up gaps (halves, then the ramp) are not the steady rate.
+    return { predicted: r.body.chunk_seconds, measured: mean(gaps(phase).slice(3)),
+             deepest: deepestPlanner(phase), rests: rests(phase) };
   }
 
   const slow = await holdAt(2, 1500, 20, 4000);     // phase 2, marks 3
@@ -196,8 +248,13 @@ try {
        `${name}: a ${r.predicted.toFixed(3)}s move went out every `
        + `${r.measured.toFixed(3)}s — the gap is the move`);
   }
-  ok(slow.deepest === 1 && fast.deepest === 1,
-     'and neither speed lets a move pile up');
+  ok(slow.deepest <= maxDepth(slow.predicted) && fast.deepest <= maxDepth(fast.predicted),
+     `and neither speed lets the lookahead pile up `
+   + `(F1500: ${slow.deepest}, F12000: ${fast.deepest})`);
+  // At most one: the F12000 hold can begin while the F1500 one's last chunks
+  // are still on the board, and then it joins them without stopping at all.
+  ok(slow.rests <= 1 && fast.rests <= 1,
+     `and both are smooth — never a stop between chunks (F1500: ${slow.rests}, F12000: ${fast.rests})`);
 
   // Above a point the feed rate stops mattering, because a short chunk never
   // reaches it — the move is acceleration-limited and the trapezoid collapses
@@ -276,11 +333,11 @@ try {
     .lines.map((l) => l.text).join(' ');
   ok(/M400 does not wait on this firmware/.test(said),
      'and the page log says so rather than leaving it a mystery');
-  ok(/paced|pacing each chunk by its own run time/.test(said),
-     '...along with what it is doing instead');
+  ok(/paces itself by the clock either way/.test(said),
+     '...along with the fact that it makes no difference to the held-key stream');
 
   const lied = await liar.post('run', { axes: { X: -1, Y: 1 } });
-  await sleep(2500);
+  await sleep(4000);
   await liar.post('halt', {});
   await sleep(500);
 
@@ -288,15 +345,19 @@ try {
   const depths = wire.map((l) => /planner=(\d+)/.exec(l)).filter(Boolean).map((m) => +m[1]);
   const at = wire.filter((l) => / --> G1 /.test(l)).map((l) => parseFloat(l.slice(1, 9)));
   const spans = at.slice(1).map((t, i) => t - at[i]);
+  const liedChunk = lied.body.chunk_seconds;
 
-  ok(at.length >= 4, `the hold still streams (${at.length} moves)`);
-  ok(Math.max(...depths) === 1,
-     `and STILL nothing accumulates (deepest planner ${Math.max(...depths)})`);
-  ok(Math.min(...spans) >= lied.body.chunk_seconds,
-     `every gap covers the whole move (closest ${Math.min(...spans).toFixed(3)}s `
-     + `vs ${lied.body.chunk_seconds.toFixed(3)}s)`);
-  ok(mean(spans) < lied.body.chunk_seconds * 1.6,
-     `without being needlessly slow about it (mean ${mean(spans).toFixed(3)}s)`);
+  // Scales with the chunk size, same reasoning as minMoves above.
+  const liedMinMoves = Math.max(4, Math.floor(3500 / (liedChunk * 1000)));
+  ok(at.length >= liedMinMoves,
+     `the hold still streams (${at.length} moves, expected >= ${liedMinMoves})`);
+  // Same pacing as a board where M400 blocks — this no longer depends on it.
+  ok(Math.max(...depths) <= maxDepth(liedChunk),
+     `and STILL a bounded lookahead (deepest planner ${Math.max(...depths)})`);
+  ok(restsIn(wire) === 1, `and STILL smooth — one start from standstill (${restsIn(wire)})`);
+  ok(spans[0] < 0.05, `the halves go out back to back here too (gap ${spans[0].toFixed(3)}s)`);
+  ok(spans.slice(3).every((s) => Math.abs(s - liedChunk) < liedChunk * 0.1),
+     `and then one chunk per cruise time (${spans.slice(3).map((s) => s.toFixed(3))})`);
 } finally {
   rig.kill();
   if (liar) liar.kill();

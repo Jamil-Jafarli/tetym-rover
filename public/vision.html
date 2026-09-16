@@ -56,6 +56,9 @@
     left:50%;transition:left .06s linear}
   .steer:after{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;
     background:var(--dim);opacity:.6}
+  .qrbig{font:600 26px/1.2 ui-monospace,Menlo,monospace;margin-top:8px;
+    word-break:break-all;color:#d2a8ff}
+  #qrHist{margin:8px 0 0;padding-left:20px;font:12px/1.6 ui-monospace,Menlo,monospace}
 </style>
 </head>
 <body>
@@ -70,7 +73,7 @@
     </div>
     <div class="row" style="margin-top:10px">
       <span class="muted"><a href="/">&larr; ana sayfa</a></span>
-      <span class="muted"><a href="/drive">sür &rarr;</a></span>
+      <span class="muted"><a href="/follow">sür &rarr;</a></span>
     </div>
     <div class="err" id="err" hidden></div>
   </div>
@@ -83,12 +86,27 @@
     <div class="read">
       <div><span class="lbl">Sapma</span><b id="rErr">–</b></div>
       <div><span class="lbl">Şerit</span><b id="rBands">–</b></div>
+      <div><span class="lbl">Köşe</span><b id="rCorner">–</b></div>
+      <div><span class="lbl">Çizgi sonu</span><b id="rEnd">–</b></div>
+      <div><span class="lbl">Kavşak</span><b id="rJunc">–</b></div>
       <div><span class="lbl">FPS</span><b id="rFps">–</b></div>
     </div>
     <div class="steer"><i id="steer"></i></div>
     <div class="muted" style="margin-top:10px;text-align:center" id="hint">
       Kameranı yola tut
     </div>
+  </div>
+
+  <!-- The robot's own QR reader — on the server, from the Pi's camera; this
+       only shows what it read. See public/qrview.js and qr.js. -->
+  <div class="card">
+    <div class="row">
+      <span class="lbl" style="margin:0">QR kod</span>
+      <span class="muted" id="qrState">–</span>
+    </div>
+    <div class="qrbig" id="qrText">–</div>
+    <div class="muted" id="qrMeta" style="margin-top:6px"></div>
+    <ol id="qrHist" class="muted"></ol>
   </div>
 
   <div class="card">
@@ -117,6 +135,7 @@
     <div class="lbl">Parkur türü</div>
     <div class="btnrow" style="margin-top:0">
       <button id="mAuto" class="on">Avto</button>
+      <button id="mLine">Yarışma çizgisi</button>
       <button id="mDark">Siyah yol</button>
       <button id="mWhite">Ağ yol</button>
     </div>
@@ -141,6 +160,14 @@
       <input type="range" id="bias" min="-60" max="60" step="1" value="0">
     </div>
     <div class="sl">
+      <div class="row"><span class="muted">Kontrast — 0 kapalı, + farkı güçlendirir, − griye yaklaştırır</span><b id="vContrast">0 (kapalı)</b></div>
+      <input type="range" id="contrast" min="-300" max="300" step="5" value="0">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Kenar keskinliği — çizgi kenarı en az bu kadar sıçramalı</span><b id="vEdge">18</b></div>
+      <input type="range" id="edge" min="0" max="80" step="1" value="18">
+    </div>
+    <div class="sl">
       <div class="row"><span class="muted">Renk toleransı — ne kadar «beyaz»</span><b id="vSat">60</b></div>
       <input type="range" id="sat" min="0" max="150" step="1" value="60">
     </div>
@@ -160,27 +187,58 @@
       <div class="row"><span class="muted">Süreklilik — şeritler arası max sıçrama</span><b id="vJump">14 %</b></div>
       <input type="range" id="jump" min="4" max="50" step="1" value="14">
     </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Köşe kolu — yolun kendi eninin kaç katı taşmalı</span><b id="vArm">0.80</b></div>
+      <input type="range" id="arm" min="20" max="250" step="5" value="80">
+    </div>
+
+    <div class="lbl" style="margin:18px 0 10px">Yarışma çizgisi (mavi | turuncu | mavi)</div>
+    <div class="sl">
+      <div class="row"><span class="muted">Renk gücü — bundan soluk piksel renksiz sayılır</span><b id="vChroma">45</b></div>
+      <input type="range" id="chroma" min="10" max="140" step="1" value="45">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Renk toleransı — nominal maviden/turuncudan sapma</span><b id="vHueTol">32°</b></div>
+      <input type="range" id="hueTol" min="8" max="70" step="1" value="32">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Sütun doluluğu — şeridin sütunu ne kadar kaplamalı</span><b id="vFill">50 %</b></div>
+      <input type="range" id="fill" min="15" max="90" step="1" value="50">
+    </div>
     <div class="muted" style="margin-top:10px">
-      Otomatik eşik her karede Otsu yöntemiyle hesaplanır — ışık değişince kendi uyum sağlar.
-      Düzeltme onun üstüne eklenir. Mevcut eşik: <b id="vThr">–</b>
+      Her şerit kendi eşiğini kendisi bulur — kare geneli değil, o şeridin en parlak ve
+      en koyu sütunu arasındaki orta nokta. Düzeltme onun üstüne eklenir.
+      Tekerin önündeki şeritte ölçülen fark: <b id="vSeen">–</b> —
+      bu değer «kenar keskinliği»nin altına düşerse orada çizgi yok sayılır.
+      Kare geneli Otsu eşiği (yalnızca oto mod kararı için): <b id="vThr">–</b>
     </div>
   </div>
 
   <div class="card">
     <div class="lbl">Bu sayfa ne yapar</div>
-    <p class="muted" style="margin:8px 0 0">Her kareyi griye çevirir, otomatik eşikle
-    beyaz pikselleri ayırır, sonra ROIyi yatay şeritlere böler. <b>Siyah yol</b> modunda
-    her şeritte iki beyaz kenar arasındaki en geniş siyah koridoru bulur.</p>
+    <p class="muted" style="margin:8px 0 0">Her kareyi griye çevirir, <b>kontrast</b>ı
+    uygular, ROIyi yatay şeritlere böler — ve <b>her şerit kendi eşiğini kendisi
+    hesaplar</b>. Aranan şey renk değil <b>kenar</b>: bir koridorun yol sayılması için
+    kenarında en az «kenar keskinliği» kadar parlaklık sıçraması olmalı.
+    Bu yüzden karanlık bir köşe artık çizgi sanılmaz — koyu bir <i>bölgenin</i> kenarı
+    yoktur, koyu bir <i>çizginin</i> vardır. Şeritte hiç kenar yoksa orası «yol yok»
+    olarak bildirilir; uydurma bir koridor döndürülmez.</p>
     <p class="muted" style="margin:8px 0 0"><b>Oto</b> modunda parkur türünü kendi seçer.
     Kamera yere yakın olduğu için karenin alt-ortası (mavi çerçeve) zaten yoldur —
     yani yolun rengini tahmin etmek gerekmez, doğrudan ölçülebilir. Onu iki
     yan şeritle (sarı çerçeveler) ve görüntüdeki toplam beyaz oranıyla karşılaştırır;
     üç işaretten ikisi anlaşmazsa kararı değişmez.</p>
-    <p class="muted" style="margin:8px 0 0">Üç geometrik kural sahte bulguları eler:
+    <p class="muted" style="margin:8px 0 0">Dört geometrik kural sahte bulguları eler:
     arama <b>alt şeritten başlar ve yukarı tırmanır</b> — her şerit altındakinin
-    devamı olmalı; yukarı gittikçe <b>kenarlar kesilir</b>; ve koridor
-    <b>her iki taraftan beyazla sınırlanmalı</b>. Sağdaki beyaz mobilya bu üç kuraldan
-    hiçbirini karşılamaz.</p>
+    devamı olmalı; yukarı gittikçe <b>kenarlar kesilir</b>; koridor
+    <b>gerçek bir parlaklık sıçramasıyla sınırlanmalı</b> (iki taraflı olan tek
+    taraflıyı yener); ve <b>şeridin tamamını dolduran bir koridor kabul edilmez</b> —
+    o kadar geniş olan şey yol değil, başarısız bir eşiktir. Sağdaki beyaz mobilya
+    bu kuralların hiçbirini karşılamaz.</p>
+    <p class="muted" style="margin:8px 0 0"><b>QR kod</b> kartı robotun öz
+    oxuyucusudur: Pi kamerasından, sunucuda, saniyədə 5 kadr. Səhifə açıq olmasa da,
+    rover hərəkət edərkən də oxuyur — /follow-un yük daşıması onu istifadə edir. Kod kadrdadırsa bənövşəyi
+    çərçivə ilə göstərilir (yalnız RPi kamerasında — başqa şəkildə çərçivə yalan olardı).</p>
     <p class="muted" style="margin:8px 0 0"><b>Motorlara hiçbir şey göndermez.</b>
     Yalnızca bakış ve ayarlama içindir.</p>
   </div>
@@ -189,7 +247,7 @@
 
 <script src="/road.js"></script>
 <script src="/cam.js"></script>
-<script src="/wheels.js"></script>
+<script src="/qrview.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const view = $('view'), vctx = view.getContext('2d', { willReadFrequently: true });
@@ -212,16 +270,28 @@ const bind = (id, label, apply) => {
 };
 bind('roi',   v => $('vRoi').textContent = v + ' %',  v => cfg.roi = v / 100);
 bind('bias',  v => $('vBias').textContent = v,        v => cfg.bias = v);
+bind('contrast', v => $('vContrast').textContent = v == 0 ? '0 (kapalı)' : (v / 100).toFixed(2),
+                                                       v => cfg.contrast = v / 100);
+bind('edge',  v => $('vEdge').textContent = v == 0 ? '0 (kapalı)' : v,
+                                                       v => cfg.edge = v);
 bind('sat',   v => $('vSat').textContent = v,         v => cfg.sat = v);
 bind('minw',  v => $('vMin').textContent = v + ' %',  v => cfg.minw = v / 100);
 bind('bands', v => $('vBands').textContent = v,       v => cfg.bands = v);
 bind('side',  v => $('vSide').textContent = v + ' %',  v => cfg.side = v / 100);
 bind('jump',  v => $('vJump').textContent = v + ' %',  v => cfg.jump = v / 100);
+bind('arm',   v => $('vArm').textContent = (v / 100).toFixed(2), v => cfg.arm = v / 100);
+bind('chroma', v => $('vChroma').textContent = v,          v => cfg.chroma = v);
+bind('hueTol', v => $('vHueTol').textContent = v + '°',    v => cfg.hueTol = v);
+bind('fill',   v => $('vFill').textContent = v + ' %',     v => cfg.fill = v / 100);
 
 const MODE_HINT = {
-  auto:  'Karenin altına bakıp kendi karar verir — kamera yere yakın olduğu için '
-       + 'tekerin önündeki alan zaten yoldur, yani yolun rengi ölçülür, '
-       + 'tahmin edilmez. Üç işaretten ikisi anlaşmalı.',
+  auto:  'Önce yarışma çizgisini arar — mavi|turuncu|mavi bir imzadır, tartışmaya '
+       + 'gerek yok: ya vardır ya yoktur. Yoksa siyah/beyaz okumalarına döner ve '
+       + 'karenin altına bakıp hangisi olduğuna karar verir; üç işaretten ikisi anlaşmalı.',
+  line:  'Yarışma çizgisi: eşit üç şerit — mavi | turuncu | mavi. Çizgi '
+       + 'MAVİ şeritlerinden bulunur, merkezi de aralarındaki boşluktur. '
+       + 'Çünkü çizginin ucundaki 50 mm QR kod turuncuyu örter ama maviyi örtmez — '
+       + 'turuncuyu arasaydık çizgi tam da gidilen yerde kaybolurdu.',
   dark:  'Siyah şeridi iki beyaz kenar arasında arar. Beyaz mobilya ve yere düşen ışık '
        + 'kenar sayılır — yol olamaz, çünkü yol siyahtır.',
   white: 'En geniş beyaz şeridi arar. Etrafta başka beyaz nesneler varsa zorlaşır.',
@@ -229,6 +299,7 @@ const MODE_HINT = {
 
 function setMode(m) {
   $('mAuto').classList.toggle('on',  m === 'auto');
+  $('mLine').classList.toggle('on',  m === 'line');
   $('mDark').classList.toggle('on',  m === 'dark');
   $('mWhite').classList.toggle('on', m === 'white');
   $('modeHint').textContent = MODE_HINT[m];
@@ -236,6 +307,7 @@ function setMode(m) {
   roadSetMode(m);                     // clears the lock and the auto vote
 }
 $('mAuto').addEventListener('click',  () => setMode('auto'));
+$('mLine').addEventListener('click',  () => setMode('line'));
 $('mDark').addEventListener('click',  () => setMode('dark'));
 $('mWhite').addEventListener('click', () => setMode('white'));
 
@@ -337,6 +409,67 @@ function drawOverlay(res) {
     vctx.beginPath(); vctx.arc(p.x, p.y, 4, 0, 7); vctx.fill();
   }
 
+  // The 90° corner, drawn where it was found and pointing the way the road
+  // goes. Worth having on the picture and not just in the readout: a corner
+  // the detector reports one band too early, or on the wrong side, is then
+  // obvious at a glance instead of being a number that has to be believed.
+  if (res.corner) {
+    const dir = res.corner.dir;
+    vctx.strokeStyle = '#d29922';
+    vctx.fillStyle = '#d29922';
+    vctx.lineWidth = 3;
+    vctx.setLineDash([6, 4]);
+    vctx.beginPath(); vctx.moveTo(0, res.corner.y); vctx.lineTo(W, res.corner.y); vctx.stroke();
+    vctx.setLineDash([]);
+    const tip = dir > 0 ? W - 12 : 12, tail = dir > 0 ? W - 70 : 70;
+    vctx.beginPath(); vctx.moveTo(tail, res.corner.y); vctx.lineTo(tip, res.corner.y); vctx.stroke();
+    vctx.beginPath();
+    vctx.moveTo(tip, res.corner.y);
+    vctx.lineTo(tip - dir * 14, res.corner.y - 9);
+    vctx.lineTo(tip - dir * 14, res.corner.y + 9);
+    vctx.fill();
+  }
+
+  // A junction, drawn as the band it was found in with an arm out each side
+  // that has one. This is the one detection on the page that cannot be checked
+  // by eye from the numbers alone: "left" and "right" are a claim about which
+  // way a branch leaves, and the only way to know it is right is to see the
+  // arm drawn over the paint it was measured from.
+  if (res.junction) {
+    const j = res.junction;
+    vctx.strokeStyle = '#58a6ff';
+    vctx.fillStyle = '#58a6ff';
+    vctx.lineWidth = 3;
+    vctx.setLineDash([10, 5]);
+    vctx.beginPath(); vctx.moveTo(0, j.y); vctx.lineTo(W, j.y); vctx.stroke();
+    vctx.setLineDash([]);
+    for (const dir of [-1, 1]) {
+      if (dir < 0 ? !j.left : !j.right) continue;
+      const tip = dir > 0 ? W - 12 : 12, tail = W / 2;
+      vctx.beginPath(); vctx.moveTo(tail, j.y); vctx.lineTo(tip, j.y); vctx.stroke();
+      vctx.beginPath();
+      vctx.moveTo(tip, j.y);
+      vctx.lineTo(tip - dir * 14, j.y - 9);
+      vctx.lineTo(tip - dir * 14, j.y + 9);
+      vctx.fill();
+    }
+    vctx.font = '600 12px ui-monospace,Menlo,monospace';
+    vctx.fillText(`KAVŞAK · ${j.side.toUpperCase()} · ${j.span}px`, 8, j.y - 8);
+  }
+
+  // Where the paint runs out. On the competition track that is a station's end
+  // arriving — the QR code is printed right there — so it is drawn in the same
+  // warning colour as a corner and labelled, rather than left to be inferred
+  // from the chain getting shorter.
+  if (res.end) {
+    vctx.strokeStyle = '#d29922';
+    vctx.fillStyle = '#d29922';
+    vctx.lineWidth = 3;
+    vctx.beginPath(); vctx.moveTo(0, res.end.y); vctx.lineTo(W, res.end.y); vctx.stroke();
+    vctx.font = '600 12px ui-monospace,Menlo,monospace';
+    vctx.fillText('ÇİZGİ SONU', 8, res.end.y - 6);
+  }
+
   // steering arrow at the near band
   if (res.pts.length) {
     const near = res.pts[0];
@@ -347,22 +480,9 @@ function drawOverlay(res) {
     vctx.stroke();
   }
   vctx.restore();
-}
 
-function paintMask(data, res) {
-  // Green is always "what the detector thinks the road is", so the mask means
-  // the same thing in both modes.
-  const road = res.mode === 'white';
-  for (let y = res.y0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const p = y * W + x, i = p * 4;
-      const isWhite = white[p] && luma[p] >= res.thr;
-      const on = isWhite === road;
-      data[i]     = on ? 40  : (isWhite ? 210 : 12);
-      data[i + 1] = on ? 220 : (isWhite ? 210 : 14);
-      data[i + 2] = on ? 90  : (isWhite ? 210 : 18);
-    }
-  }
+  // The QR code the server just read, where it is in the picture.
+  qrViewDraw(vctx, W, H, { mirrored, flipped, show: src.mode === 'rpi', crop: src.crop(), size: src.size() });
 }
 
 // ── loop ────────────────────────────────────────────────────────────
@@ -373,21 +493,63 @@ function loop() {
   vctx.save();
   vctx.translate(mirrored ? W : 0, flipped ? H : 0);
   vctx.scale(mirrored ? -1 : 1, flipped ? -1 : 1);
-  vctx.drawImage(src.el, 0, 0, W, H);
+  // The old 4:3 framing out of a 1080p frame — see camCrop() in cam.js.
+  vctx.drawImage(src.el, ...src.crop(), 0, 0, W, H);
   vctx.restore();
 
   const img = vctx.getImageData(0, 0, W, H);
   const res = detect(img.data);
-  if (showMask) { paintMask(img.data, res); vctx.putImageData(img, 0, 0); }
+  // The mask comes out of road.js, so it shows the split the scan itself used.
+  if (showMask) { roadPaintMask(img.data, res); vctx.putImageData(img, 0, 0); }
   drawOverlay(res);
 
+  paintReadout(res);
+
+  frames++;
+  const now = performance.now();
+  if (now - fpsAt >= 500) {
+    $('rFps').textContent = Math.round(frames * 1000 / (now - fpsAt));
+    frames = 0; fpsAt = now;
+  }
+}
+
+/**
+ * Everything the panel says about the frame just detected.
+ *
+ * Split out of loop() so it can be driven a frame at a time with no camera:
+ * test/test_vision.mjs paints a synthetic scene, runs detect(), and then asks
+ * this what the page WOULD have said about it. A readout that disagrees with
+ * the detector is worse than no readout, because it is the thing a person
+ * tunes against — and the only way to know it agrees is to check it, which
+ * means it has to be callable.
+ */
+function paintReadout(res) {
   // ── readout ──
   const { near: eNear } = roadError(res);
 
   $('rBands').textContent = res.pts.length + '/' + cfg.bands;
+  $('rCorner').textContent = !res.corner ? 'yok'
+    : (res.corner.dir > 0 ? 'SAĞA' : 'SOLA') + ' · ' + Math.round(res.corner.dist * 100) + ' %';
+  $('rCorner').style.color = res.corner ? 'var(--warn)' : '';
+  $('rEnd').textContent = res.end ? Math.round(res.end.dist * 100) + ' %' : 'yok';
+  $('rEnd').style.color = res.end ? 'var(--warn)' : '';
+  // The span is in the readout because it is the number the whole test is made
+  // of: a branch is paint wider than the line it leaves, and seeing how much
+  // wider is how you tell a real junction from a bar of sunlight.
+  $('rJunc').textContent = !res.junction ? 'yok'
+    : ({ left: 'SOL', right: 'SAĞ', both: 'HER İKİ' }[res.junction.side])
+      + ' · ' + Math.round(res.junction.dist * 100) + ' %';
+  $('rJunc').style.color = res.junction ? 'var(--idle)' : '';
   $('vThr').textContent = res.thr;
+  // In 'line' mode the number under the sliders is not a brightness step but
+  // how much of the nearest band was one of the line's two colours at all —
+  // the number that says whether the colour bars are set for this light.
+  $('vSeen').textContent = res.mode === 'line'
+    ? res.contrast + ' % renkli' + (res.contrast < 5 ? ' — renk görünmüyor' : '')
+    : res.contrast + (res.contrast < cfg.edge ? ' — çizgi yok' : '');
 
-  $('vAuto').textContent = (res.mode === 'dark' ? 'SİYAH YOL · beyaz kenar' : 'AĞ YOL')
+  $('vAuto').textContent = (res.mode === 'line' ? 'YARIŞMA ÇİZGİSİ · mavi|turuncu|mavi'
+                          : res.mode === 'dark' ? 'SİYAH YOL · beyaz kenar' : 'AĞ YOL')
     + (cfg.mode === 'auto' ? (autoSeen ? '  (oto)' : '  (oto — henüz karar yok)') : '  (elle)');
   if (autoWhy) {
     const w = autoWhy;
@@ -405,30 +567,38 @@ function loop() {
     : (eNear >= 0 ? '+' : '') + eNear.toFixed(2);
   $('steer').style.left = (50 + (eNear ?? 0) * 48) + '%';
 
-  $('hint').textContent = res.pts.length < 2
-    ? 'Yol bulunamıyor — eşiği ya da renk toleransını değiştir'
+  $('hint').textContent = res.mode === 'line' && res.junction
+    ? `Kavşak — dal ${{ left: 'solda', right: 'sağda', both: 'her iki yanda' }[res.junction.side]}`
+      + ` (karenin ${Math.round(res.junction.dist * 100)} % aşağısında, `
+      + `${res.junction.span} piksel geniş). Düz çizgide bu «yok» olmalı.`
+    : res.mode === 'line' && res.end
+    ? `Çizgi burada bitiyor (karenin ${Math.round(res.end.dist * 100)} % aşağısında). `
+      + `Yarışma parkurunda çizgi sadece istasyonlarda var — sonunda QR kod olur.`
+    : res.mode === 'line' && res.pts.length < 2
+    ? (res.contrast < 5
+        ? `Renk görünmüyor — karenin sadece %${res.contrast}-i mavi ya da turuncu. `
+          + `Işık azsa «renk gücü»nü düşür.`
+        : 'İki mavi şerit arasında turuncu bir boşluk bulunamadı — '
+          + 'renk toleransını ya da sütun doluluğunu gevşet')
+    : res.corner
+    ? `90° köşe — yol ${res.corner.dir > 0 ? 'sağa' : 'sola'} dönüyor `
+      + `(karenin ${Math.round(res.corner.dist * 100)} % aşağısında). `
+      + `Robot kolun altına gelince döner.`
+    : res.pts.length < 2
+    ? (res.contrast < cfg.edge
+        ? `Çizgi görünmüyor — kenar farkı ${res.contrast}, gereken ${cfg.edge}. `
+          + `Işık yetersizse kontrastı artır ya da kenar keskinliğini düşür.`
+        : 'Yol bulunamıyor — minimum eni ya da yan kesimi değiştir')
     : eNear == null ? '—'
     : Math.abs(eNear) < 0.08 ? 'Merkezde'
     : eNear < 0 ? 'Yol solda — sola dön' : 'Yol sağda — sağa dön';
-
-  frames++;
-  const now = performance.now();
-  if (now - fpsAt >= 500) {
-    $('rFps').textContent = Math.round(frames * 1000 / (now - fpsAt));
-    frames = 0; fpsAt = now;
-  }
 }
+
 
 setMode('auto');
 src.useRpi();               // the robot's own eye, straight away and by default
+qrViewMount();
 loop();
-
-// The wheel trim, shown the same way on every page — see public/wheels.js.
-// `mode` is a promise to the reader about THIS page: 'raw' means the
-// numbers below are not applied here, which is deliberate on the pages
-// where the threshold is measured.
-const WT = wheelsMount({ strip: true, mode: 'applied' });
-wheelsFetch().then((c) => WT && WT.paint(c));
 </script>
 </body>
 </html>

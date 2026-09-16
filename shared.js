@@ -27,13 +27,16 @@ const PUB = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const cache = new Map();
 
 /**
- * @param {string} file   e.g. 'sonar.js'
+ * @param {string|string[]} file   e.g. 'sonar.js' — or several, in the order a
+ *                                 page loads them, when one reads another's
+ *                                 globals (qrnav.js reads field.js's)
  * @param {string[]} names  the top-level names to hand back
  */
 export function loadShared(file, names) {
-  const key = `${file}:${names.join(',')}`;
+  const files = Array.isArray(file) ? file : [file];
+  const key = `${files.join('+')}:${names.join(',')}`;
   if (cache.has(key)) return cache.get(key);
-  const src = readFileSync(path.join(PUB, file), 'utf8');
+  const src = files.map((f) => readFileSync(path.join(PUB, f), 'utf8')).join('\n;\n');
   // eslint-disable-next-line no-new-func
   const out = new Function(`${src}\nreturn { ${names.join(', ')} };`)();
   for (const n of names) {

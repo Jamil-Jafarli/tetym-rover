@@ -21,7 +21,8 @@
   h2{font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);
      margin:0 0 12px;font-weight:600}
   a{color:var(--idle)}
-  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .nav{justify-content:flex-start;gap:6px;font-size:13px}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none}
   .dot.ok{background:var(--accent)} .dot.bad{background:var(--stop)}
   .dot.warn{background:var(--warn)}
@@ -35,6 +36,9 @@
     height:74px;border:1px solid var(--line);border-radius:12px;background:var(--bg);
     display:flex;flex-direction:column;align-items:center;justify-content:center;
     gap:3px;cursor:pointer;transition:none;
+    /* A held finger that drifts a pixel would otherwise start a scroll, fire
+       pointercancel and stop the rover mid-hold. */
+    touch-action:none;
   }
   .key b{font:600 22px/1 ui-monospace,Menlo,monospace}
   .key span{font-size:11px;color:var(--dim)}
@@ -62,6 +66,11 @@
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
   .jog{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
   .jog button{padding:10px 0;font-size:13px}
+
+  .tuneRow{margin-top:12px}
+  .tuneRow:first-of-type{margin-top:0}
+  .tuneRow label{font-size:13px;font-weight:600}
+  .tuneRow input[type=range]{width:100%;margin-top:6px;accent-color:var(--idle)}
 
   input[type=number],input[type=text],select{
     font:600 15px ui-monospace,Menlo,monospace;color:var(--ink);background:var(--bg);
@@ -93,6 +102,11 @@
   .banner{display:none;border:1px solid var(--warn);border-radius:10px;padding:11px 12px;
     color:var(--warn);font-size:13px;line-height:1.5;margin-bottom:12px}
   .banner.show{display:block}
+  .set .rowmsg{display:none;font-size:12.5px;margin-top:8px;line-height:1.5}
+  .set .rowmsg.show{display:block}
+  .set .rowmsg.bad{color:var(--stop)} .set .rowmsg.warn{color:var(--warn)}
+  #saveState{font-size:12.5px;color:var(--dim);margin:0 0 12px}
+  #saveState.warn{color:var(--warn)}
 
   /* ── console ─────────────────────────────────────────────── */
   #log{height:220px;overflow:auto;background:var(--bg);border:1px solid var(--line);
@@ -112,7 +126,6 @@
   <div class="card">
     <div class="row">
       <h1>Rover Drive <span class="muted" style="font-weight:400">· differential drive over G-code</span></h1>
-      <span class="muted"><a href="/follow">takip</a> · <a href="/lidar">lidar</a> · <a href="/plc">plc / görev</a></span>
       <div class="row" style="gap:7px">
         <span class="dot" id="dot"></span><span class="muted" id="fw">not connected</span>
       </div>
@@ -125,6 +138,17 @@
       <span class="muted mono" id="cal">—</span>
       <span class="muted mono" id="qdepth">queue 0</span>
     </div>
+    <nav class="row nav muted" style="margin-top:10px">
+      <a href="/">hub</a> ·
+      <a href="/dashboard">dashboard</a> ·
+      <a href="/vision">camera</a> ·
+      <a href="/follow">line follow</a> ·
+      <a href="/map">field map</a> ·
+      <a href="/tune">run log</a> ·
+      <a href="/lidar">lidar map</a> ·
+      <a href="/plc">plc / görev</a> ·
+      <a href="/pins">pi pins</a>
+    </nav>
   </div>
 
   <!-- ── WASD ──────────────────────────────────────────────── -->
@@ -143,22 +167,74 @@
       <div class="key" data-code="KeyD"><b>D</b><span>right</span><i id="gD">—</i></div>
     </div>
 
-    <div class="gline" id="gline">G1 — F6000</div>
+    <div class="gline" id="gline">G1 — F16000</div>
     <p class="muted" id="stopHint" style="margin:8px 0 0;text-align:center"></p>
     <p class="muted" id="barrierNote" style="margin:6px 0 0;text-align:center;font-size:12.5px"></p>
 
+    <!-- What the page opens with is what the rover is driven at: fast straight
+         lines, slow short spins (A/D send a tenth of the W/S chunk at F2000).
+         Travel acceleration is not one of these boxes — it is M204 T, kept on
+         the board in EEPROM (set to 200), and shown in the settings below.
+         The server's DEFAULT_FEED (6000) is separate: the autonomous side and
+         any API caller that sends no feed still use it. -->
     <div class="fields" style="margin-top:12px">
       <div class="field">
-        <label>Speed F (mm/min, ÷√2 on the ground)</label>
-        <input type="number" id="feed" value="6000" min="1" max="30000" step="250">
+        <label>Speed F — fwd/back (mm/min, ÷√2 on the ground)</label>
+        <input type="number" id="feed" value="16000" min="1" max="30000" step="250">
+      </div>
+      <div class="field" id="turnFeedField">
+        <label>Speed F — left/right (mm/min)</label>
+        <input type="number" id="turnFeed" value="2000" min="1" max="30000" step="250">
       </div>
       <div class="field" id="stepField">
         <label>Per move (mm)</label>
-        <input type="number" id="step" value="5" min="0.1" max="500" step="1">
+        <input type="number" id="step" value="80" min="0.1" max="500" step="1">
+      </div>
+      <div class="field" id="turnField">
+        <label>Turn scale (× per move)</label>
+        <input type="number" id="turnScale" value="0.1" min="0.05" max="2" step="0.05">
+        <p class="muted" id="turnNote" style="margin:4px 0 0;font-size:11px"></p>
       </div>
     </div>
 
     <div style="margin-top:16px"><button id="halt">STOP — space</button></div>
+  </div>
+
+  <!-- ── the lift, and teaching the loads ──────────────────────
+       Both on this page because both are things a person does while
+       driving: Q and E sit next to W A S D, and teaching a route is just
+       driving it with the recording on. See public/actuator.js and
+       public/teach.js. -->
+  <div class="card" id="actCard"></div>
+  <!-- the lidar motor: START/STOP and its voltage — public/lidarmotor.js -->
+  <div class="card" id="lidarCard"></div>
+  <div class="card" id="teachCard"></div>
+
+  <!-- ── quick tune ────────────────────────────────────────── -->
+  <div class="card">
+    <h2>Manual drive tune — speed, acceleration, power</h2>
+    <div class="tuneRow">
+      <div class="row"><label>Speed</label><span class="mono" id="tuneSpeedVal">—</span></div>
+      <input type="range" id="tuneSpeed" min="500" max="30000" step="250">
+    </div>
+    <div class="tuneRow">
+      <div class="row"><label>Acceleration <span class="muted">(M204 T)</span></label><span class="mono" id="tuneAccelVal">—</span></div>
+      <input type="range" id="tuneAccel" min="50" max="4000" step="50">
+    </div>
+    <div class="tuneRow">
+      <div class="row"><label>Power <span class="muted">(M906 motor current)</span></label><span class="mono" id="tunePowerVal">—</span></div>
+      <input type="range" id="tunePower" min="100" max="1200" step="10">
+    </div>
+    <div class="tuneRow">
+      <div class="row"><label>Steps/mm <span class="muted">(M92, per motor)</span></label></div>
+      <div class="fields" style="margin-top:6px">
+        <div class="field"><label>Left (X)</label>
+          <input type="number" id="tuneStepsX" min="1" max="1000" step="1"></div>
+        <div class="field"><label>Right (Y)</label>
+          <input type="number" id="tuneStepsY" min="1" max="1000" step="1"></div>
+      </div>
+    </div>
+    <p class="muted" id="tuneHint" style="margin:10px 0 0;font-size:12.5px"></p>
   </div>
 
   <!-- ── position ──────────────────────────────────────────── -->
@@ -203,11 +279,14 @@
   <div class="card">
     <div class="row" style="margin-bottom:12px">
       <h2 style="margin:0">Driver &amp; motion settings</h2>
-      <div style="display:flex;gap:6px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="sm" id="btnMatch"
+          title="Copy every X value to Y — the right wheel is on the Y socket">Match Y to X</button>
         <button class="sm" id="btnRefresh">Re-read</button>
         <button class="sm" id="btnSave">Save to EEPROM</button>
       </div>
     </div>
+    <p id="saveState"></p>
     <div id="settings"></div>
     <div class="chips">
       <button id="btnLoad">Load EEPROM (M501)</button>
@@ -258,6 +337,20 @@ let state = {connected:false};
 let dirs = FALLBACK_DIRS;
 let logSeq = 0;
 
+/* The camera sits on the BACK of the forklift, so the autonomous pilot's
+   "forward" (the way the camera looks, driven through Rover/Jogger with the
+   sign convention baked into DIRECTIONS.forward) is physically this rover's
+   rear. A human jogging it with W/S is standing there looking at the front,
+   so manual forward/back has to be the opposite of that — while autonomous
+   driving (which never goes through this key map) keeps using DIRECTIONS as
+   the server sends it. Left/right are untouched: spinning on the spot reads
+   the same regardless of which end the camera is on. */
+function manualVec(name){
+  if (name === 'forward') return {X: -dirs.forward.X, Y: -dirs.forward.Y};
+  if (name === 'back')    return {X: -dirs.back.X,    Y: -dirs.back.Y};
+  return dirs[name];
+}
+
 const api = (path, body) => fetch('/api/marlin/' + path, body === undefined ? {} : {
     method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body),
   }).then(async (r) => {
@@ -272,37 +365,53 @@ function pushLocal(text, kind){
   $('#log').appendChild(el); $('#log').scrollTop = 1e9;
 }
 
-const feedrate = () => Math.max(1, +$('#feed').value || 6000);
+// An emptied box falls back to what the page opens with (see the fields).
+const feedrate = () => Math.max(1, +$('#feed').value || 16000);
+const turnFeedValue = () => Math.max(1, +$('#turnFeed').value || 2000);
 const stepSize = () => Math.max(0.1, +$('#step').value || 100);
+const turnScaleValue = () => Math.max(0, +$('#turnScale').value || 0.1);
 
 /* What the server will actually put on the wire for this vector. Mirrors
    Jogger.gcode() in marlin.js, including the per-motor invert, so the line on
-   screen is the line that goes out — not an approximation of it. */
+   screen is the line that goes out — not an approximation of it. Feed is
+   picked the same way the server picks it — see effFeed() below — so a
+   turn's preview shows the turn speed, not forward/back's. */
 function gcodeFor(vec, dist){
   const parts = ['X','Y'].filter((a) => vec[a])
     .map((a) => a + (Math.sign(vec[a]) * (state.invert?.[a] ? -1 : 1) * dist).toFixed(2));
-  return parts.length ? 'G1 ' + parts.join(' ') + ' F' + Math.round(feedrate()) : null;
+  return parts.length ? 'G1 ' + parts.join(' ') + ' F' + Math.round(effFeed(vec)) : null;
 }
 
 /* ── the pad ──────────────────────────────────────────────────
    Held keys are summed, then signed, so W+A is one diagonal rather than two
    moves fighting each other. On this gantry that diagonal turns a single
-   motor, which is the whole point of the X±/Y± pairs. */
+   motor, which is the whole point of the X±/Z± pairs. */
 const HELD = new Set();
 let kbRunning = false, kbSig = '0,0', kbTimer = null, kbChain = Promise.resolve();
 
-const typing = () => ['INPUT','SELECT','TEXTAREA'].includes(document.activeElement?.tagName);
+/* Only a control that takes typed text swallows W A S D. A range slider or a
+   checkbox keeps focus after it is used — every quick-tune slider, the invert
+   boxes — and counting those as "typing" left the keyboard dead for driving
+   until you clicked somewhere blank. */
+const TEXT_INPUTS = new Set(['text','number','search','email','url','tel','password']);
+const typing = () => {
+  const el = document.activeElement;
+  if (!el) return false;
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return true;
+  return el.tagName === 'INPUT' && TEXT_INPUTS.has(el.type);
+};
 
 function kbVector(){
   const v = {X:0, Y:0};
   for (const code of HELD){
-    const d = dirs[KEY_DIR[code]];
+    const d = manualVec(KEY_DIR[code]);
     if (d){ v.X += d.X; v.Y += d.Y; }
   }
   return {X: Math.sign(v.X), Y: Math.sign(v.Y)};
 }
 
-const runOpts = () => ({ feedrate: feedrate(), step: stepSize() });
+const runOpts = () => ({ feedrate: feedrate(), turnFeedrate: turnFeedValue(),
+                         step: stepSize(), turnScale: turnScaleValue() });
 
 /* Coalesce keys pressed a few ms apart into one diagonal, and serialise the
    requests so a fast W-then-D cannot interleave halt and run out of order. */
@@ -360,7 +469,13 @@ function cancelPendingRelease(code){
 }
 
 document.addEventListener('keydown', (e) => {
-  if (typing()) return;
+  if (typing()){
+    // Enter in a number box, or Escape in any field, hands the keyboard back
+    // to driving — otherwise the only way out of a field is the mouse.
+    const el = document.activeElement;
+    if (e.key === 'Escape' || (e.key === 'Enter' && el.type === 'number')) el.blur();
+    return;
+  }
   if (e.code === 'Space'){
     // Panic key: stop straight away rather than going through the 25 ms
     // coalescing timer, and reset the state machine so releasing a still-held
@@ -409,15 +524,45 @@ for (const el of document.querySelectorAll('.key[data-code]')){
 /* Losing focus with a key down would otherwise leave the motors running. */
 window.addEventListener('blur', releaseKeys);
 
-/* One chunk's run time. Mirrors Jogger.chunkSeconds() in marlin.js — the same
-   trapezoid, because this is a promise about what the machine will do and it
-   would be worse than useless if it disagreed with the pacing that does it.
-   test_pages.mjs checks the two against each other. */
-function chunkSeconds(dist, feed){
-  const v = Math.max(1, feed / 60);
+/* How long before a queued chunk starts the one after it is sent. Mirrors
+   HOLD_MARGIN_S in marlin.js — see the Jogger docstring there for why the
+   next chunk has to be on the board before the current one starts. */
+const HOLD_MARGIN_S = 0.15;
+
+/* A spin (left/right) at the same nominal step as forward/back turns much
+   further than it looks like it should — same wheel distance, spent turning
+   on the spot instead of covering ground. Mirrors isSpin()/TURN_SCALE in
+   marlin.js, so the tile previews and #gline show the size the server will
+   actually send rather than the raw step field. The scale itself is the
+   #turnScale field, not a constant — see runOpts() — so this reads it live
+   rather than assuming marlin.js's default applies. */
+function isSpin(vec){
+  const sx = Math.sign(vec.X || 0), sy = Math.sign(vec.Y || 0);
+  return sx !== 0 && sy !== 0 && sx === sy;
+}
+const effStep = (vec, step) => (isSpin(vec) ? step * turnScaleValue() : step);
+
+/* Forward/back and left/right are two different feels — a fast straight line
+   does not have to mean a fast spin — so they get their own F, not one shared
+   between them. Mirrors marlin_http.js's `run` handler picking `turnFeedrate`
+   over `feedrate` for a spin. */
+const effFeed = (vec) => (isSpin(vec) ? turnFeedValue() : feedrate());
+
+/* One chunk's run time once a hold is rolling. Mirrors Jogger.holdSeconds() in
+   marlin.js — cruise, capped by M203 and by what the planner lets a chunk run
+   at with one behind it — because this is a promise about what the machine
+   will do and it would be worse than useless if it disagreed with the pacing
+   that does it. test_pages.mjs checks the numbers. */
+function holdSeconds(xc, yc, feed){
+  const dist = Math.hypot(xc, yc);
   const accel = Number(state.settings?.M204?.T) || 500;
-  if ((v * v) / accel >= dist) return 2 * Math.sqrt(Math.max(dist, 0.001) / accel);
-  return 2 * (v / accel) + (dist - (v * v) / accel) / v;
+  const cap = state.settings?.M203 || {};
+  let v = Math.max(1, feed / 60);
+  for (const [d, m] of [[Math.abs(xc), Number(cap.X)], [Math.abs(yc), Number(cap.Y)]]){
+    if (d > 1e-9 && m > 0) v = Math.min(v, m * dist / d);
+  }
+  v = Math.max(1, Math.min(v, Math.sqrt(2 * accel * Math.max(dist, 0.001))));
+  return dist / v;
 }
 
 /* How far the rover actually goes, which is not the number Marlin is working
@@ -426,7 +571,7 @@ function chunkSeconds(dist, feed){
    X and Y are the two wheels of a differential drive, mounted mirror-image, so
    the wheel distances are d_left = -X and d_right = +Y. The rover's ground
    travel is their mean, and the difference between them is the turn. Marlin
-   meanwhile plans in the XY plane and times the move by sqrt(dX² + dY²) — for
+   meanwhile plans in XYZ space and times the move by sqrt(dX² + dZ²) — for
    a straight move that is the ground distance times root two, and quoting it
    as a stopping distance overstates it by 41%. */
 function wheelMotion(vec, step){
@@ -437,24 +582,27 @@ function wheelMotion(vec, step){
     ground: (left + right) / 2,          // mm the rover advances
     turn: right - left,                  // mm of difference between the wheels
     planned: Math.hypot(xc, yc),         // what Marlin times the move by
+    xc, yc,
   };
 }
 
-/* Marlin acks a move when it is buffered, not when it has run, so whatever is
-   in the planner when you let go still gets executed. That is the stopping
-   distance, and it is the only thing the chunk size is really choosing. */
+/* The next chunk is on the board before the current one starts (see
+   marlin.js), so whatever is in the planner when you let go is up to two
+   whole chunks, plus HOLD_MARGIN_S of travel. */
 function paintStopHint(){
   const el = $('#stopHint');
   const step = stepSize();
   const v = kbVector();
-  const m = wheelMotion((v.X || v.Y) ? v : dirs.forward, step);
-  const secs = chunkSeconds(m.planned, feedrate());
+  const vec = (v.X || v.Y) ? v : manualVec('forward');
+  const m = wheelMotion(vec, effStep(vec, step));
+  const secs = holdSeconds(m.xc, m.yc, effFeed(vec));
+  const stopOf = (d) => 2 * d + HOLD_MARGIN_S * (d / secs);
 
   const stops = Math.abs(m.ground) > 0.001
-    ? `${Math.abs(m.ground).toFixed(1)} mm of travel`
-    : `${(Math.abs(m.turn) / 2).toFixed(1)} mm of wheel travel each way, turning`;
-  el.textContent = `One chunk every ${secs.toFixed(2)} s — each finishes before the `
-    + `next is sent, so letting go stops within ${stops}.`
+    ? `${stopOf(Math.abs(m.ground)).toFixed(1)} mm of travel`
+    : `${stopOf(Math.abs(m.turn) / 2).toFixed(1)} mm of wheel travel each way, turning`;
+  el.textContent = `One chunk every ${secs.toFixed(2)} s — the next is always on the board `
+    + `before this one starts, so it never brakes between chunks; letting go stops within ${stops}.`
     + (secs > 1.5 ? '  ⚠ that is a long way — lower the chunk size or raise the speed.'
                   : '');
   el.style.color = secs > 1.5 ? 'var(--warn)' : '';
@@ -462,15 +610,19 @@ function paintStopHint(){
 
 function paintKeys(){
   const dist = stepSize();
+  const turn = turnScaleValue();
+  $('#turnNote').textContent =
+    `A/D turn ${(dist * turn).toFixed(1)} mm — ${Math.round(turn * 100)}% of W/S`;
   for (const el of document.querySelectorAll('.key[data-code]')){
     el.classList.toggle('on', HELD.has(el.dataset.code));
   }
   for (const [name, id] of Object.entries(KEY_TAG)){
-    const line = gcodeFor(dirs[name] || {}, dist);
+    const dv = manualVec(name) || {};
+    const line = gcodeFor(dv, effStep(dv, dist));
     $('#' + id).textContent = line ? line.replace(/^G1 /, '').replace(/ F\d+$/, '') : '—';
   }
   const v = kbVector();
-  const line = gcodeFor(v, dist);
+  const line = gcodeFor(v, effStep(v, dist));
   $('#gline').textContent = line || 'G1 — F' + Math.round(feedrate());
   $('#gline').classList.toggle('live', !!line);
   const names = [...HELD].map((c) => KEY_DIR[c]).filter(Boolean);
@@ -495,24 +647,112 @@ function buildJog(){
   }
 }
 
+/* ── writes the board has not confirmed yet ───────────────────
+   A value is only applied once the board reports it back. Treating the HTTP
+   200 as "done" — which this page used to — let the very next poll paint the
+   old number back into the box whenever the read-back was still queued behind
+   moves, so a setting that had gone through looked like one that had not.
+   So a write stays pending, and the poll leaves its fields alone, until the
+   board reports the value, or reports refusing it (status.rejected), or
+   PENDING_MS passes. Shared by the settings table and the quick-tune card. */
+const PENDING_MS = 30000;
+const pending = {};                 // code -> {params: {letter: value}, t}
+function markPending(code, params){
+  pending[code] = {params: {...(pending[code]?.params || {}), ...params}, t: Date.now()};
+}
+const near = (a, b) => Math.abs(a - b) <= Math.max(0.006, 1e-3 * Math.abs(b));
+function isPending(code, s){
+  const p = pending[code];
+  if (!p) return false;
+  const vals = s.settings?.[code] || {}, rej = s.rejected?.[code] || {};
+  const settled = Object.entries(p.params).every(([L, v]) =>
+    (rej[L] && near(rej[L].asked, v)) || (vals[L] !== undefined && near(vals[L], v)));
+  if (settled || Date.now() - p.t > PENDING_MS){ delete pending[code]; return false; }
+  return true;
+}
+
+/* ── quick tune (speed / accel / power) ──────────────────────
+   Speed just mirrors the feed field. Accel and power write straight to
+   M204 T / M906 X&Y, debounced so dragging doesn't spam the board with a
+   setting command per pixel. Each write is pending (above) from the first
+   pixel of the drag, so the poll cannot yank the slider back mid-drag or
+   before the board has confirmed it. */
+const tuneTimers = {};
+function debounceApply(key, code, params, ms){
+  clearTimeout(tuneTimers[key]);
+  markPending(code, params);
+  tuneTimers[key] = setTimeout(() => {
+    api('setting', {code, params}).catch(() => { delete pending[code]; });
+  }, ms);
+}
+$('#tuneSpeed').oninput = () => {
+  $('#feed').value = $('#tuneSpeed').value;
+  $('#tuneSpeedVal').textContent = Math.round(+$('#tuneSpeed').value) + ' mm/min';
+  $('#feed').dispatchEvent(new Event('input'));
+};
+$('#tuneAccel').oninput = () => {
+  $('#tuneAccelVal').textContent = Math.round(+$('#tuneAccel').value) + ' mm/s²';
+  debounceApply('accel', 'M204', {T:+$('#tuneAccel').value}, 250);
+};
+$('#tunePower').oninput = () => {
+  $('#tunePowerVal').textContent = Math.round(+$('#tunePower').value) + ' mA';
+  debounceApply('power', 'M906', {X:+$('#tunePower').value, Y:+$('#tunePower').value}, 250);
+};
+/* Independent per motor — a mismatched pair is exactly what a re-geared or
+   swapped wheel needs, so these do not mirror each other like power does. */
+$('#tuneStepsX').oninput = () => {
+  debounceApply('stepsX', 'M92', {X:+$('#tuneStepsX').value}, 250);
+};
+$('#tuneStepsY').oninput = () => {
+  debounceApply('stepsY', 'M92', {Y:+$('#tuneStepsY').value}, 250);
+};
+
+function syncTune(s){
+  if (document.activeElement !== $('#tuneSpeed')){
+    $('#tuneSpeed').value = $('#feed').value;
+    $('#tuneSpeedVal').textContent = Math.round(+$('#feed').value) + ' mm/min';
+  }
+  const accel = (s.settings?.M204 || {}).T;
+  if (accel !== undefined && !isPending('M204', s) && document.activeElement !== $('#tuneAccel')){
+    $('#tuneAccel').value = accel;
+    $('#tuneAccelVal').textContent = Math.round(accel) + ' mm/s²';
+  }
+  const pwr = s.settings?.M906;
+  if (pwr && !isPending('M906', s) && document.activeElement !== $('#tunePower')){
+    const v = Math.round(((pwr.X ?? pwr.Y ?? 0) + (pwr.Y ?? pwr.X ?? 0)) / 2);
+    $('#tunePower').value = v;
+    $('#tunePowerVal').textContent = v + ' mA';
+  }
+  const steps = s.settings?.M92 || {};
+  const stepsBusy = isPending('M92', s);
+  if (steps.X !== undefined && !stepsBusy && document.activeElement !== $('#tuneStepsX'))
+    $('#tuneStepsX').value = String(+steps.X.toFixed(3));
+  if (steps.Y !== undefined && !stepsBusy && document.activeElement !== $('#tuneStepsY'))
+    $('#tuneStepsY').value = String(+steps.Y.toFixed(3));
+
+  $('#tuneHint').textContent = (s.unsupported || []).includes('M906')
+    ? 'Power (M906) is not supported by this firmware — set motor current by trimpot/jumper instead.'
+    : '';
+}
+
 /* ── settings panel ───────────────────────────────────────── */
 const SETTING_ROWS = [
   {code:'M203', label:'Max feed rate', letters:['X','Y'], unit:'mm/s', step:10,
-   note:'Hard ceiling on travel speed. Marlin keeps this in mm/s — the F above is mm/min, so 500 mm/s here is 30000 mm/min.'},
+   note:'Hard ceiling on travel speed. Marlin keeps this in mm/s — the F above is mm/min, so 500 mm/s here is 30000 mm/min. Stock Y matches X; a lower Y is a limit Marlin slows the whole move to — Match Y to X fixes it.'},
   {code:'M201', label:'Max acceleration', letters:['X','Y'], unit:'mm/s²', step:50,
    note:'Per-axis limit. Lower it if a motor stalls or skips when a move starts.'},
   {code:'M204', label:'Travel acceleration', letters:['T'], unit:'mm/s²', step:50,
    labels:{T:'travel'},
    note:'Acceleration actually used for non-printing moves — the ones this page makes. It is also what paces the chunk stream, so a wrong value here makes W feel jerky.'},
   {code:'M205', label:'Jerk', letters:['X','Y'], unit:'mm/s', step:0.5,
-   note:'Instantaneous speed change allowed at a corner. Firmware using junction deviation instead will ignore this.'},
+   note:'Instantaneous speed change allowed at a corner. Firmware using junction deviation instead will ignore this. Stock Creality builds also cap jerk (X/Y at 20) — the board refuses anything higher, and this row says so.'},
   {code:'M92', label:'Steps per mm', letters:['X','Y'], unit:'steps/mm', step:1,
-   note:'Stock Ender-3 is 80. Changing it rescales every distance, including the revolution readout.'},
+   note:'Stock Ender-3 X and Y are both 80. The right wheel is on Y, so keep the two within calibration of each other or the rover turns where it should drive straight. Changing it rescales every distance, including the revolution readout.'},
   {code:'M350', label:'Microsteps', letters:['X','Y'], unit:'×', step:1, optional:true,
    note:'UART-mode TMC drivers only.'},
   {code:'M906', label:'Motor current', letters:['X','Y'], unit:'mA', step:10,
    optional:true, warn:900,
-   note:'The torque control: RMS current delivered to each motor. Stock Ender-3 X/Y is around 580 mA.'},
+   note:'The torque control: RMS current delivered to each motor. A stock Ender-3 motor runs at around 580 mA.'},
 ];
 
 function buildSettings(){
@@ -534,6 +774,7 @@ function buildSettings(){
       <div class="na-msg">Not supported by this firmware — the drivers are in standalone
         mode, so this is set by hardware (trimpot / jumpers), not G-code.</div>
       ${r.warn ? `<div class="warnbox" data-warn="${r.code}"></div>` : ''}
+      <div class="rowmsg" data-msg="${r.code}"></div>
       <div class="note">${r.note}</div>
     </div>`).join('');
 
@@ -544,9 +785,31 @@ function buildSettings(){
   $('#settings').addEventListener('input', (e) => {
     const i = e.target.closest('input[data-code]');
     if (!i) return;
+    i.dataset.edited = '1';
     i.closest('.set').classList.add('dirty');
     checkWarn(i.dataset.code);
   });
+  // Enter applies the row it was typed in (and the document handler then
+  // blurs the box, so W A S D drive again).
+  $('#settings').addEventListener('keydown', (e) => {
+    const i = e.target.closest('input[data-code]');
+    if (i && e.key === 'Enter') applySetting(i.dataset.code);
+  });
+}
+
+/* Why a row did not take: the server's refusal of the last Apply, or the
+   board's refusal of a value it was sent (a firmware cap). */
+const rowErr = {};
+function paintRowMsg(code, s){
+  const box = document.querySelector(`.rowmsg[data-msg="${code}"]`);
+  if (!box) return;
+  const rej = Object.entries(s.rejected?.[code] || {});
+  const text = rowErr[code] || (rej.length
+    ? rej.map(([L, r]) => `${L}: asked ${r.asked}, the board kept ${r.kept}`).join(' · ')
+      + ' — this firmware caps it, so it cannot be raised from G-code.'
+    : '');
+  box.textContent = text;
+  box.className = 'rowmsg' + (text ? ' show ' + (rowErr[code] ? 'bad' : 'warn') : '');
 }
 
 function checkWarn(code){
@@ -563,24 +826,39 @@ function checkWarn(code){
   }
 }
 
+/* Apply sends the fields that were edited, not the whole row. Sending the
+   whole row is how one untouched out-of-range value blocked every other: with
+   M203 X at 150000 on the board — outside the server's 1..1000 guard — each
+   Apply of a new Y carried that X along, got a 400 for it, and Y never left
+   the page. A row with nothing edited re-sends what it shows. */
 function applySetting(code){
+  const row = document.querySelector(`.set[data-code="${code}"]`);
+  const inputs = [...row.querySelectorAll('input[data-code]')].filter((i) => i.value !== '');
+  const edited = inputs.filter((i) => i.dataset.edited);
   const params = {};
-  document.querySelectorAll(`input[data-code="${code}"]`).forEach((i) => {
-    if (i.value !== '') params[i.dataset.letter] = +i.value;
-  });
+  for (const i of (edited.length ? edited : inputs)) params[i.dataset.letter] = +i.value;
   if (!Object.keys(params).length) return;
-  api('setting', {code, params}).then(() =>
-    document.querySelector(`.set[data-code="${code}"]`)?.classList.remove('dirty'));
+  delete rowErr[code];
+  markPending(code, params);
+  api('setting', {code, params}).then(() => {
+    row.classList.remove('dirty');
+    inputs.forEach((i) => { delete i.dataset.edited; });
+  }, (e) => {
+    delete pending[code];
+    rowErr[code] = `Not applied: ${e.message}`;
+    paintRowMsg(code, state);
+  });
 }
 
 /* Fill inputs from the board, but never fight the user: skip a field that is
-   focused or has unapplied edits. */
+   focused, has unapplied edits, or was just applied and not yet confirmed. */
 function syncSettings(s){
   for (const row of SETTING_ROWS){
     const el = document.querySelector(`.set[data-code="${row.code}"]`);
     if (!el) continue;
     el.classList.toggle('na', !!(row.optional && (s.unsupported || []).includes(row.code)));
-    if (el.classList.contains('dirty')) continue;
+    paintRowMsg(row.code, s);
+    if (el.classList.contains('dirty') || isPending(row.code, s)) continue;
     const vals = (s.settings || {})[row.code] || {};
     for (const L of row.letters){
       const i = el.querySelector(`input[data-letter="${L}"]`);
@@ -592,6 +870,21 @@ function syncSettings(s){
     }
     checkWarn(row.code);
   }
+}
+
+/* Whether what the board is running is what it will boot with. The server
+   saves by itself a moment after the last change once nothing is moving
+   (AUTOSAVE_MS in marlin.js); a factory reset or a load is the case it does
+   not cover, and then this says to press Save. */
+function paintSaveState(s){
+  const el = $('#saveState');
+  const on = s.connected && s.unsaved;
+  el.textContent = !s.connected ? ''
+    : !s.unsaved ? 'All settings are saved in EEPROM.'
+    : s.save_pending ? 'Unsaved — saving to EEPROM automatically once the rover is still…'
+    : 'Unsaved — the board will forget these on the next reconnect. Press Save to EEPROM.';
+  el.classList.toggle('warn', !!on);
+  $('#btnSave').classList.toggle('pri', !!on && !s.save_pending);
 }
 
 /* ── wiring ───────────────────────────────────────────────── */
@@ -613,7 +906,7 @@ $('#btnEstop').onclick = () => {
    either while a key is held has to take effect now. Re-issuing `run` with the
    same vector just updates the jogger — no halt, so the machine does not
    stutter as you drag the box. */
-for (const sel of ['#feed','#step']){
+for (const sel of ['#feed','#turnFeed','#step','#turnScale']){
   $(sel).oninput = () => {
     paintKeys();
     if (kbRunning){
@@ -647,10 +940,16 @@ const clearDirty = () =>
 $('#btnRefresh').onclick = () => { clearDirty(); api('refresh', {}); };
 $('#btnSave').onclick    = () => api('eeprom', {action:'save'});
 $('#btnLoad').onclick    = () => { clearDirty(); api('eeprom', {action:'load'}); };
+$('#btnMatch').onclick   = () => {
+  clearDirty();
+  api('match', {}).then((r) => {
+    for (const w of r.writes || []) markPending(w.code, w.params);
+  }).catch(() => {});
+};
 $('#btnFactory').onclick = () => {
   if (confirm('M502 resets every setting to the firmware defaults, including steps/mm '
-            + 'and current.\n\nIt is not saved until you press Save to EEPROM '
-            + 'afterwards.\n\nContinue?')){
+            + 'and current.\n\nIt is not saved until you press Save to EEPROM, or '
+            + 'change any setting afterwards (which saves automatically).\n\nContinue?')){
     clearDirty(); api('eeprom', {action:'reset'});
   }
 };
@@ -701,6 +1000,8 @@ async function poll(){
     }
 
     syncSettings(s);
+    syncTune(s);
+    paintSaveState(s);
     $('#btnEndstops').textContent = 'Soft endstops: ' + (s.soft_endstops ? 'on' : 'off');
     $('#cal').textContent =
       `${s.steps_per_mm} steps/mm · ${s.mm_per_rev?.X ?? 40} mm per revolution`;
@@ -709,26 +1010,30 @@ async function poll(){
     $('#qdepth').textContent = `queue ${s.queue}`
       + (s.in_flight ? ` · ${s.in_flight} awaiting ok` : '');
 
-    // What is actually holding the stream back. If M400 does not block on this
-    // board, the pacing falls to the clock, and the operator should know that
-    // rather than wonder why the motion is gappier than the numbers suggest.
+    // Whether this board's M400 actually blocks. The held-key stream no
+    // longer depends on it either way — chunks are paced by the clock now —
+    // so this is just what the M400 button below will do if pressed.
     const bw = $('#barrierNote');
     if (!s.connected || s.m400_blocks === null){
       bw.textContent = '';
     } else if (s.m400_blocks){
-      bw.textContent = `M400 confirms each move before the next is sent `
+      bw.textContent = `M400 waits for the planner on this board `
         + `(measured ${s.barrier_ms} ms on a 300 ms dwell).`;
       bw.style.color = 'var(--dim)';
     } else {
-      bw.textContent = `⚠ This firmware answers M400 without waiting `
-        + `(${s.barrier_ms} ms on a 300 ms dwell), so each chunk is paced by the `
-        + `clock with a 15% margin instead. Motion is gappier; nothing piles up.`;
-      bw.style.color = 'var(--warn)';
+      bw.textContent = `This firmware answers M400 without waiting `
+        + `(${s.barrier_ms} ms on a 300 ms dwell), so the M400 button below `
+        + `will not actually block.`;
+      bw.style.color = 'var(--dim)';
     }
 
     document.body.classList.toggle('offline', !s.connected);
-    document.querySelectorAll('.jog button,button[data-act],button[data-g],#halt,#cmd,#btnSend')
+    document.querySelectorAll('.jog button,button[data-act],button[data-g],#halt,#cmd,#btnSend,'
+      + '#tuneAccel,#tunePower,#tuneStepsX,#tuneStepsY,#settings button,'
+      + '#btnMatch,#btnRefresh,#btnSave,#btnLoad,#btnFactory')
       .forEach((el) => { el.disabled = !s.connected; });
+    // A slider for a code the firmware refuses can only ever produce an error.
+    if ((s.unsupported || []).includes('M906')) $('#tunePower').disabled = true;
     paintKeys();
   }catch{ $('#dot').className = 'dot bad'; }
 
@@ -751,6 +1056,14 @@ buildSettings();
 paintKeys();
 poll();
 setInterval(poll, 700);
+</script>
+<script src="/actuator.js"></script>
+<script src="/teach.js"></script>
+<script src="/lidarmotor.js"></script>
+<script>
+actMount(document.getElementById('actCard'));
+lidarMotorMount(document.getElementById('lidarCard'));
+teachMount(document.getElementById('teachCard'));
 </script>
 </body>
 </html>

@@ -1,16 +1,16 @@
 /**
- * Marlin G-code link — the Ender-3 Pro half of this bench.
+ * Marlin G-code link — the Ender-3 Pro half of this rig.
  *
  * Merged in from the standalone `ender-x` Python tool. Same behaviour, same
- * API surface, but it now runs inside this server so there is one process,
- * one port and one page hub for the whole rig: the ESP32 drives the DAC
- * throttle, the Creality board drives the two NEMA17s.
- *
- *   ESP32   -> bench.js / transports.js   analog throttle, 20 Hz stream
- *   Marlin  -> this file                  G-code over serial, ok flow control
+ * API surface, but it now runs inside this server so there is one process
+ * and one page hub: the Creality board drives the two NEMA17s over serial,
+ * ok flow control, this file's job.
  *
  * X and Y are the left and right wheels of a differential drive, mounted
  * mirror-image, so a *direction* is a pair of wheel signs rather than one axis.
+ * Y, not Z: the right motor used to sit on the board's Z driver socket and was
+ * moved to Y, because stock firmware sets Y up exactly like X while Z is a lead
+ * screw — see checkWheelAxes() for what a mismatched pair does. Z is now empty.
  * That is what DIRECTIONS below is: forward is `G1 X-n Y+n` (both wheels
  * forward), left is `G1 X+n Y+n` (both the same sign, so it spins), and the
  * other two are their opposites. Holding W streams that line over and over —
@@ -39,11 +39,14 @@ export const DEFAULT_FEED = 6000;
 /**
  * How far one streamed chunk travels on each axis, in mm.
  *
- * This is the stopping distance, and that is the only thing it should be
- * chosen for. Marlin acks a move when it is buffered, so the machine is
- * always up to one chunk ahead of the host: whatever is in the planner when
- * you let go of the key still gets executed. At F1000 a 5 mm chunk is a 7 mm
- * diagonal that takes about half a second.
+ * This is *most* of the stopping distance — two of them are on the board while
+ * a key is held, see HOLD_MARGIN_S below — and that is the only thing it
+ * should be chosen for. It no longer decides whether a hold is smooth: the
+ * pacing keeps the planner blending at any chunk size. Marlin acks a
+ * move when it is buffered, so the machine is always up to one chunk ahead of
+ * the host: whatever is in the planner when you let go of the key still gets
+ * executed. At F1000 a 5 mm chunk is a 7 mm diagonal that takes about half a
+ * second.
  *
  * Big chunks are the trap. 100 mm on both axes is a 141 mm diagonal — eight
  * and a half seconds at F1000 — so the "stream" is one move every seven
@@ -51,7 +54,83 @@ export const DEFAULT_FEED = 6000;
  * leaves the gantry running until it hits the frame, because the only stop
  * there is waits for the move in progress to finish.
  */
-export const DEFAULT_STEP_MM = 5;
+export const DEFAULT_STEP_MM = 80;
+
+/**
+ * How long before a queued chunk STARTS the one after it must be on the board,
+ * in seconds — for a held key and for a taught route being replayed.
+ *
+ * Marlin re-plans the moves in its buffer every time one is added, but never
+ * the move it is already executing: a chunk that was the last one in the
+ * buffer when it started has "brake to a stop at the end" baked into it,
+ * whatever arrives afterwards. So a held key used to move in slices even with
+ * the next chunk queued early. It went out when the current chunk was 75 %
+ * through (the old CHUNK_OVERLAP), which is long after that chunk had started
+ * alone. Every 80 mm chunk braked to zero and set off again — on the wheels and
+ * in every replay of a taught route, which paced itself the same way.
+ *
+ * The rule is the steering stream's (STREAM_LEAD): the next chunk has to be
+ * planned before the current one starts, so while one runs another is always
+ * waiting behind it. That is a lead of one whole chunk plus this margin,
+ * which covers what the prediction cannot: timer jitter on the Pi, the serial
+ * round trip, the jerk the first move starts with. It is a time, not a
+ * fraction of a chunk, because none of those scale with the chunk.
+ *
+ * The schedule is still anchored to a running prediction of the board's own
+ * timeline (Pacer.endAt), never to "now" — anchoring to now is the bug that
+ * once let the planner back up without bound (test_serial.mjs keeps the
+ * record). What changed is what is predicted: a blended chunk runs at cruise,
+ * so it is timed by its cruise time, not by a trapezoid that ramps up and down
+ * inside every chunk — pacing by that would send slower than the board drains
+ * and bring the slices back through the clock instead of the queue.
+ *
+ * The price is stopping distance: up to two chunks are on the board when the
+ * key comes up, plus this margin's worth of travel — see halt() in
+ * marlin_http.js, and the page's #stopHint, which quotes the number. A smaller
+ * `step` shortens it, and no longer costs smoothness.
+ */
+export const HOLD_MARGIN_S = 0.15;
+
+/**
+ * The same idea for the steering stream, in whole chunks rather than a
+ * margin in seconds — and deliberately greater than 1.
+ *
+ * A lead of a quarter of a chunk (the held key's old CHUNK_OVERLAP) was never
+ * enough, and the steering stream is where that was found first. A steering
+ * chunk is 150 ms, and a quarter of that is 37 ms — shorter than the ramp —
+ * so by the time the next line arrives the board is already braking for the
+ * end of the current one.
+ *
+ * And it cannot change its mind: Marlin re-plans the moves in its buffer every
+ * time one is added, but never the move it is already executing. So a chunk
+ * that was the last one in the buffer when it started has "stop at the end"
+ * baked into it, whatever arrives afterwards. The next chunk must therefore be
+ * queued before the current one *starts*, which is more than one chunk ahead of
+ * when it will itself run — hence > 1. At 1.5 the board is holding one chunk in
+ * progress and one already planned behind it, so it blends the junction and
+ * simply keeps moving.
+ *
+ * That is the whole of the "choppy" problem: not the chunk size, not the feed,
+ * not the acceleration, but a queue that was always exactly one move too
+ * shallow to blend. The price is two chunks of stopping distance instead of
+ * one and a quarter — at 150 ms chunks, a couple of centimetres — and one extra
+ * chunk of steering latency, which is why the chunk is short in the first place.
+ */
+export const STREAM_LEAD = 1.5;
+
+/**
+ * How many lines may be waiting on the board before the stream skips a chunk.
+ *
+ * The pacing above is open loop, and its estimate is the *blended* run time —
+ * right while the board is cruising, optimistic the moment a real corner makes
+ * it slow down. Marlin's `ok` per command is the one honest signal available:
+ * when its planner is full the acks stop coming and the host's own queue grows.
+ * Past this depth the next chunk is skipped rather than queued, because a
+ * steering command is a sample of something that is still changing — a stale
+ * one is not worth having, and a backlog of them is a rover driving on what the
+ * camera saw a second ago.
+ */
+export const STREAM_MAX_AHEAD = 3;
 
 /**
  * The four ways the rover can be driven, as wheel signs.
@@ -69,6 +148,42 @@ export const DIRECTIONS = {
   right:   { X: -1, Y: -1 },
 };
 
+/**
+ * True for a direction that spins the rover in place — both wheels signed the
+ * same way, `left`/`right` in DIRECTIONS — rather than translating it, which
+ * is the opposite-sign case, `forward`/`back`.
+ *
+ * A one-wheel diagonal (W+A, say) is neither: exactly one axis is nonzero, so
+ * `sx === sy` is false by construction (0 !== ±1) and it is left unscaled —
+ * only one wheel is moving there, which is already gentler than a full spin.
+ */
+export function isSpin(vec) {
+  const sx = Math.sign(vec.X || 0), sy = Math.sign(vec.Y || 0);
+  return sx !== 0 && sy !== 0 && sx === sy;
+}
+
+/**
+ * How much smaller a spin is than a straight chunk, at the same nominal step,
+ * when nothing else is asked for.
+ *
+ * The chunk size is chosen by feel driving forward, where it is a distance
+ * the rover actually covers. Left/right cover the same wheel distance but
+ * spend it turning on the spot instead — the same number of millimetres reads
+ * as a much bigger turn than the equivalent forward chunk reads as a move, so
+ * left/right at full `step` felt like over-turning relative to forward/back.
+ * Scaling it down is what makes W/A/S/D feel like one control, not two.
+ *
+ * This is only the default: how much smaller a spin *feels* like it should be
+ * is a matter of the gearing, the surface and the operator's taste, not
+ * something one constant gets right for every rig. `/api/marlin/run` accepts
+ * a `turnScale` in the request body and uses that instead when given one —
+ * see marlin_http.js — with this as what a request that omits it gets.
+ *
+ * 0.1 is what the operator drives with — /gcode's #turnScale opens at it, and
+ * the two are kept the same so the page's previews and the server agree.
+ */
+export const TURN_SCALE = 0.1;
+
 const POS_RE = /X:(-?[\d.]+)\s+Y:(-?[\d.]+)\s+Z:(-?[\d.]+)\s+E:(-?[\d.]+)/;
 
 // `echo:Unknown command: "M906"` -> the firmware was built without that.
@@ -83,20 +198,20 @@ const PARAM_RE = /([A-Z])(-?[\d.]+)/g;
  *
  *   M92  steps/mm          M201 max acceleration (mm/s²)
  *   M203 max feedrate mm/s M204 acceleration    (P print, R retract, T travel)
- *   M205 jerk (X/Y) or junction deviation (J)
+ *   M205 jerk (X/Z) or junction deviation (J)
  *   M350 microsteps        M906 TMC current mA   M907 digipot current
  *   M569 stealthChop (1) / spreadCycle (0)
  */
 export const SETTABLE = {
-  M92:  { letters: 'XY',  min: 1,   max: 1000,  int: false },
-  M201: { letters: 'XY',  min: 1,   max: 20000, int: true  },
-  M203: { letters: 'XY',  min: 1,   max: 1000,  int: false },
+  M92:  { letters: 'XZ',  min: 1,   max: 1000,  int: false },
+  M201: { letters: 'XZ',  min: 1,   max: 20000, int: true  },
+  M203: { letters: 'XZ',  min: 1,   max: 1000,  int: false },
   M204: { letters: 'PRT', min: 1,   max: 20000, int: false },
-  M205: { letters: 'XYJ', min: 0,   max: 100,   int: false },
-  M350: { letters: 'XY',  min: 1,   max: 256,   int: true  },
-  M906: { letters: 'XY',  min: 100, max: 1200,  int: true  },
-  M907: { letters: 'XY',  min: 0,   max: 2000,  int: true  },
-  M569: { letters: 'XY',  min: 0,   max: 1,     int: true  },
+  M205: { letters: 'XZJ', min: 0,   max: 100,   int: false },
+  M350: { letters: 'XZ',  min: 1,   max: 256,   int: true  },
+  M906: { letters: 'XZ',  min: 100, max: 1200,  int: true  },
+  M907: { letters: 'XZ',  min: 0,   max: 2000,  int: true  },
+  M569: { letters: 'XZ',  min: 0,   max: 1,     int: true  },
 };
 
 /** Codes we read back from the board to populate the UI. */
@@ -105,7 +220,41 @@ export const QUERY_CODES = ['M92', 'M201', 'M203', 'M204', 'M205',
 
 // ...of those, the ones that report their own value when sent with no
 // parameters. The rest only ever appear in an M503 dump.
-const SELF_REPORTING = new Set(['M92', 'M350', 'M906', 'M907']);
+export const SELF_REPORTING = new Set(['M92', 'M350', 'M906', 'M907']);
+
+/**
+ * A line that moves the wheels, as opposed to one that configures them.
+ *
+ * The halt route in marlin_http.js drops these from the queue and nothing
+ * else. It used to empty the queue outright, and that took the settings with
+ * it: an `M203 Y…` or an `M500` queued behind a held key's chunks was thrown
+ * away the moment the key came up, the window lost focus, or Space was pressed
+ * — so "Save to EEPROM" sometimes did nothing at all, and said nothing about
+ * it. G28 counts as motion: a queued home is exactly what a stop should cancel.
+ */
+const MOTION_RE = /^G(?:[0-3]|28)(?!\d)/i;
+
+/**
+ * How long after the last settings write the board is told to save (M500).
+ *
+ * Every M92/M201/M203/... write lives in the board's RAM until M500, and
+ * opening the serial port reboots the board — so a change that was applied but
+ * never saved quietly reverted on the next connect or server restart, which is
+ * the other half of "settings sometimes do not save". The timer restarts on
+ * every move written too, so the save lands once the rover has been still for
+ * this long: Creality's 32-bit boards keep their "EEPROM" in flash, and a
+ * flash write is better done standing still than mid-chunk. 0 turns it off.
+ */
+export const AUTOSAVE_MS = 2000;
+
+/** A settings write — a SETTABLE code with at least one value — or null. */
+export function settingWrite(line) {
+  const text = String(line).trim().toUpperCase();
+  const m = /^(M\d+)\s/.exec(text);
+  if (!m || !SETTABLE[m[1]]) return null;
+  const params = parseParams(text, m[1]);
+  return params ? { code: m[1], params } : null;
+}
 
 /** Pull `X80.00 Y80.00` style parameters out of an echoed setting line. */
 export function parseParams(line, code) {
@@ -202,8 +351,12 @@ export class MarlinLink {
     this.softEndstops = true;
 
     // Per-motor correction for a motor wired backwards. DIRECTIONS already
-    // encodes which way each key drives the machine, so this stays off unless
-    // a motor physically turns the wrong way.
+    // encodes which way each key drives the machine, so this is only for a
+    // motor that physically turns the wrong way. Neither starts inverted: the
+    // right wheel did run backwards on the Z socket, but that was Z's firmware
+    // direction (stock Creality inverts Z opposite to X), and on Y it shares
+    // X's. The page's "invert left/right" boxes show and toggle these; a
+    // restart puts them back to this.
     this.invert = { X: false, Y: false };
 
     // Cap:EMERGENCY_PARSER from M115. null until the board tells us.
@@ -228,9 +381,25 @@ export class MarlinLink {
     // Codes the firmware answered "Unknown command" to.
     this.unsupported = new Set();
 
+    // True while the board is running settings its EEPROM does not hold —
+    // cleared by the board's own "Settings Stored", not by our sending M500.
+    this.unsaved = false;
+    // Writes the board did not keep as asked, keyed like `settings`:
+    //   { M205: { Y: { asked: 6, kept: 0.6 } } }
+    // Stock Creality firmware caps some values (X/Y jerk at 20, Z at 0.6) and says so in
+    // one line the page used to scroll straight past; this is that line, kept.
+    this.rejected = {};
+    // Values written and not yet read back, for the comparison above.
+    this._requested = {};
+    this.autosaveMs = AUTOSAVE_MS;
+    this._saveTimer = null;
+
     this._log = [];
     this._seq = 0;
     this._buf = '';
+
+    // Watchers of the wire — see onWrite().
+    this._taps = new Set();
 
     this._q = [];
     // Commands written but not yet acknowledged. Marlin's contract is one
@@ -250,6 +419,22 @@ export class MarlinLink {
 
   /** +1, or -1 if this axis is wired the other way round. */
   sign(axis) { return this.invert[String(axis).toUpperCase()] ? -1 : 1; }
+
+  /**
+   * Be told about every line as it actually goes out on the wire.
+   *
+   * For teaching a route (routes.js): what is recorded has to be what reached
+   * the board, not what was asked for. A held key's chunk that a halt dropped
+   * from the queue before it was written never moved a wheel, and a recording
+   * taken at send() time would replay it anyway — a route that drives one
+   * chunk further at every key release than the one that was taught.
+   *
+   * @returns {() => void} unsubscribe
+   */
+  onWrite(fn) {
+    this._taps.add(fn);
+    return () => this._taps.delete(fn);
+  }
 
   /** One command written; the board owes us an `ok` before the next. */
   _expect() { this._pending += 1; this._idle.clear(); }
@@ -303,6 +488,10 @@ export class MarlinLink {
       this._stop = false;
       this._pending = 0;
       this._idle.set();
+      // The board reboots on open and loads its EEPROM, so it starts saved.
+      this.unsaved = false;
+      this.rejected = {};
+      this._requested = {};
 
       port.on('data', (chunk) => this._onData(chunk));
       port.on('error', (err) => this._fail(`Serial read error: ${err.message || err}`));
@@ -327,12 +516,13 @@ export class MarlinLink {
 
       this.send('M115');     // firmware
       this.send('G21');      // millimetres
-      this.send('M17 X Y');  // energise both motors and hold them
+      this.send('M17 X Y');  // energise both wheel motors and hold them
       this.send('G91');      // relative — stays in force for the session
       this.send('M114');     // position
       this.readSettings();
       this.steppersOn = true;
       await this.probeBarrier();
+      this.checkWheelAxes();   // M503 has answered by now: probeBarrier drained it
       this.log('Connected.', 'sys');
     } finally {
       this._connecting = false;
@@ -354,14 +544,13 @@ export class MarlinLink {
   /**
    * Find out whether M400 really blocks on this board.
    *
-   * The streaming design leans on one promise: that Marlin holds M400's `ok`
-   * until the planner has drained, so the host learns when a move has actually
-   * finished rather than when it was merely accepted. A board that answers
-   * M400 immediately — because the firmware lacks it, or answers "Unknown
-   * command", or was built without the blocking behaviour — turns that into a
-   * free-running loop that fills the planner as fast as the serial line will
-   * carry it. That is indistinguishable, from the outside, from having no
-   * pacing at all.
+   * The held-key stream does not lean on this any more (see the Jogger in
+   * this file, and HOLD_MARGIN_S) — it paces every chunk by the clock, on any
+   * firmware. This still matters because a board that answers M400
+   * immediately — because the firmware lacks it, or answers "Unknown
+   * command", or was built without the blocking behaviour — makes the M400
+   * button in the console a no-op rather than a wait, and the operator should
+   * know that rather than wonder why pressing it did nothing.
    *
    * So it is measured rather than assumed. G4 is a dwell: it occupies the
    * planner for a known time and moves nothing, which makes it a barrier test
@@ -389,15 +578,68 @@ export class MarlinLink {
     } else {
       this.log(`M400 does not wait on this firmware: a ${dwellMs} ms dwell came `
              + `back in ${took} ms.`, 'error');
-      this.log('Falling back to pacing each chunk by its own run time, with a '
-             + 'margin. Motion will be slightly gappier, but moves will not '
-             + 'pile up in the planner.', 'sys');
+      this.log('The M400 button in the console will not actually block, then — '
+             + 'the held-key stream paces itself by the clock either way.', 'sys');
     }
     return took;
   }
 
-  /** Drop anything still queued so the pump stops promptly. */
+  /**
+   * Say so when the Y driver is not configured like X.
+   *
+   * The right wheel is plugged into the Y socket. Stock Creality firmware sets
+   * Y up exactly like X, so on a stock board this stays quiet — it is here for
+   * the board that is not: an EEPROM carrying someone's edits, or a firmware
+   * build with its own ideas. Both halves of a mismatch break driving.
+   * Steps/mm far apart turn one wheel further than the other for the same
+   * commanded millimetre, so the rover spins where it should drive straight.
+   * And Marlin slows a whole move until every axis is inside its own limits,
+   * so a Y with a low feed or acceleration ceiling caps every chunk — both
+   * wheels crawl, however high F is set. (This is what the Z socket did: stock
+   * Z is the bed's lead screw — 400 steps/mm, 5 mm/s — and the reason the
+   * right wheel moved to Y.)
+   *
+   * Nothing is rewritten on the operator's behalf: a pair of M92 values a few
+   * percent apart is exactly what a calibrated rover has (see the steps boxes
+   * on /gcode), so this only flags a gap too big to be calibration.
+   *
+   * @returns {string[]} the commands that would bring Y in line with X.
+   */
+  checkWheelAxes() {
+    const seen = [], fixes = [];
+    for (const code of ['M92', 'M203', 'M201', 'M205']) {
+      const { X: x, Y: y } = this.settings[code] || {};
+      if (x === undefined || y === undefined) continue;
+      // Steps/mm have to match to within calibration. The limits only need Y
+      // to be no tighter than X — a Y that is higher never caps anything.
+      const off = code === 'M92' ? Math.abs(y / x - 1) > 0.25 : y < x * 0.5;
+      if (!off) continue;
+      seen.push(`${code} X${+x.toFixed(3)} Y${+y.toFixed(3)}`);
+      fixes.push(`${code} Y${+x.toFixed(3)}`);
+    }
+    if (fixes.length) {
+      this.log(`Y does not match X: ${seen.join(', ')}.`, 'error');
+      this.log('The right wheel is on Y, so it will turn the wrong distance or cap '
+             + 'every move. Press "Match Y to X" in the settings card, or send '
+             + `${fixes.join(', ')} — either is saved to EEPROM automatically.`, 'sys');
+    }
+    return fixes;
+  }
+
+  /** Drop anything still queued so the pump stops promptly. Teardown only. */
   drain() { this._q.length = 0; }
+
+  /**
+   * Drop the moves still queued and keep everything else — what a stop needs.
+   * Settings, reads and saves queued behind the moves still go out; see
+   * MOTION_RE for the bug that drain() in this place was.
+   */
+  dropMotion() {
+    const before = this._q.length;
+    this._q = this._q.filter((line) => !MOTION_RE.test(line));
+    // How many were taken back — a paused replay rewinds by exactly this many.
+    return before - this._q.length;
+  }
 
   /**
    * Tear the link down after a fatal serial error.
@@ -415,6 +657,7 @@ export class MarlinLink {
     this._idle.set();
     this._work.set();
     this.drain();
+    this._cancelSave();
     const port = this.port;
     this.port = null;
     try { port.close(() => {}); } catch { /* already gone */ }
@@ -424,6 +667,7 @@ export class MarlinLink {
   async disconnect() {
     this._stop = true;
     this.drain();
+    this._cancelSave();
     this._idle.set();
     this._work.set();
     const port = this.port;
@@ -476,6 +720,7 @@ export class MarlinLink {
     for (const code of QUERY_CODES) {
       const params = parseParams(line, code);
       if (params) {
+        this._checkKept(code, params);
         this.settings[code] = { ...(this.settings[code] || {}), ...params };
         this.unsupported.delete(code);
       }
@@ -483,6 +728,12 @@ export class MarlinLink {
     if (this.settings.M92 && this.settings.M92.X !== undefined) {
       this.stepsPerMm = this.settings.M92.X;
     }
+
+    // Whether RAM and EEPROM agree, from the board's own words: M500 answers
+    // "Settings Stored", M501 (and the boot banner) "stored settings
+    // retrieved", M502 "Hardcoded Default Settings Loaded".
+    if (/settings stored|stored settings retrieved/i.test(line)) this.unsaved = false;
+    else if (/default settings loaded/i.test(line)) this.unsaved = true;
 
     this.log(line, 'rx');
   }
@@ -523,6 +774,10 @@ export class MarlinLink {
         await new Promise((res, rej) => port.write(`${cmd}\n`, (e) => (e ? rej(e) : res())));
         await new Promise((res) => port.drain(() => res()));
         this.log(cmd, 'tx');
+        this._wrote(cmd);
+        for (const fn of this._taps) {
+          try { fn(cmd); } catch { /* a watcher that throws must not stop the link */ }
+        }
       } catch (err) {
         // Errno 5 here almost always means the USB device went away
         // mid-session rather than the board rejecting the command.
@@ -539,9 +794,81 @@ export class MarlinLink {
     if (this._stop) throw new Error('serial link is down — reconnect first');
     const line = String(cmd).trim();
     if (!line) return;
+    // A fresh attempt at a value clears the note that the last one did not
+    // stick — here, at queue time, so the page never reads the old verdict as
+    // the answer to the new request.
+    const w = settingWrite(line);
+    if (w && this.rejected[w.code]) {
+      for (const L of Object.keys(w.params)) delete this.rejected[w.code][L];
+      if (!Object.keys(this.rejected[w.code]).length) delete this.rejected[w.code];
+    }
     this._q.push(line);
     this._work.set();
   }
+
+  /**
+   * Bookkeeping for a line that has just gone out on the wire.
+   *
+   * A settings write updates the cached value straight away. Waiting for the
+   * read-back instead is what made an applied value snap back on the page:
+   * the M503 that confirms it sits in the queue behind whatever was already
+   * there — a held key's chunks, at worst many seconds of them — and every
+   * status poll in between painted the old number back into the box. The
+   * read-back still has the last word (_checkKept), so a value the firmware
+   * refused shows up as refused rather than as a lie.
+   *
+   * Done at write time rather than at send() time on purpose: any M503 queued
+   * ahead of this line answers before it runs, and would otherwise be read as
+   * the board refusing a value it has not been sent yet.
+   */
+  _wrote(cmd) {
+    if (MOTION_RE.test(cmd)) {
+      if (this._saveTimer) this._armSave();   // still moving: save later
+      return;
+    }
+    const w = settingWrite(cmd);
+    if (!w) return;
+    if (QUERY_CODES.includes(w.code)) {
+      this.settings[w.code] = { ...(this.settings[w.code] || {}), ...w.params };
+      this._requested[w.code] = { ...(this._requested[w.code] || {}), ...w.params };
+      if (w.code === 'M92' && w.params.X !== undefined) this.stepsPerMm = w.params.X;
+    }
+    this.unsaved = true;
+    this._armSave();
+  }
+
+  /** Compare what the board reports against what was last written to it. */
+  _checkKept(code, reported) {
+    const asked = this._requested[code];
+    if (!asked) return;
+    for (const [L, want] of Object.entries(asked)) {
+      if (reported[L] === undefined) continue;
+      delete asked[L];
+      // M503 prints two decimals, so 0.605 comes back as 0.60 or 0.61.
+      if (Math.abs(reported[L] - want) <= Math.max(0.006, 1e-3 * Math.abs(want))) continue;
+      this.rejected[code] = { ...(this.rejected[code] || {}),
+                              [L]: { asked: want, kept: reported[L] } };
+      this.log(`${code} ${L}${want} did not stick: the board kept ${L}${reported[L]}. `
+             + 'This firmware caps that value, so it cannot be raised from G-code.', 'error');
+    }
+    if (!Object.keys(asked).length) delete this._requested[code];
+  }
+
+  /** (Re)start the countdown to M500. See AUTOSAVE_MS. */
+  _armSave() {
+    this._cancelSave();
+    if (!(this.autosaveMs > 0)) return;
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      if (!this.unsaved || !this.connected || this._stop) return;
+      try { this.send('M500'); } catch { /* link went down: `unsaved` stays true and the page says so */ }
+    }, this.autosaveMs);
+  }
+
+  _cancelSave() { clearTimeout(this._saveTimer); this._saveTimer = null; }
+
+  /** Whether an automatic M500 is counting down. */
+  get savePending() { return this._saveTimer !== null; }
 
   /**
    * Write past the queue, for Marlin's emergency parser.
@@ -593,6 +920,9 @@ export class MarlinLink {
   /** Commands written and not yet acknowledged. 0 or 1 in normal operation. */
   inFlight() { return this._pending; }
 
+  /** Commands accepted but not yet written — the board is behind if this grows. */
+  queued() { return this._q.length; }
+
   /** mm of travel per motor revolution, per axis, from the live steps/mm. */
   mmPerRev() {
     const out = {};
@@ -612,25 +942,30 @@ export class MarlinLink {
  * ends — which is why it works on any firmware, and why there is no quickstop
  * anywhere in this codebase.
  *
- * The catch is that Marlin acks a G1 when it is *buffered*, not when it
- * finishes, so streaming them as fast as they are accepted fills the planner
- * and the machine coasts for seconds after release.
+ * The chunk after this one is sent early, not on completion, and early
+ * enough to matter. Three designs in, in order:
  *
- * So the next chunk waits for the later of two things:
+ *   1  on completion, confirmed with M400 — the planner drained to zero at
+ *      the end of every chunk; the rover moved in visible slices
+ *   2  75 % through the current chunk (CHUNK_OVERLAP) — still slices, because
+ *      Marlin never re-plans the move it is executing, and that move had
+ *      started alone: it braked to zero at its end whatever came next
+ *   3  before the current chunk STARTS (HOLD_MARGIN_S) — while one runs,
+ *      another is always planned behind it, and the junction is blended
  *
- *   · **M400**, whose `ok` Marlin withholds until the planner has drained —
- *     exact, but only worth anything on a board where M400 actually blocks,
- *     which MarlinLink.probeBarrier() measures rather than assumes; and
- *   · **the clock**, because a move cannot possibly have finished sooner than
- *     it takes to run.
+ * The pacing is a Pacer: a running prediction of when the board will finish
+ * what it has been sent, timed by the cruise speed the board actually holds
+ * through a blended chunk. It is open loop — nothing on the wire says how full
+ * the planner is — so the prediction is anchored to its own timeline and never
+ * to "now"; anchored to now, a stream outruns the board without bound (see
+ * test_serial.mjs, which models the planner, blending included).
  *
- * Either alone has a failure mode — the first trusts the firmware, the second
- * trusts an estimate — but waiting for the later of the two can only make the
- * stream gappier, never denser. So the board is never holding more than the
- * one move it is executing, however long the key is held and whatever the
- * firmware does, and letting go stops the machine within that one chunk. It
- * costs a brief stop between chunks, which is the price of the key meaning
- * what it says.
+ * A key pressed from standstill starts with two HALF chunks, sent back to back:
+ * the first cannot be allowed to start alone either, and two halves keep a
+ * quick tap at one chunk of travel — the distance a tap always moved.
+ *
+ * The cost is stopping distance: up to two chunks plus HOLD_MARGIN_S of travel
+ * are on the board when the key comes up. See halt() in marlin_http.js.
  */
 export class Jogger {
   constructor(link) {
@@ -641,8 +976,41 @@ export class Jogger {
     // only ever go straight or spin on the spot.
     this._axis = null;
     this._feed = DEFAULT_FEED;
+    // Whether this is the steering stream (STREAM_LEAD, its own schedule) or
+    // a held key (a Pacer, HOLD_MARGIN_S).
+    this._cruise = false;
+    this._pacer = new Pacer(this);
+    this._halves = 0;           // half-size chunks still to send, from standstill
     this._wake = new Flag(false);
     this._loop();
+  }
+
+  /** The acceleration Marlin plans a G1 without extrusion by, mm/s². */
+  accel() { return Number((this.link.settings.M204 || {}).T) || 500; }
+
+  /**
+   * The speed a chunk actually runs at inside a blended stream, mm/s.
+   *
+   * The feed, unless the board caps it: per axis by M203, and by the planner
+   * itself, which only lets a move run as fast as the one queued behind it can
+   * still brake from — v² ≤ 2·a·d for a chunk of length d. That second cap
+   * binds only for tiny chunks at high feeds, and ignoring it would predict a
+   * board faster than the real one: a schedule that sends too often.
+   */
+  holdSpeed(axis, feed) {
+    const dist = Math.hypot(axis.X || 0, axis.Y || 0);
+    let v = Math.max(1, feed / 60);
+    const cap = this.link.settings.M203 || {};
+    for (const a of ['X', 'Y']) {
+      const d = Math.abs(axis[a] || 0), m = Number(cap[a]);
+      if (d > 1e-9 && m > 0) v = Math.min(v, (m * dist) / d);
+    }
+    return Math.max(1, Math.min(v, Math.sqrt(2 * this.accel() * Math.max(dist, 0.001))));
+  }
+
+  /** A held chunk's run time once the stream is rolling — how often one goes out. */
+  holdSeconds(axis, feed) {
+    return Math.hypot(axis.X || 0, axis.Y || 0) / this.holdSpeed(axis, feed);
   }
 
   get active() { return this._axis !== null; }
@@ -666,6 +1034,7 @@ export class Jogger {
   start(vec, feed, step) {
     this._axis = { X: Math.sign(vec.X || 0) * step, Y: Math.sign(vec.Y || 0) * step };
     this._feed = feed;
+    this._cruise = false;
     this._wake.set();
   }
 
@@ -677,6 +1046,10 @@ export class Jogger {
    * same convention DIRECTIONS encodes, expressed as distances rather than
    * signs. Their mean is how far the rover advances; their difference, over
    * the track width, is how much it turns.
+   *
+   * Paced differently from a held key: chunks are short, they arrive without a
+   * pause between them, and the point is for the machine never to stop. See
+   * STREAM_LEAD.
    */
   startWheels(left, right, feed, lift = 0) {
     // Z is the fork, on the board's Z driver. It rides in the same G1 as the
@@ -684,10 +1057,26 @@ export class Jogger {
     // fighting over one planner.
     this._axis = lift ? { X: -left, Y: right, Z: lift } : { X: -left, Y: right };
     this._feed = feed;
+    this._cruise = true;
     this._wake.set();
   }
 
   stop() { this._axis = null; this._wake.set(); }
+
+  /**
+   * Move time for a chunk that neither starts nor ends at a standstill.
+   *
+   * The trapezoid below is the right estimate for a move the machine ramps up
+   * to and back down from. It is the wrong one for a stream that is blending:
+   * there the ramps happen once, at the start of the run, and every chunk after
+   * that is pure cruise. Pacing a blended stream by the trapezoid would send
+   * roughly half as often as the board drains, the planner would run dry
+   * between chunks, and the stop-start this is all meant to remove comes back
+   * — by way of the pacing rather than the queue depth.
+   */
+  cruiseSeconds(dist, feed) {
+    return dist / Math.max(1, feed / 60);
+  }
 
   /** Trapezoidal move time, so pacing does not outrun the machine. */
   chunkSeconds(dist, feed) {
@@ -700,45 +1089,170 @@ export class Jogger {
   }
 
   async _loop() {
+    // The steering stream's schedule: `dueAt` is a running prediction of when
+    // the last-sent chunk finishes — the board's own timeline, not this host's
+    // clock — and `lastMs` is that chunk's own predicted duration. A held key
+    // keeps the same kind of prediction in this._pacer.
+    let dueAt = null, lastMs = 0;
+
     for (;;) {
       this._wake.clear();
       const axis = this._axis, feed = this._feed;
-      if (!axis || !this.link.connected) { await this._wake.wait(200); continue; }
-
-      const line = this.lineFor(axis, feed);
-      if (!line) { await this._wake.wait(200); continue; }
-
-      // The distance Marlin will plan and time the move by, which for two
-      // unequal wheel distances is neither of them.
-      const seconds = this.chunkSeconds(Math.hypot(axis.X || 0, axis.Y || 0, axis.Z || 0), feed);
-      const startedAt = Date.now();
-
-      try {
-        this.link.send(line);
-        this.link.send('M400');     // acked only once the move has finished
-      } catch {
-        this.stop();
+      if (!axis || !this.link.connected) {
+        dueAt = null;
+        // The key came up: the last chunk on the board brakes to a stop.
+        this._pacer.release();
+        this._halves = 0;
+        await this._wake.wait(200);
         continue;
       }
 
-      // Two independent brakes, and the later one wins.
-      //
-      //   1. M400's ack — exact, and self-correcting, but only on a board
-      //      where M400 genuinely blocks. probeBarrier() has measured that.
-      //   2. The clock — the move cannot finish sooner than it takes to run,
-      //      whatever the board says. This is the one that holds when the
-      //      first is a lie, and without it a board that answers M400
-      //      instantly gets moves as fast as the serial line will carry them.
-      //
-      // Waiting for the later of the two can only ever make the stream
-      // gappier, never denser, so nothing accumulates under any firmware.
-      await this.link.whenDrained(seconds * 3000 + 2000);
+      if (!this._cruise) {
+        dueAt = null;
+        await this._holdOnce(axis, feed);
+        continue;
+      }
 
-      const margin = this.link.m400Blocks ? 1 : 1.15;
-      const floor = seconds * 1000 * margin;
-      const elapsed = Date.now() - startedAt;
-      if (elapsed < floor) await sleep(floor - elapsed);
+      const line = this.lineFor(axis, feed);
+      if (!line) { dueAt = null; await this._wake.wait(200); continue; }
+
+      // The distance Marlin will plan and time the move by, which for two
+      // unequal wheel distances is neither of them. Z too: a fork chunk rides
+      // in the same G1, and a fork-only chunk would otherwise time as zero.
+      const dist = Math.hypot(axis.X || 0, axis.Y || 0, axis.Z || 0);
+      const ms = this.cruiseSeconds(dist, feed) * 1000;
+
+      if (dueAt !== null) {
+        // `dueAt` is when the chunk already in flight is predicted to finish;
+        // send this one STREAM_LEAD chunk times before that — more than a
+        // whole one, which is what puts the next move in the planner before
+        // the current one starts. Wake early instead if start()/stop()/
+        // startWheels() changes things, and re-check rather than send stale.
+        const wait = (dueAt - lastMs * STREAM_LEAD) - Date.now();
+        if (wait > 0 && await this._wake.wait(wait)) continue;
+      }
+
+      // Leading by more than a chunk only works while the board keeps up with
+      // the estimate. When it does not — a corner the planner had to slow for,
+      // a busy link — its acks stop and the host's own queue grows; then the
+      // useful thing is to skip this chunk and steer with the next camera
+      // frame, not to post a line that will act on stale information. The
+      // schedule still advances, so the stream stays in step either way.
+      const behind = this._cruise
+        && this.link.queued() + this.link.inFlight() > STREAM_MAX_AHEAD;
+      if (behind) {
+        dueAt = Math.max(dueAt ?? Date.now(), Date.now()) + ms;
+        lastMs = ms;
+        continue;
+      }
+
+      try {
+        this.link.send(line);
+      } catch {
+        this.stop();
+        dueAt = null;
+        continue;
+      }
+
+      // Extend from the PREDICTED timeline, not from when this chunk actually
+      // went out — it went out early, on purpose. Anchoring here to `dueAt`
+      // rather than to `Date.now()` is what keeps every steady-state gap
+      // between sends at exactly one chunk's run time: recomputing "early by
+      // the lead" fresh relative to *now* every cycle instead sends faster
+      // than the board can ever drain, and the queue grows without bound.
+      // `Math.max(..., Date.now())` only matters if a chunk is ever sent late
+      // — a slow tick, a big jump in step or feed — so the schedule cannot
+      // fall permanently behind.
+      dueAt = Math.max(dueAt ?? Date.now(), Date.now()) + ms;
+      lastMs = ms;
     }
+  }
+
+  /** One held-key chunk: wait for its turn on the Pacer, then send it. */
+  async _holdOnce(axis, feed) {
+    const p = this._pacer;
+    // From standstill: two half chunks, back to back — see the class docstring.
+    if (p.idle() && this._halves === 0) this._halves = 2;
+    const wait = p.waitMs();
+    // Woken early by start()/stop(): go round again and re-check, never send stale.
+    if (wait > 0 && await this._wake.wait(wait)) return;
+    const k = this._halves > 0 ? 0.5 : 1;
+    const chunk = { X: (axis.X || 0) * k, Y: (axis.Y || 0) * k };
+    const line = this.lineFor(chunk, feed);
+    if (!line) { await this._wake.wait(200); return; }
+    try {
+      this.link.send(line);
+    } catch {
+      this.stop();
+      return;
+    }
+    p.sent(chunk, feed);
+    if (this._halves > 0) this._halves -= 1;
+  }
+}
+
+/**
+ * When the board will be done with what it has been sent — the open-loop
+ * clock that paces a held key (Jogger) and a taught route (routes.js's
+ * Replayer), so the planner always has the next chunk before it starts the
+ * current one. See HOLD_MARGIN_S.
+ *
+ *   waitMs()   how long until the next chunk may go out (≤ 0: now)
+ *   sent()     a chunk went out now; extend the prediction by it
+ *   release()  nothing more is coming; the last chunk brakes to a stop
+ *
+ * Timed like the planner plans it: a chunk behind another in the same
+ * direction runs at its cruise speed; one from standstill adds the time its
+ * ramp up costs over cruising (v / 2a); a turn — a wheel reversing, which
+ * Marlin's jerk limit takes down to near zero — adds the braking into it and
+ * the ramp out of it.
+ */
+export class Pacer {
+  constructor(jog, marginS = HOLD_MARGIN_S) {
+    this.jog = jog;
+    this.marginMs = marginS * 1000;
+    this.reset();
+  }
+
+  reset() {
+    this.endAt = null;          // predicted end of everything sent, ms epoch
+    this.lastMs = 0;            // the last chunk's own predicted run time
+    this.dir = null;            // its unit direction
+    this.v = 0;                 // its cruise speed, mm/s
+    this.braking = false;       // release() has already added the last ramp
+  }
+
+  idle(now = Date.now()) { return this.endAt === null || now >= this.endAt; }
+
+  /** The next chunk is due HOLD_MARGIN_S before the last one sent STARTS. */
+  waitMs(now = Date.now()) {
+    return this.idle(now) ? 0 : this.endAt - this.lastMs - this.marginMs - now;
+  }
+
+  sent(axis, feed, now = Date.now()) {
+    const dist = Math.hypot(axis.X || 0, axis.Y || 0);
+    const dir = { X: (axis.X || 0) / dist, Y: (axis.Y || 0) / dist };
+    const a = this.jog.accel();
+    const v = this.jog.holdSpeed(axis, feed);
+    const idle = this.idle(now);
+    const turned = !idle && !!this.dir && this.dir.X * dir.X + this.dir.Y * dir.Y < 0.999;
+    let start = idle ? now : this.endAt;
+    // The chunk before a turn brakes into it — unless release() already said so.
+    if (turned && !this.braking) start += (this.v / (2 * a)) * 1000;
+    let ms = (dist / v) * 1000;
+    if (idle || turned || this.braking) ms += (v / (2 * a)) * 1000;
+    this.endAt = start + ms;
+    this.lastMs = ms;
+    this.dir = dir;
+    this.v = v;
+    this.braking = false;
+    return ms;
+  }
+
+  release(now = Date.now()) {
+    if (this.braking || this.idle(now)) return;
+    this.endAt += (this.v / (2 * this.jog.accel())) * 1000;
+    this.braking = true;
   }
 }
 

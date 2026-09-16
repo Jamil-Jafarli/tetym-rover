@@ -56,7 +56,14 @@ const run = (cmd, args) => new Promise((resolve) => {
 });
 
 export class Gpio {
-  constructor() {
+  /**
+   * @param {object} [opts]
+   * @param {boolean} [opts.enabled]  false is dry: what was asked for is kept
+   *   and shown, no pin is touched — for a laptop, and for the test suites,
+   *   which run on the Pi itself (the same idea as --no-actuator)
+   */
+  constructor({ enabled = true } = {}) {
+    this.enabled = enabled;
     this.backend = null;         // 'sysfs' | 'pinctrl' | 'none'
     this.error = null;
     this.state = new Map();      // pin -> 0/1, what we last asked for
@@ -71,6 +78,11 @@ export class Gpio {
     if (this.backend) return this.backend;
     if (this._probe) return this._probe;
     this._probe = (async () => {
+      if (!this.enabled) {
+        this.error = 'quru rejim (--no-gpio) — pinlere dokunulmuyor';
+        this.backend = 'none';
+        return this.backend;
+      }
       if (os.platform() !== 'linux') {
         this.error = `${os.platform()} — Raspberry Pi değil, pinler sürülmüyor`;
         this.backend = 'none';

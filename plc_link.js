@@ -77,7 +77,10 @@ export class PlcLink {
     this.sock = sock;
     sock.on('error', (err) => this._fail(err));
     sock.on('message', (buf, rinfo) => this._message(buf, rinfo));
-    const opts = { port: 0 };
+    // The robot's own port. 0 lets the OS pick one — the PLC answers whatever
+    // port a packet came from, so that is enough for it — but a fixed one
+    // (--plc-local) is what a person testing by hand with nc can aim at.
+    const opts = { port: Number(this.cfg.localPort) || 0 };
     if (this.cfg.bind) opts.address = this.cfg.bind;
     try {
       sock.bind(opts, () => {
@@ -162,6 +165,8 @@ export class PlcLink {
       bind: this.cfg.bind,
       period_ms: this.cfg.periodMs,
       bound: this.bound,
+      // The port a PAKET_RX has to be sent to — random unless --plc-local fixed it.
+      local_port: (() => { try { return this.sock && this.bound ? this.sock.address().port : null; } catch { return null; } })(),
       error: this.error,
       connected: this.connected,
       tx: this.tx,

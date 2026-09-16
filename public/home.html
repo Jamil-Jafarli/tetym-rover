@@ -62,8 +62,8 @@
       </span>
     </div>
     <div class="stat" style="margin-top:14px">
-      <div><span class="lbl" id="lblL">GPIO25</span><b id="pL">–</b></div>
-      <div><span class="lbl" id="lblR">GPIO26</span><b id="pR">–</b></div>
+      <div><span class="lbl">Sol teker</span><b id="pL">–</b></div>
+      <div><span class="lbl">Sağ teker</span><b id="pR">–</b></div>
       <div><span class="lbl">Yön</span><b id="dir" style="font-size:14px">–</b></div>
     </div>
     <div class="muted" id="reason" style="margin-top:12px;text-align:center">–</div>
@@ -96,24 +96,10 @@
       <h2>Kontrol paneli — hepsi tek ekranda</h2>
       <span class="arrow">&rsaquo;</span>
     </div>
-    <p>Hız, gerilim, ESP32 ve Raspberry Pinin durumu (CPU, sıcaklık,
-       bellek), canlı kamera, öndeki engele mesafe, son okunan QR, sahadaki
-       konum ve LiDAR haritası.</p>
+    <p>Canlı kamera, son okunan QR, sahadaki konum ve iz, Ender kartı ve
+       Raspberry Pinin durumu (CPU, sıcaklık, bellek), lidar.</p>
   </a>
 
-  <a class="tile" href="/panel">
-    <div class="t">
-      <span class="ico" style="background:#fbeee2">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#ffa657" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-      </span>
-      <h2>1920×1080 panel — büyük ekran</h2>
-      <span class="arrow">&rsaquo;</span>
-    </div>
-    <p>Bütün sistemler kaydırmadan tek ekranda: kamera, engel, LiDAR haritası, sahada
-       konum ve rota, sürüş (etkinleştirme, WASD, hızlar, seviye, DUR), kaldırma, QR, ESP32 ve Pi.</p>
-  </a>
 
   <a class="tile" href="/gcode">
     <div class="t">
@@ -159,33 +145,7 @@
        alan, tarayıcının yolu. Uygulama bu sunucuyu ağda kendisi bulur.</p>
   </a>
 
-  <a class="tile" href="/setup" id="tSetup">
-    <div class="t">
-      <span class="ico" style="background:#fbf3dc">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#d29922" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-      </span>
-      <h2>Kurulum — ne yapmalıyım</h2>
-      <span class="arrow">&rsaquo;</span>
-    </div>
-    <p id="setupHint">Adım adım liste: her tekerin dönme eşiğini ölç, güç
-       düzeltmesini bul, yaz. Buradaki sayılar bütün sayfalarda kullanılır.</p>
-  </a>
 
-  <a class="tile" href="/drive">
-    <div class="t">
-      <span class="ico" style="background:#e3f4e8">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 5v14M5 12h14"/></svg>
-      </span>
-      <h2>Klavyeyle sür</h2>
-      <span class="arrow">&rsaquo;</span>
-    </div>
-    <p>W ileri · A / D yerinde dönme · S geri. Her tuşun değerleri
-       düzenlenebilir, ana seviye ile hepsi birden ölçeklenir.</p>
-  </a>
 
   <a class="tile" href="/vision">
     <div class="t">
@@ -220,6 +180,20 @@
        başla.</b></p>
   </a>
 
+  <a class="tile" href="/map">
+    <div class="t">
+      <span class="ico" style="background:#e3f4e8">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/></svg>
+      </span>
+      <h2>Saha haritası — istasyon seç</h2>
+      <span class="arrow">&rsaquo;</span>
+    </div>
+    <p>Yarışma sahası: A1–A3, B1–B3, kapı. Bir istasyon seç, /follow oraya sürer;
+       robotun nerede olduğu ve rotası canlı çizilir.</p>
+  </a>
+
   <a class="tile" href="/tune">
     <div class="t">
       <span class="ico" style="background:#e2eff6">
@@ -235,43 +209,14 @@
        yazarsan mesafe kalibrasyonunu kendi hesaplar.</p>
   </a>
 
-  <a class="tile" href="/obstacle">
-    <div class="t">
-      <span class="ico" style="background:#fbe9df">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#d29922" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 12h5"/><rect x="14" y="6" width="7" height="12" rx="1"/>
-          <path d="M9.5 10.5l2 1.5-2 1.5"/></svg>
-      </span>
-      <h2>Engelde dur — sonar testi</h2>
-      <span class="arrow">&rsaquo;</span>
-    </div>
-    <p>Öne bakan HC-SR04. Robot düz sürünür, önüne bir şey çıkınca durur,
-       geçtikten sonra bekleyip devam eder. Eşikler burada ayarlanır ve
-       <b>/follow</b>ta da geçerlidir.</p>
-  </a>
 
-  <a class="tile" href="/pins" id="tPins">
+  <a class="tile" href="/pins">
     <div class="t">
       <span class="ico" style="background:#ecebf3">
         <svg viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round">
           <rect x="7" y="4" width="10" height="16" rx="2"/>
           <path d="M4 8h3M4 12h3M4 16h3M17 8h3M17 12h3M17 16h3"/></svg>
-      </span>
-      <h2 id="tPinsH">Boş pinler — 0-255 elle</h2>
-      <span class="arrow">&rsaquo;</span>
-    </div>
-    <p id="tPinsP">Robotun kullanmadığı her pine elle değer ver, ne olduğunu yaz.
-       Dikkat: <b>yalnızca GPIO25/26 analogdur</b>, kalanlar PWMdir.</p>
-  </a>
-
-  <a class="tile" href="/pi-pins">
-    <div class="t">
-      <span class="ico" style="background:#fff8c5">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#bf8700" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round">
-          <path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
       </span>
       <h2>Pi pinleri — geri vites buzzeri</h2>
       <span class="arrow">&rsaquo;</span>
@@ -280,23 +225,8 @@
        Bir de hangi kablonun nereye gittiğine dair notlarınız.</p>
   </a>
 
-  <a class="tile" href="/manual">
-    <div class="t">
-      <span class="ico" style="background:#faf1d9">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#d29922" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/>
-          <path d="M1 14h6M9 8h6M17 16h6"/></svg>
-      </span>
-      <h2>Manuel — yüzdeyi elle yaz</h2>
-      <span class="arrow">&rsaquo;</span>
-    </div>
-    <p>Her kanala ayrı yüzde. Motorun hangi gerilimde dönmeye başladığını
-       bulmak ve kabloları kontrol etmek için.</p>
-  </a>
 
-  <div class="card warn" id="espWarn">
-    <div class="lbl" style="color:var(--warn)">İlk çalıştırmadan önce</div>
+
     <p class="muted" style="margin:8px 0 0">Tekerler yerden kalkmış olsun ve ana
     seviye 15–25 % arasında olsun. Yön değişince robot önce durur —
     bu bir saniyelik duraklama kasıtlıdır, röleler yalnızca teker durunca geçer.</p>
@@ -304,41 +234,18 @@
 
 </div>
 
-<script src="/wheels.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 let ws = null;
-let machine = null;
 
-// One hub for both machines: the tiles are the pages this server actually
-// serves, asked for once rather than guessed from what the page happens to
-// know. A tile to a 404 is worse than no tile.
+// The tiles are the pages this server actually serves, asked for once rather
+// than guessed. A tile to a 404 is worse than no tile.
 fetch('/api/pages').then((r) => r.json()).then((info) => {
-  machine = info.machine;
   const have = new Set(info.pages);
   for (const a of document.querySelectorAll('a.tile')) {
     if (!have.has(new URL(a.href).pathname)) a.remove();
   }
-  $('sub').textContent = machine === 'marlin'
-    ? 'Ender 3 Pro kartı · iki step motor · Raspberry Pi'
-    : 'ESP32 · iki DAC kanalı · iki yön rölesi';
-  if (machine === 'marlin') {
-    $('lblL').textContent = 'Sol teker';
-    $('lblR').textContent = 'Sağ teker';
-    // The DAC bench's own advice and its wheel-threshold strip are about two
-    // analog pins and two relays; this machine has stepper drivers.
-    document.getElementById('espWarn')?.remove();
-    for (const el of document.querySelectorAll('.wtrim')) el.remove();
-    // On this machine /pins is the Pi's pins, not the ESP32's spare GPIOs.
-    const t = document.getElementById('tPins');
-    if (t) {
-      document.getElementById('tPinsH').textContent = 'Pi pinleri — geri vites buzzeri';
-      document.getElementById('tPinsP').textContent =
-        'Robot geri giderken öten buzzer: hangi pinler, bip aralığı, ses testi. '
-        + 'Bir de hangi kablonun nereye gittiğine dair notlarınız.';
-    }
-  }
-  $('pinLink').href = have.has('/pins') && machine === 'marlin' ? '/pins' : '/pi-pins';
+  $('sub').textContent = 'Ender 3 Pro kartı · iki step motor · Raspberry Pi';
 }).catch(() => { $('sub').textContent = 'sunucuya ulaşılamadı'; });
 
 function connect() {
@@ -355,31 +262,18 @@ function connect() {
   ws.onmessage = ev => {
     let s; try { s = JSON.parse(ev.data); } catch (e) { return; }
     if (s.type !== 'status') return;
-    if (WT) paintSetupTile(WT.fromStatus(s));
-    const e = s.esp || {};
 
-    if (s.machine === 'marlin') {
-      const out = s.out || [0, 0];
-      $('pL').textContent = Math.round(out[0]) + ' %';
-      $('pR').textContent = Math.round(out[1]) + ' %';
-      $('dir').textContent = s.reversing ? 'GERİ'
-        : (Math.abs(out[0]) < 0.5 && Math.abs(out[1]) < 0.5) ? 'DURUYOR' : 'İLERİ';
-    } else {
-      $('pL').textContent = e.pL != null ? Math.round(e.pL) + ' %' : '–';
-      $('pR').textContent = e.pR != null ? Math.round(e.pR) + ' %' : '–';
-      const d = Array.isArray(e.rev) ? e.rev : (s.dir || [false, false]);
-      $('dir').textContent = s.dir_settling ? 'DURUYOR…'
-        : (!d[0] && !d[1]) ? 'İLERİ'
-        : (d[0] && d[1]) ? 'GERİ' : 'FIRLANMA';
-    }
+    const out = s.out || [0, 0];
+    $('pL').textContent = Math.round(out[0]) + ' %';
+    $('pR').textContent = Math.round(out[1]) + ' %';
+    $('dir').textContent = s.reversing ? 'GERİ'
+      : (Math.abs(out[0]) < 0.5 && Math.abs(out[1]) < 0.5) ? 'DURUYOR' : 'İLERİ';
 
     $('reason').textContent = s.reason || '';
     const ok = s.esp_fresh && !s.serial_error;
     $('dot').className = 'dot ' + (ok ? 'ok' : 'bad');
-    $('linktxt').textContent = s.serial_error
-      ? (s.machine === 'marlin' ? 'Ender kartı bağlı değil' : 'seri port hatası')
-      : ok ? (s.machine === 'marlin' ? 'Ender kartı bağlı' : 'ESP32 bağlı')
-      : (s.machine === 'marlin' ? 'karttan cevap yok' : 'ESP32den telemetri yok');
+    $('linktxt').textContent = s.serial_error ? 'Ender kartı bağlı değil'
+      : ok ? 'Ender kartı bağlı' : 'karttan cevap yok';
 
     // The buzzer and the pin notes: the same two things /pins shows, said in
     // one line each, because this is the page that is open on the bench.
@@ -401,25 +295,6 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 connect();
-
-// The wheel trim, shown the same way on every page — see public/wheels.js.
-// `mode` is a promise to the reader about THIS page: 'raw' means the
-// numbers below are not applied here, which is deliberate on the pages
-// where the threshold is measured.
-const WT = wheelsMount({ strip: true, mode: 'applied' });
-
-// Say it on the hub, not only inside /setup: an unmeasured robot drives well
-// enough to make you blame the steering gains instead.
-function paintSetupTile(cfg) {
-  const el = document.getElementById('setupHint');
-  if (!el) return;
-  const done = wheelsMeasured(cfg);
-  el.textContent = done
-    ? 'Teker eşikleri ölçüldü. Sayıları değiştirmek ya da mesafe kalibrasyonunu '
-      + 'yapmak için buraya gir.'
-    : '⚠ Tekerlerin dönme eşiği henüz ölçülmedi — robot düşük hızda sapacak. '
-      + 'Adım adım liste burada.';
-}
 </script>
 </body>
 </html>

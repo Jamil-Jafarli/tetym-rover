@@ -192,6 +192,56 @@ console.log('\nYoldan uzaqlaşma sayılır');
   ok(has(r, 'Yoldan uzaklaşıyor'), 'ayrıca tapıntı kimi göstərir');
 }
 
+console.log('\n90° köşələr itki kimi sayılmır');
+{
+  // Four corners on a lap. Each one takes the chain with it for a moment —
+  // that is what a right angle looks like from the camera — and the pilot
+  // drives through it on purpose. Counting those frames as "lost the road"
+  // would have the analyser recommend slowing down on the straights because
+  // the robot successfully took its corners.
+  const r = analyse(run(600, (i) => {
+    const turning = (i % 150) > 130;
+    return { err: turning ? null : 0.08, lost: turning, turn: turning ? 1 : 0,
+             steer: turning ? 1 : 0.05, speed: turning ? 10 : 40,
+             reason: turning ? 'köşe — sağa dönüyor' : 'düz yol' };
+  }));
+  ok(r.metrics.corner_events === 4, `${r.metrics.corner_events} köşə sayıldı`);
+  ok(r.metrics.lost_events === 0, `heç bir köşə itki kimi yazılmadı  (${r.metrics.lost_events})`);
+  ok(!has(r, 'Yolu kaybediyor'), '«yolu kaybediyor» tapıntısı yoxdur');
+  ok(has(r, '90° köşe'), 'köşələr ayrıca tapıntı kimi göstərilir');
+  ok(r.metrics.corner_failed === 0, 'hamısında yol yenidən qarşıya çıxdı');
+}
+{
+  // A turn that ends with the road still missing is the corner handling
+  // failing, and is a different fault from never having seen the corner.
+  const rows = [];
+  const push = (n, o) => { for (let i = 0; i < n; i++)
+    rows.push({ t: rows.length * DT, speed: 20, err: 0, far: 0, steer: 0,
+                lost: false, turn: 0, dist: rows.length * 0.02, ...o }); };
+  push(40, {});                                        // following
+  push(20, { lost: true, turn: 1, err: null });        // a corner, taken
+  push(40, {});                                        // road picked up again
+  push(20, { lost: true, turn: -1, err: null });       // a corner, given up on
+  push(20, { lost: true, err: null });                 // …still nothing
+  const m = metrics(rows);
+  ok(m.corner_events === 2, `iki köşəyə girildi  (${m.corner_events})`);
+  ok(m.corner_failed === 1, `biri yarımçıq qaldı  (${m.corner_failed})`);
+  const segs = segments(rows);
+  ok(segs.map(s => s.kind).join(',') === 'düz,90° sağa,düz,90° sola,kayıp',
+     `hərəkətlər ayrı-ayrı görünür  (${segs.map(s => s.kind).join(', ')})`);
+}
+{
+  // Logs recorded before any of this exists have no `turn` field. They must
+  // read exactly as they always did.
+  const old = run(300, (i) => {
+    const lost = (i % 100) > 92;
+    return { err: lost ? 0 : 0.1, lost, speed: lost ? 10 : 40 };
+  });
+  const m = metrics(old.rows);
+  ok(m.corner_events === 0 && m.lost_events === 3,
+     `köhnə qeyd dəyişmir  (${m.lost_events} itki, ${m.corner_events} köşə)`);
+}
+
 console.log('\nMəsafə kalibrasiyası: lentlə ölçdüyün rəqəmdən');
 {
   // 40 s at exactly 50 %, and the lap was 12 m.
@@ -213,8 +263,11 @@ console.log('\nMəsafə kalibrasiyası: lentlə ölçdüyün rəqəmdən');
      'tərpənməyibsə kalibrasiya yoxdur');
   ok(analyse(r).calib === null, 'məsafə soruşulmayıbsa analiz də vermir');
   ok(analyse(r, 12).calib.metres === 12, 'verilibsə analizin içindədir');
-  ok(analyse(r, 12).calib.dead === 22,
-     'ölü zona kalibrasiyaya da keçir — məsafə 1.5 V-dən aşağı yığılmır');
+  // A log with no `pilot.stall` field is read as having no dead band at all
+  // now — steppers do not have one — rather than guessing the old ESP32
+  // threshold (22 %).
+  ok(analyse(r, 12).calib.dead === 0,
+     'stall sahəsi olmayan qeyd ölü zonasız oxunur');
 
   // What reached the pin is what the wheel responded to, so that is what the
   // constant is built from — not the demand behind it.

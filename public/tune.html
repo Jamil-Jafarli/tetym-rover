@@ -56,6 +56,7 @@
   td.n{text-align:right;font:13px ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
   .tag{font-size:11px;padding:2px 7px;border-radius:20px;border:1px solid var(--line)}
   .tag.l{color:var(--idle)} .tag.r{color:var(--warn)} .tag.x{color:var(--stop)}
+  .tag.c{color:var(--warn);border-color:var(--warn)}
   svg{display:block;width:100%;height:auto;border-radius:10px;background:#f7f9fc}
   .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .ok{color:var(--accent)} .bad{color:var(--stop)}
@@ -100,6 +101,7 @@
         <div><span class="lbl">Yırğalanma</span><b id="mWob">–</b></div>
         <div><span class="lbl">Direksiyon doyması</span><b id="mSat">–</b></div>
         <div><span class="lbl">Yol kaybı</span><b id="mLost">–</b></div>
+        <div><span class="lbl">90° köşe</span><b id="mCorner">–</b></div>
       </div>
     </div>
 
@@ -149,7 +151,6 @@
 
 <script src="/pilot.js"></script>
 <script src="/analyse.js"></script>
-<script src="/wheels.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 let run = null, result = null;
@@ -243,6 +244,13 @@ function show(data, name) {
   $('mSat').textContent = Math.round(m.sat_frac * 100) + ' %';
   $('mLost').textContent = m.lost_events === 0 ? 'yok'
     : `${m.lost_events} × ${m.lost_s} s`;
+  // Older logs predate the corner handling and have no count at all, which is
+  // not the same as a lap with no corners in it — say so rather than show 0.
+  $('mCorner').textContent = m.corner_events == null ? '—'
+    : m.corner_events === 0 ? 'yox'
+    : `${m.corner_events} × ${m.corner_s} s`
+      + (m.corner_failed ? ` (${m.corner_failed} yarımçıq)` : '');
+  $('mCorner').style.color = m.corner_failed ? 'var(--stop)' : '';
 
   drawChart(data.rows);
   drawFindings(r);
@@ -319,7 +327,8 @@ $('apply').addEventListener('click', () => {
 });
 
 function drawSegments(segs) {
-  const cls = { 'sol viraj': 'l', 'sağ viraj': 'r', 'kayıp': 'x', 'düz': '' };
+  const cls = { 'sol viraj': 'l', 'sağ viraj': 'r', 'kayıp': 'x', 'düz': '',
+                '90° sağa': 'c', '90° sola': 'c' };
   $('segs').innerHTML = segs.map(s => `<tr>
     <td><span class="tag ${cls[s.kind] || ''}">${s.kind}</span></td>
     <td class="n">${(s.t / 1000).toFixed(1)} s</td>
@@ -357,13 +366,6 @@ $('applyCalib').addEventListener('click', () => {
 
 connect();
 listRuns();
-
-// The wheel trim, shown the same way on every page — see public/wheels.js.
-// `mode` is a promise to the reader about THIS page: 'raw' means the
-// numbers below are not applied here, which is deliberate on the pages
-// where the threshold is measured.
-const WT = wheelsMount({ strip: true, mode: 'applied' });
-wheelsFetch().then((c) => WT && WT.paint(c));
 </script>
 </body>
 </html>

@@ -10,11 +10,11 @@
  * app needs no change" actually rests on.
  *
  * Then the grid and the simulator with no browser, then the relay end to end:
- * a sender and viewers on /ws, the rover's own socket on / beside them, on both
- * boards.
+ * a sender and viewers on /ws, the rover's own socket on / beside them.
  */
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
 
@@ -205,12 +205,24 @@ console.log('\nRöle prosesin içində: göndərən, tarixçə, sıfırlama');
 }
 
 // ══ the relay on a real server ═══════════════════════════════════════
+// Everything the Pi has wired up is dry, and the routes are throw-away: this
+// runs on the robot itself.
+const DRY = ['--no-connect', '--no-camera', '--no-actuator', '--no-lidar', '--no-radar', '--no-gpio'];
 function serve(argv) {
-  const proc = spawn('node', ['server.js', ...argv], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+  const routes = path.join(os.tmpdir(), `routes-lidarmap-${process.pid}-${argv.join('').length}.json`);
+  const proc = spawn('node', ['server.js', ...DRY, '--routes', routes, ...argv],
+                     { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
   const out = { text: '' };
   proc.stdout.on('data', (d) => { out.text += d; });
   proc.stderr.on('data', (d) => { out.text += d; });
   return { proc, out };
+}
+
+/** Until the server answers, not a fixed sleep: a throttled Pi is slow to start. */
+async function up(port) {
+  for (let i = 0; i < 150; i++) {
+    try { await fetch(`http://127.0.0.1:${port}/api/pages`); return; } catch { await sleep(100); }
+  }
 }
 
 /** A socket that keeps what it receives, binary and text apart. */
@@ -227,9 +239,9 @@ function client(url) {
 
 async function relaySuite(label, port, argv) {
   console.log(`\n${label}: /ws röledir, / robotun öz soketi olaraq qalır`);
-  const srv = serve([...argv, '--http', String(port), '--host', '127.0.0.1', '--no-camera',
+  const srv = serve([...argv, '--http', String(port), '--host', '127.0.0.1',
                      '--lidar-room', 'rover', '--no-advertise']);
-  await sleep(1500);
+  await up(port);
   const base = `ws://127.0.0.1:${port}`;
   try {
     const rover = client(`${base}/`);
@@ -311,17 +323,16 @@ async function relaySuite(label, port, argv) {
   return srv.out.text;
 }
 
-const benchOut = await relaySuite('ESP32 (saxta)', 8197, ['--fake', '--esp', '127.0.0.1']);
-ok(/app relay URL, if typed:\s+ws:\/\/127\.0\.0\.1:8197/.test(benchOut),
+const roverOut = await relaySuite('Rover (port açılmır)', 8196, []);
+ok(/app relay URL, if typed:\s+ws:\/\/127\.0\.0\.1:8196/.test(roverOut),
    'başlanğıcda tarayıcının hara göndərəcəyi yazılır');
-ok(/mDNS announcement off/.test(benchOut), '--no-advertise olanda bunu deyir');
-await relaySuite('Creality (port açılmır)', 8196, ['--marlin', '--no-connect']);
+ok(/mDNS announcement off/.test(roverOut), '--no-advertise olanda bunu deyir');
 
 console.log('\n--lidar-sim: telefon olmadan xəritə axır');
 {
-  const srv = serve(['--fake', '--esp', '127.0.0.1', '--http', '8195', '--host', '127.0.0.1',
-                     '--no-camera', '--lidar-sim', '--no-advertise']);
-  await sleep(2200);
+  const srv = serve(['--http', '8195', '--host', '127.0.0.1', '--lidar-sim', '--no-advertise']);
+  await up(8195);
+  await sleep(500);
   try {
     const v = client('ws://127.0.0.1:8195/ws?role=viewer');
     await v.open;
@@ -377,12 +388,12 @@ console.log('\nmDNS: telefon rover-i IP yazmadan tapır');
     // The real server announces itself too, on its own port. (Its goodbye on
     // shutdown is SIGTERM's job, and Windows cannot deliver SIGTERM to a
     // child — the in-process check above is the one that covers withdrawal.)
-    const srv = serve(['--fake', '--esp', '127.0.0.1', '--http', '8194', '--host', '127.0.0.1',
-                       '--no-camera']);
-    await sleep(3500);
+    const srv = serve(['--http', '8194', '--host', '127.0.0.1']);
+    await up(8194);
+    await sleep(2500);
     const served = ups.find((s) => s.port === 8194 && !before.has(s.name) && /^tetym-rover on /.test(s.name));
     ok(!!served, `server özü elan edir, port 8194  (${served ? served.name : 'tapılmadı'})`);
-    ok(/lidar: announced as "tetym-rover on /.test(srv.out.text), 'başlanğıcda elan olunan ad yazılır');
+    ok(/lidar map: announced as "tetym-rover on /.test(srv.out.text), 'başlanğıcda elan olunan ad yazılır');
     try {
       const api = await (await fetch('http://127.0.0.1:8194/api/lidar')).json();
       ok(/^tetym-rover on /.test(api.announced || ''), `/api/lidar adı verir: ${api.announced}`);

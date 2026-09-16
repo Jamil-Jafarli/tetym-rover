@@ -2,9 +2,11 @@ node_modules/
 package-lock.json
 presets.json
 follow.json
+routes.json
 logs/
 certs/
 .DS_Store
 *.log
 # what mobile/setup.sh generates when run in place
 mobile/WebScanner/
+__pycache__/

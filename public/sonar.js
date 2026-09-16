@@ -1,8 +1,8 @@
 /**
  * The forward HC-SR04, the one bolted to the front of the chassis.
  *
- * Pure, like pilot.js — no DOM, no clock of its own. /obstacle draws it,
- * /follow gates its throttle with it, test/test_sonar.mjs runs it in node.
+ * Pure, like pilot.js — no DOM, no clock of its own. /follow gates its
+ * throttle with it, test/test_sonar.mjs runs it in node.
  *
  * An HC-SR04 is a cheap sensor and it lies in specific, known ways, so most of
  * this file is about not believing it too quickly:
@@ -29,7 +29,6 @@ const OBSTACLE_DEFAULTS = {
   clearCm:  40,   // and it may not move again until this far — hysteresis
   confirm:  3,    // readings in a row before believing either of those
   waitMs:   1200, // once clear, how long to wait before rolling again
-  creep:    12,   // demand while driving on the test page
 };
 
 // 30 cm is the stopping distance the robot is built around, and it is not an
@@ -41,8 +40,8 @@ const OBSTACLE_DEFAULTS = {
 //
 // `clearCm` is deliberately 10 cm further out, and the gap is the whole reason
 // a robot parked at exactly the threshold does not buzz between stopped and
-// going. Both are editable on /obstacle and both are obeyed by the server, so
-// changing them changes the robot rather than one page.
+// going. Both are server-side config, so changing them changes the robot
+// rather than one page.
 
 /** A reading is usable, or it is not. Say which rather than substituting zero. */
 function valid(cm) {

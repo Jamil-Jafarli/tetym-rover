@@ -1,13 +1,13 @@
 /**
  * The competition, wired into a running server: PLC link, mission, field.
  *
- * Both machines use it — the ESP32 bench and the Marlin rover — because the
- * factory automation protocol is about the robot, not about which board turns
- * its wheels. What differs between them is behind `robot`:
+ * Kept apart from server.js because the factory automation protocol is about
+ * the robot, not about which board turns its wheels. Everything it needs from
+ * the rover is behind `robot`:
  *
- *   robot.map                   the field itself (FIELDS.yarisma / FIELDS.deneme)
- *   robot.field()               the field state (public/field.js) to read the pose from
- *   robot.route()               dead reckoning for fieldPose(), or null
+ *   robot.map                   the field itself (public/field.js's FIELD)
+ *   robot.pose()                where the robot is on the field: {known, x, y} —
+ *                               on the rover, nav.js's QR fix plus odometer
  *   robot.setMission(stops)     plan a list of stops from START
  *   robot.hold(reason|null, all)  stop the wheels and keep them stopped, or release;
  *                               `all` (emergency stop) holds the fork too
@@ -24,7 +24,6 @@ import { loadShared } from './shared.js';
 const P = loadShared('plc.js', ['plcMission', 'plcMissionRx', 'plcMissionFix',
   'plcMissionEvent', 'plcMissionTick', 'plcMissionHold', 'plcMissionCode',
   'plcTxFields', 'plcMissionStatus', 'PLC_CODE_LABEL', 'PLC_ROBOT_IP']);
-const { fieldPose } = loadShared('field.js', ['fieldPose']);
 
 const SIM_PORT = 1515;
 
@@ -50,7 +49,7 @@ export function startCompetition(args, robot) {
   };
 
   const pose = () => {
-    try { return fieldPose(robot.field(), robot.route()); } catch { return null; }
+    try { return robot.pose(); } catch { return null; }
   };
 
   const apply = (out) => {
@@ -76,6 +75,7 @@ export function startCompetition(args, robot) {
       : { host: '127.0.0.1', port: sim.cfg.port };
     link = new PlcLink({
       host: addr.host, port: addr.port, bind: args.plcBind || null,
+      localPort: args.plcLocal || 0,
       getTx: () => P.plcTxFields(ms),
     }).onRx((rx) => apply(P.plcMissionRx(ms, rx, rx.at)));
     link.start();

@@ -1,182 +1,204 @@
 /**
- * The competition field, and where the robot is on it.
+ * The competition field, and where the rover is on it.
  *
- * Pure, like pilot.js, sonar.js and route.js: no DOM, no clock of its own, so
- * the server localises with it, /dashboard draws it, and test/test_field.mjs
- * runs it in node with no hardware.
+ * Pure, like road.js and pilot.js: no clock of its own, and no DOM beyond the
+ * canvas context fieldDraw() is handed. /map draws it, /follow drives against
+ * it, and test/test_field.mjs runs it in node with no hardware and no browser.
  *
- * ── Why this file exists ────────────────────────────────────────────
+ * The drawing lives here, with the data, for the same reason road.js is one
+ * file: a picture drawn from a second copy of the coordinates is worse than no
+ * picture, because it looks right while the rover drives somewhere else.
  *
- * route.js knows how far the robot has driven and which way it is pointing,
- * and both of those are a model's opinion: no encoder, no IMU, open loop, and
- * a heading error that only ever grows. On its own that is enough to draw a
- * pretty line and not enough to answer the two questions the run actually
- * asks — *where am I* and *which way do I turn next*.
+ * ── Why a map at all ─────────────────────────────────────────────────
  *
- * The QR codes answer both. Each one is bolted to a known place on the field,
- * so reading q5 is not "a code was read 12.4 m into the run", it is "the robot
- * is on the D3→gate leg, 3.9 m east of D1, pointing east". That is a
- * measurement. Everything between two codes is still dead reckoning, but it is
- * dead reckoning that gets reset to the truth every few metres instead of
- * drifting for the whole lap.
+ * road.js can follow a line and pilot.js can take a corner, and between them
+ * that is enough to drive — but not enough to run the task. The task is "go to
+ * A2", and A2 is not something you can see from the start: it is the second
+ * branch on the left after the first junction. Telling those three branches
+ * apart is the whole job, and it cannot be done by looking at one of them,
+ * because they are identical. It is done by knowing where you are.
  *
- * So the field is written down here as a graph — the topology of test.png (the
- * main specification's schematic), with the measurements, QR texts and QR
- * positions of the EK TEKNİK ŞARTNAME's Şekil 1 and Şekil 3 — and this module
- * does three things with it:
+ * So this file is the field written down — every wall, every metre of paint,
+ * every station — and three things done with it:
  *
- *   1. localise:  a QR id  → which leg the robot is on, and which way along it
- *   2. plan:      a target → the nodes to drive through, breadth first
- *   3. steer:     the plan → what to do at the node ahead: left, right, on
+ *   1. plan     from where I am to where I am going, as a list of nodes
+ *   2. turn     at the node ahead: left, right, or straight on
+ *   3. reckon   how far I have driven since the last node I was sure of
  *
- * ── The coordinate frame ────────────────────────────────────────────
+ * The camera says *a junction is here now*. The map says *which one it must
+ * be*. Neither is much use alone: vision cannot count and dead reckoning
+ * cannot see. mission.js is where the two are put together.
  *
- * Metres. +x is east (right on the drawing), +y is north (up). The origin is
- * the field's bottom-left corner, as the specification dimensions it, so every
- * coordinate is a positive number a tape measure can check — and the same
- * numbers go to the PLC in PAKET_TX (see plc.js). Headings are compass bearings in
- * degrees: 0 = north, 90 = east, clockwise positive — the same convention
- * routeBearing() returns, which is what lets the two be added together in
- * fieldPose() without a sign to get wrong.
+ * ── The coordinate frame ─────────────────────────────────────────────
+ *
+ * Metres. +x is east (right on the şartname's Şekil 1), +y is north (up). The
+ * origin is the inside of the south-west corner of the left hall, so the whole
+ * field is 0 ≤ x ≤ 18, 0 ≤ y ≤ 10 and nothing is ever negative.
+ *
+ * Headings are compass bearings in degrees: 0 = north, 90 = east, clockwise
+ * positive. That is not the same as the maths convention and it is chosen on
+ * purpose — it is what a turn reads as. "Turn right 90°" adds 90.
+ *
+ * ── Where the numbers come from ──────────────────────────────────────
+ *
+ * 2026_SRU_EK_TEKNİK_SARTNAME, Şekil 1 (field and QR placement), Şekil 5
+ * (start area) and Şekil 6 (pick and drop zones). Şekil 1 is dimensioned for
+ * the building — 18 × 10 m, halls at 7.5 m and 9 m, the openings at 2.5 m and
+ * 4.5 m — and drawn to scale for everything else, which is how the branch
+ * positions below were recovered: they are measured off the drawing at the
+ * scale its own dimensions fix (37.28 px/m), and they agree with Şekil 5 and
+ * Şekil 6 to within a couple of centimetres wherever the two overlap.
+ *
+ * Trust order, when they disagree: a printed dimension beats the drawing, and
+ * the drawing beats anything inferred here. Every value below says which it
+ * is. If the real field is measured on the day and comes out different, this
+ * table is the only thing to edit — the planner, the pose and /map all read
+ * it and none of them has a second copy of a coordinate.
  */
 
-const FIELD_STRAIGHT_DEG = 25;   // less of a turn than this and it is "carry on"
-const FIELD_BACK_DEG = 150;      // more than this and it is a U-turn, not a turn
-// Reading the same code again after moving less than this is the same sighting
-// of the same sign, not a second pass. See fieldSee() for what hangs on it.
-const FIELD_SAME_M = 0.5;
+// ── the building ─────────────────────────────────────────────────────
 
 /**
- * The competition field — EK TEKNİK ŞARTNAME, Şekil 1 (18 × 10 m).
+ * The field itself: two halls with a 1.5 m corridor between them.
  *
- * Where the drawing has a dimension it is used as written: the field is 18 × 10,
- * the corridor runs 5.5 m below the top wall (y = 4.5), the pick and drop QRs
- * stand 4 m below it (y = 6.0, so 1.5 m off the corridor), the inner walls are
- * at 7.5 m and 9 m. Şekil 5 puts BASLA 3.8 m from the wall behind the start
- * area and the start area's middle 0.35 + 1.9 / 2 = 1.3 m from it; Şekil 6
- * puts a station's middle 1.5 + 0.615 / 2 ≈ 1.8 m past its QR. The x positions
- * of the three branches, the drop column, the door and q5 / q6 / q8 have no
- * dimension in the drawing and are scaled off it (27.9 px per metre), so they
- * are the numbers to check with a tape on the day. If they come out different,
- * this table is the only thing to edit — the planner, the localiser, the
- * drawing and the PLC coordinates all read it, and none of them has a second
- * copy of a coordinate.
+ * The halls are dimensioned (0–7.5 m and 9–18 m of an 18 m span). Each hall
+ * wall facing the corridor has a 3 m opening — Şekil 1 dimensions its edges as
+ * 4.5 m down from the north wall and 2.5 m up from the south wall — and the
+ * track runs through the middle of both.
  *
- * Differences from test.png, the main specification's schematic, and why the
- * ek şartname wins: it is the measured drawing, and it is the one that prints
- * the codes. There B1 and B3 hang straight off the drop column at D4 — B3 up
- * (q7 = BIRAK3), B1 down (q9 = BIRAK1) — with no D5 / D6 legs in between.
- *
- * Node kinds, straight off the legend in test.png:
- *   node  Dx — düyüm noktası, a junction the robot drives through
- *   pick  Ax — alma noktası, where a load is picked up
- *   drop  Bx — bırakma noktası, where it is dropped
- *   start    the başlangıç alanı
- *   gate     the door the factory automation opens; a node you may have to
- *            wait at, which is why it is a node and not just a spot on a leg
- *
- * An edge's `qr` is the code standing on that leg, `text` is what that code
- * actually says when it is read (Tablo 2), and `at` is how far along the leg
- * it stands as a fraction from `a` to `b` — written as metres over the leg's
- * length, not as a rounded decimal, because the position goes to the PLC in
- * whole centimetres and 0.407 of 2.7 m is 6.599, which truncates to 659. Position comes from that fraction
- * rather than being typed out again, so a QR cannot end up drawn in one place
- * and localised to another.
- *
- * `walls` and `doors` are only for drawing: [x1, y1, x2, y2] segments.
+ * `gate` is the door the factory automation opens: a leaf standing in the
+ * corridor, across the track, between the two openings. It is the reason KAPI1
+ * and KAPI2 exist and the reason a run can be made to wait, so it is on the
+ * map rather than being a fact about the rules.
  */
-const FIELD = {
-  name: 'yarisma',
-  label: 'Yarışma alanı',
-  w: 18, h: 10,
-  nodes: [
-    { id: 'START', kind: 'start', x: 1.9, y: 1.3, label: 'Başlangıç alanı' },
-
-    { id: 'A1', kind: 'pick', x: 1.9, y: 7.8, label: 'A1' },
-    { id: 'A2', kind: 'pick', x: 3.7, y: 7.8, label: 'A2' },
-    { id: 'A3', kind: 'pick', x: 5.5, y: 7.8, label: 'A3' },
-
-    { id: 'D1', kind: 'node', x: 1.9, y: 4.5, label: 'D1' },
-    { id: 'D2', kind: 'node', x: 3.7, y: 4.5, label: 'D2' },
-    { id: 'D3', kind: 'node', x: 5.5, y: 4.5, label: 'D3' },
-    { id: 'GATE', kind: 'gate', x: 8.2, y: 4.5, label: 'Fabrika otomasyon sistemi kontrollü kapı' },
-    { id: 'D4', kind: 'node', x: 11.5, y: 4.5, label: 'D4' },
-
-    { id: 'B3', kind: 'drop', x: 11.5, y: 7.8, label: 'B3' },
-    { id: 'B2', kind: 'drop', x: 16.8, y: 4.5, label: 'B2' },
-    { id: 'B1', kind: 'drop', x: 11.5, y: 1.2, label: 'B1' },
+const FIELD_BUILDING = {
+  w: 18, h: 10,                                    // dimensioned
+  halls: [{ x0: 0, x1: 7.5 }, { x0: 9, x1: 18 }],  // dimensioned
+  openings: [                                      // dimensioned (4.5 m / 2.5 m)
+    { x: 7.5, y0: 2.5, y1: 5.5 },
+    { x: 9.0, y0: 2.5, y1: 5.5 },
   ],
-  edges: [
-    { a: 'START', b: 'D1', qr: 'q1', text: 'BASLA', at: 2.5 / 3.2 },    // y 3.8
-    { a: 'A1', b: 'D1', qr: 'q2', text: 'ALIM1', at: 1.8 / 3.3 },       // y 6.0
-    { a: 'A2', b: 'D2', qr: 'q3', text: 'ALIM2', at: 1.8 / 3.3 },
-    { a: 'A3', b: 'D3', qr: 'q4', text: 'ALIM3', at: 1.8 / 3.3 },
-    { a: 'D1', b: 'D2', qr: null, at: 0.5 },
-    { a: 'D2', b: 'D3', qr: null, at: 0.5 },
-    { a: 'D3', b: 'GATE', qr: 'q5', text: 'KAPI1', at: 1.1 / 2.7 },     // x 6.6
-    { a: 'GATE', b: 'D4', qr: 'q6', text: 'KAPI2', at: 1.8 / 3.3 },     // x 10.0
-    { a: 'D4', b: 'B3', qr: 'q7', text: 'BIRAK3', at: 1.5 / 3.3 },      // y 6.0
-    { a: 'D4', b: 'B2', qr: 'q8', text: 'BIRAK2', at: 3.5 / 5.3 },      // x 15.0
-    { a: 'D4', b: 'B1', qr: 'q9', text: 'BIRAK1', at: 1.5 / 3.3 },      // y 3.0
-  ],
-  walls: [
-    [0, 0, 18, 0], [18, 0, 18, 10], [18, 10, 0, 10], [0, 10, 0, 0],
-    [7.5, 10, 7.5, 5.5], [7.5, 0, 7.5, 2.5],
-    [9, 10, 9, 5.4], [9, 0, 9, 2.45],
-  ],
-  doors: [[8.2, 5.2, 8.2, 2.45]],
+  gate: { x: 8.25, y0: 2.12, y1: 5.24 },           // scaled off Şekil 1
 };
 
 /**
- * The practice field — EK TEKNİK ŞARTNAME, Şekil 3 (10 × 7 m).
+ * The painted line, in cross-section.
  *
- * One of everything: start, A1, the door, B1. Dimensioned: 10 × 7, the corridor
- * 4.5 m below the top wall (y = 2.5), the wall with the door at 5 m, its two
- * stubs 2.5 m and 1.5 m long. The rest is scaled off the drawing (47.5 px per
- * metre), start and station sized as Şekil 5 and 6 size them.
+ * Three equal stripes, blue │ orange │ blue, in the colours road.js already
+ * looks for — Şekil 5's and Şekil 6's own vector fills are rgb(52,101,164) and
+ * rgb(255,128,0), which is where HUE_BLUE and HUE_ORANGE in road.js came from.
  *
- * One thing in Şekil 3 does not agree with Tablo 2: the q2 label is drawn on
- * the start side of the corridor and q1 on the station side, but q1 says BASLA
- * and q2 says ALIM1. This table follows the texts — BASLA on the start leg —
- * because the text is what the robot reads. If the codes on the practice field
- * really are the other way round, swap the two `text`s here.
+ * The total width is the one number on this page that the şartname does not
+ * print. 100 mm is what Şekil 6 draws at its own scale, and it is used here
+ * only to draw the track on /map and to size the junction test's expectation
+ * of how wide a line looks. Nothing that decides where the rover goes depends
+ * on it.
  */
-const FIELD_DENEME = {
-  name: 'deneme',
-  label: 'Deneme alanı',
-  w: 10, h: 7,
-  nodes: [
-    { id: 'START', kind: 'start', x: 1.2, y: 5.5, label: 'Başlangıç alanı' },
-    { id: 'D1', kind: 'node', x: 1.2, y: 2.5, label: 'D1' },
-    { id: 'A1', kind: 'pick', x: 1.2, y: 0.8, label: 'A1' },
-    { id: 'GATE', kind: 'gate', x: 5.0, y: 2.5, label: 'Fabrika otomasyon sistemi kontrollü kapı' },
-    { id: 'D4', kind: 'node', x: 7.7, y: 2.5, label: 'D4' },
-    { id: 'B1', kind: 'drop', x: 7.7, y: 0.95, label: 'B1' },
-  ],
-  edges: [
-    { a: 'START', b: 'D1', qr: 'q1', text: 'BASLA', at: 2.4 / 3.0 },    // y 3.1
-    { a: 'A1', b: 'D1', qr: 'q2', text: 'ALIM1', at: 1.2 / 1.7 },       // y 2.0
-    { a: 'D1', b: 'GATE', qr: 'q5', text: 'KAPI1', at: 2.8 / 3.8 },     // x 4.0
-    { a: 'GATE', b: 'D4', qr: 'q6', text: 'KAPI2', at: 0.7 / 2.7 },     // x 5.7
-    { a: 'D4', b: 'B1', qr: 'q9', text: 'BIRAK1', at: 0.3 / 1.55 },     // y 2.2
-  ],
-  walls: [
-    [0, 0, 10, 0], [10, 0, 10, 7], [10, 7, 5, 7], [3.5, 7, 0, 7], [0, 7, 0, 0],
-    [5, 7, 5, 4.5], [5, 0, 5, 1.5],
-  ],
-  doors: [[5, 4.3, 5, 1.75]],
-};
+const FIELD_LINE_W = 0.10;          // metres, scaled off Şekil 6 — not dimensioned
 
-/** Both fields by name, for `--field`. */
-const FIELDS = { yarisma: FIELD, deneme: FIELD_DENEME };
+/** The QR codes are 50 × 50 mm — Şekil 2, dimensioned. Not read yet. */
+const FIELD_QR_M = 0.05;
 
-// ── the graph, read ──────────────────────────────────────────────────
+// ── the track ────────────────────────────────────────────────────────
 
-/** A node by id, or null. Ids are compared upper case: a QR is not a shout. */
+/** The main line's y, and the two ends of the paint on it. */
+const FIELD_MAIN_Y = 4.0;
+
+/**
+ * The nodes.
+ *
+ * `kind` says what the rover does there:
+ *
+ *   junction  a place where the paint splits. Nothing happens here except a
+ *             decision, which is why they are the only nodes the camera has to
+ *             recognise.
+ *   gate      the factory-automation door. A junction with no branch, kept as
+ *             a node because it is a place a run may have to *stop*.
+ *   start     the başlangıç alanı — where the rover is before the run.
+ *   pick      A1..A3, the yük alım istasyonları.
+ *   drop      B1..B3, the yük bırakma noktaları.
+ *
+ * A station's x,y is the centre of its marked zone — the place the load
+ * actually is, not the end of the paint. `tip` is how much further the line
+ * runs past it, because that is what the rover sees: it drives up the branch,
+ * the zone arrives, and the paint carries on for another 0.9 m before running
+ * out. Getting that backwards is the difference between stopping on the load
+ * and stopping short of it.
+ *
+ * `zone` is the marked rectangle: `along` the branch and `across` it. The
+ * stations are all 615 × 715 mm (Şekil 6, dimensioned) and the start area is
+ * 1900 × 1000 mm (Şekil 5, dimensioned).
+ */
+const FIELD_NODES = [
+  // The main line, west to east. x measured off Şekil 1; y is dimensioned.
+  { id: 'J1',   kind: 'junction', x: 1.90,  y: FIELD_MAIN_Y },
+  { id: 'J2',   kind: 'junction', x: 3.69,  y: FIELD_MAIN_Y },
+  { id: 'J3',   kind: 'junction', x: 5.49,  y: FIELD_MAIN_Y },
+  { id: 'KAPI', kind: 'gate',     x: 8.25,  y: FIELD_MAIN_Y, label: 'Fabrika kapısı' },
+  { id: 'J4',   kind: 'junction', x: 11.51, y: FIELD_MAIN_Y },
+
+  // Start: south off J1. Şekil 5 — 3.8 m of paint, the 1.9 × 1.0 m area
+  // starting 1.5 m down from the junction, so its centre is 2.45 m down and
+  // the paint runs on for 1.35 m past it.
+  { id: 'START', kind: 'start', x: 1.90, y: 1.55, tip: 1.35,
+    zone: { along: 1.90, across: 1.00 }, label: 'Başlangıç' },
+
+  // The three pick stations, north off J1/J2/J3. Şekil 1 draws the branches
+  // 5.75 m long; Şekil 6 dimensions their last 2.7 m, and the two agree.
+  { id: 'A1', kind: 'pick', x: 1.90,  y: 8.86, tip: 0.89, zone: { along: 0.615, across: 0.715 } },
+  { id: 'A2', kind: 'pick', x: 3.69,  y: 8.86, tip: 0.89, zone: { along: 0.615, across: 0.715 } },
+  { id: 'A3', kind: 'pick', x: 5.49,  y: 8.86, tip: 0.89, zone: { along: 0.615, across: 0.715 } },
+
+  // The three drop points, all off J4: B3 north, B1 south, B2 straight on east.
+  { id: 'B3', kind: 'drop', x: 11.51, y: 8.74, tip: 0.89, zone: { along: 0.615, across: 0.715 } },
+  { id: 'B1', kind: 'drop', x: 11.51, y: 1.18, tip: 0.91, zone: { along: 0.615, across: 0.715 } },
+  { id: 'B2', kind: 'drop', x: 16.82, y: FIELD_MAIN_Y, tip: 0.91, zone: { along: 0.615, across: 0.715 } },
+];
+
+/**
+ * The edges — every metre of paint on the floor.
+ *
+ * `qr` is the code standing on that leg and `s` is how far along it stands,
+ * in metres from `a`. Nothing reads a QR yet; they are here because the
+ * placement is what fixes several of the lengths above, and because when a
+ * reader is added it needs somewhere to look the code up. Q1 sits at the
+ * junction end of the start branch (Şekil 5); the station codes sit 2.7 m
+ * back from the end of their paint (Şekil 6). KAPI1 and KAPI2 are the two
+ * this file is least sure of: Şekil 1 labels them but does not dimension
+ * them, so their `s` is scaled off the drawing like the branch positions.
+ */
+const FIELD_EDGES = [
+  { a: 'J1', b: 'START', qr: 'q1', text: 'BASLA',  s: 0.00 },
+  { a: 'J1', b: 'A1',    qr: 'q2', text: 'ALIM1',  s: 3.05 },
+  { a: 'J2', b: 'A2',    qr: 'q3', text: 'ALIM2',  s: 3.05 },
+  { a: 'J3', b: 'A3',    qr: 'q4', text: 'ALIM3',  s: 3.05 },
+  { a: 'J1', b: 'J2' },
+  { a: 'J2', b: 'J3' },
+  { a: 'J3', b: 'KAPI',  qr: 'q5', text: 'KAPI1',  s: 1.61 },
+  { a: 'KAPI', b: 'J4',  qr: 'q6', text: 'KAPI2',  s: 1.86 },
+  { a: 'J4', b: 'B3',    qr: 'q7', text: 'BIRAK3', s: 2.93 },
+  { a: 'J4', b: 'B2',    qr: 'q8', text: 'BIRAK2', s: 3.52 },
+  { a: 'J4', b: 'B1',    qr: 'q9', text: 'BIRAK1', s: 1.03 },
+];
+
+const FIELD = { building: FIELD_BUILDING, nodes: FIELD_NODES, edges: FIELD_EDGES,
+                lineW: FIELD_LINE_W, qrM: FIELD_QR_M };
+
+// ── reading the graph ────────────────────────────────────────────────
+
+const fRound = (v, n = 3) => Math.round(v * 10 ** n) / 10 ** n;
+
+/** A node by id, or null. Ids compare upper case: a QR is not a shout. */
 function fieldNode(id, map) {
   const m = map || FIELD;
   const want = String(id == null ? '' : id).toUpperCase();
   return m.nodes.find((n) => n.id === want) || null;
+}
+
+/** The stations a run can be sent to, in the order a person reads them. */
+function fieldStations(kind, map) {
+  const m = map || FIELD;
+  return m.nodes.filter((n) => (kind ? n.kind === kind : n.kind === 'pick' || n.kind === 'drop'));
 }
 
 /** Every edge touching a node, as {edge, other}. */
@@ -191,513 +213,488 @@ function fieldLinks(id, map) {
   return out;
 }
 
-/** The edge between two nodes, whichever way round it was written. */
-function fieldEdge(a, b, map) {
-  const m = map || FIELD;
-  const A = String(a || '').toUpperCase(), B = String(b || '').toUpperCase();
-  return m.edges.find((e) => (e.a === A && e.b === B) || (e.a === B && e.b === A)) || null;
+/** Compass bearing from node `a` to node `b`, in degrees. */
+function fieldBearing(aId, bId, map) {
+  const a = fieldNode(aId, map), b = fieldNode(bId, map);
+  if (!a || !b) return null;
+  const deg = Math.atan2(b.x - a.x, b.y - a.y) * 180 / Math.PI;   // note: (dx, dy)
+  return fRound((deg + 360) % 360, 2);
+}
+
+/** Straight-line distance between two nodes, in metres. */
+function fieldSpan(aId, bId, map) {
+  const a = fieldNode(aId, map), b = fieldNode(bId, map);
+  if (!a || !b) return null;
+  return fRound(Math.hypot(b.x - a.x, b.y - a.y), 3);
 }
 
 /**
- * The code on a QR, reduced to the id this field knows it by.
- *
- * On the competition field a code says what Tablo 2 prints — BASLA, ALIM2,
- * KAPI1, BIRAK3 — and that is matched as the *whole* text, upper-cased and with
- * Turkish letters folded (BAŞLA, kapı1), and nothing else. A code whose text
- * merely contains ALIM2 is not ALIM2.
- *
- * For rehearsal the id itself also works: "q5", "Q5", "qr5", "qr/5" at the end
- * of a URL, or just "5" — because the one thing those agree on is the number
- * after a q.
- *
- * That q is not decoration, it is the whole safety margin. A field has other
- * codes on it — a pallet label, a cargo id, somebody's stock sticker — and
- * "any string ending in a digit is a waypoint" reads `kargo-9` as q9 and puts
- * the robot at the far end of the arena with total confidence. A wrong fix is
- * far worse than no fix, so the only bare number accepted is a string that is
- * *nothing but* a number. Everything else needs the q.
+ * A signed turn, in degrees, from one bearing to another: −180..+180, where
+ * positive is to the right. This is the only place the sign convention lives,
+ * so a turn cannot come out mirrored in one caller and not another.
  */
-function fieldQrId(text, map) {
-  const m = map || FIELD;
-  if (text == null) return null;
-  const s = String(text).trim();
-  const folded = fieldFold(s);
-  const byText = m.edges.find((e) => e.qr && e.text && fieldFold(e.text) === folded);
-  if (byText) return byText.qr;
-  // q, optionally the r of "qr", optionally a separator, then the number — and
-  // the q may not be the tail of a longer word.
-  const tagged = s.match(/(?:^|[^a-z0-9])q(?:r)?[-_/ ]?(\d{1,2})(?![0-9])/i);
-  const bare = s.match(/^(\d{1,2})$/);
-  const n = tagged ? tagged[1] : bare ? bare[1] : null;
-  if (n === null) return null;
-  const id = `q${Number(n)}`;
-  return m.edges.some((e) => e.qr === id) ? id : null;
+function fieldTurn(fromDeg, toDeg) {
+  let d = (Number(toDeg) - Number(fromDeg)) % 360;
+  if (d > 180) d -= 360;
+  if (d < -180) d += 360;
+  return fRound(d, 2);
 }
-
-/** Upper case, Turkish letters folded to the ASCII the printed codes use. */
-function fieldFold(s) {
-  const map = { 'ş': 'S', 'Ş': 'S', 'ı': 'I', 'İ': 'I', 'ç': 'C', 'Ç': 'C',
-                'ğ': 'G', 'Ğ': 'G', 'ö': 'O', 'Ö': 'O', 'ü': 'U', 'Ü': 'U' };
-  return String(s).replace(/[şŞıİçÇğĞöÖüÜ]/g, (c) => map[c]).toUpperCase();
-}
-
-/** Where a QR stands, and the leg it stands on: {qr, text, edge, x, y} or null. */
-function fieldQr(qrId, map) {
-  const m = map || FIELD;
-  const e = m.edges.find((x) => x.qr === qrId);
-  if (!e) return null;
-  const a = fieldNode(e.a, m), b = fieldNode(e.b, m);
-  const t = Number(e.at);
-  return {
-    qr: qrId, text: e.text || null, edge: e, a: e.a, b: e.b,
-    x: fieldRound(a.x + (b.x - a.x) * t),
-    y: fieldRound(a.y + (b.y - a.y) * t),
-  };
-}
-
-/** Every QR on the field, in the order the field lists them. */
-function fieldQrs(map) {
-  const m = map || FIELD;
-  return m.edges.filter((e) => e.qr).map((e) => fieldQr(e.qr, m));
-}
-
-// ── angles ───────────────────────────────────────────────────────────
-
-/** Compass bearing from node `a` to node `b`, degrees, 0 = north. */
-function fieldBearing(a, b, map) {
-  const m = map || FIELD;
-  const na = typeof a === 'string' ? fieldNode(a, m) : a;
-  const nb = typeof b === 'string' ? fieldNode(b, m) : b;
-  if (!na || !nb) return null;
-  const deg = Math.atan2(nb.x - na.x, nb.y - na.y) * 180 / Math.PI;
-  return fieldRound((deg % 360 + 360) % 360, 1);
-}
-
-/** Metres between two nodes. */
-function fieldDist(a, b, map) {
-  const m = map || FIELD;
-  const na = typeof a === 'string' ? fieldNode(a, m) : a;
-  const nb = typeof b === 'string' ? fieldNode(b, m) : b;
-  if (!na || !nb) return null;
-  return fieldRound(Math.hypot(nb.x - na.x, nb.y - na.y), 2);
-}
-
-/** A difference of bearings, folded into (-180, 180]. */
-function fieldWrapDeg(d) {
-  let v = ((Number(d) || 0) + 180) % 360;
-  if (v <= 0) v += 360;
-  return v - 180;
-}
-
-/**
- * What the robot does at a junction: come in on one bearing, leave on another.
- *
- * The dead band matters. A field laid out on a grid gives turns of 90° and
- * legs of 0°, but the two A-branch legs meet their corridor at exactly 90°
- * while a wonky measurement might make it 87 — and "sağa 3°" is not an
- * instruction, it is noise. Anything under FIELD_STRAIGHT_DEG is düz.
- */
-function fieldTurn(inBearing, outBearing) {
-  if (inBearing == null || outBearing == null) return null;
-  const d = fieldWrapDeg(outBearing - inBearing);
-  const mag = Math.abs(d);
-  const dir = mag >= FIELD_BACK_DEG ? 'back'
-            : mag <= FIELD_STRAIGHT_DEG ? 'straight'
-            : d > 0 ? 'right' : 'left';
-  return { deg: fieldRound(d, 1), dir, label: FIELD_TURN_LABEL[dir] };
-}
-
-const FIELD_TURN_LABEL = {
-  left: 'sola dön', right: 'sağa dön', straight: 'düz devam et',
-  back: 'geri dön',
-};
 
 // ── planning ─────────────────────────────────────────────────────────
 
 /**
- * The shortest way from one node to another, as a list of node ids.
+ * The nodes to drive through, from `fromId` to `toId`, breadth first.
  *
- * Breadth first on metres-per-edge would be Dijkstra; breadth first on edges
- * is enough here and is worth the simplicity, because this graph has no
- * alternative routes to weigh up — between any two points there is one way
- * round, and the only choice the robot ever makes is which branch to take.
- * Returns [] when there is no path, and [id] when you are already there.
+ * Breadth first and not anything cleverer because the graph is a tree with
+ * eleven edges in it: there is exactly one route between any two nodes, so
+ * every search finds the same one and the only thing a cost function could
+ * change is how long it takes to find it.
+ *
+ * Returns [] when either end is not a node, or when they are not connected —
+ * never a partial route, because a partial route is one the rover would drive.
  */
-function fieldPath(from, to, map) {
+function fieldPlan(fromId, toId, map) {
   const m = map || FIELD;
-  const A = String(from || '').toUpperCase(), B = String(to || '').toUpperCase();
-  if (!fieldNode(A, m) || !fieldNode(B, m)) return [];
-  if (A === B) return [A];
-  const prev = new Map([[A, null]]);
-  const queue = [A];
+  const from = fieldNode(fromId, m), to = fieldNode(toId, m);
+  if (!from || !to) return [];
+  if (from.id === to.id) return [from.id];
+
+  const prev = new Map([[from.id, null]]);
+  const queue = [from.id];
   while (queue.length) {
-    const cur = queue.shift();
-    for (const { other } of fieldLinks(cur, m)) {
+    const at = queue.shift();
+    if (at === to.id) break;
+    for (const { other } of fieldLinks(at, m)) {
       if (prev.has(other)) continue;
-      prev.set(other, cur);
-      if (other === B) {
-        const out = [];
-        for (let n = B; n !== null; n = prev.get(n)) out.unshift(n);
-        return out;
-      }
+      prev.set(other, at);
       queue.push(other);
     }
   }
-  return [];
-}
+  if (!prev.has(to.id)) return [];
 
-/**
- * A whole mission: start here, call at each target in turn.
- *
- * The scenario in test.png is "başlanğıc → an Ax → a Bx", so a mission is a
- * list of stops and the plan is the legs between them, joined without
- * repeating the node they share. A target that cannot be reached truncates the
- * plan rather than dropping the stop silently — half a route you can see is
- * easier to argue with than a route that quietly skips a delivery.
- */
-function fieldPlan(from, targets, map) {
-  const m = map || FIELD;
-  const stops = (Array.isArray(targets) ? targets : [targets])
-    .map((t) => String(t || '').toUpperCase()).filter(Boolean);
-  let at = String(from || '').toUpperCase();
-  if (!fieldNode(at, m)) return { nodes: [], stops, ok: false, reason: 'başlangıç düğümü tanınmıyor' };
-  const nodes = [at];
-  for (const t of stops) {
-    const leg = fieldPath(at, t, m);
-    if (leg.length === 0) {
-      return { nodes, stops, ok: false, reason: `${t} için yol yok` };
-    }
-    nodes.push(...leg.slice(1));
-    at = t;
-  }
-  return { nodes, stops, ok: nodes.length > 0, reason: null };
-}
-
-/**
- * The plan, spelled out leg by leg: drive this far, then turn that way.
- *
- * The turn is attached to the node the robot *arrives* at, not to the one it
- * leaves, because that is the moment the instruction is needed and the QR that
- * announces it is the one on the leg being driven.
- */
-function fieldLegs(nodes, map) {
-  const m = map || FIELD;
-  const ns = Array.isArray(nodes) ? nodes : [];
   const out = [];
-  for (let i = 0; i + 1 < ns.length; i++) {
-    const from = ns[i], to = ns[i + 1];
-    const edge = fieldEdge(from, to, m);
-    const bearing = fieldBearing(from, to, m);
-    const next = ns[i + 2] || null;
+  for (let at = to.id; at !== null; at = prev.get(at)) out.push(at);
+  return out.reverse();
+}
+
+/**
+ * A plan, turned into the thing the rover actually needs: what to do at each
+ * node it will meet.
+ *
+ * One entry per leg. `from`/`to` are the nodes at its ends, `len` is how far
+ * it is, `bearing` is the way to point down it, and `turn` is the signed turn
+ * to make AT `from` to get onto it — which is why the first leg's turn is
+ * measured against `heading`, the way the rover is already pointing, and every
+ * later one against the leg before.
+ *
+ * `act` is that turn as a word, because that is what the pilot's corner
+ * manoeuvre takes and what a person reads on /map. FIELD_STRAIGHT_DEG is
+ * generous: every junction on this field is square, so anything that is not
+ * plainly a turn is the line carrying on.
+ */
+const FIELD_STRAIGHT_DEG = 45;
+
+function fieldLegs(plan, heading = 0, map) {
+  const m = map || FIELD;
+  const out = [];
+  let facing = Number(heading) || 0;
+  for (let i = 0; i + 1 < plan.length; i++) {
+    const bearing = fieldBearing(plan[i], plan[i + 1], m);
+    if (bearing === null) return [];
+    const turn = fieldTurn(facing, bearing);
     out.push({
-      i, from, to, next,
-      qr: edge ? edge.qr : null,
-      dist: fieldDist(from, to, m),
-      bearing,
-      // Nothing to turn towards at the last node: the leg ends there.
-      turn: next ? fieldTurn(bearing, fieldBearing(to, next, m)) : null,
-      kind: (fieldNode(to, m) || {}).kind || null,
+      from: plan[i], to: plan[i + 1],
+      len: fieldSpan(plan[i], plan[i + 1], m),
+      bearing, turn,
+      act: Math.abs(turn) <= FIELD_STRAIGHT_DEG ? 'straight' : (turn > 0 ? 'right' : 'left'),
     });
+    facing = bearing;
   }
   return out;
 }
 
-// ── where the robot is ───────────────────────────────────────────────
+/**
+ * The junctions on a plan, in the order the camera will meet them, with what
+ * to do at each.
+ *
+ * This is the list mission.js counts against, and it is deliberately not the
+ * same as fieldLegs(): a leg exists for every hop, but only some hops start at
+ * something the camera can see. A station is not a junction — the paint ends
+ * there — and the rover's own starting node is behind it, not ahead.
+ *
+ * `at` is how far into the run the junction is, in metres of driving. That is
+ * what makes a sighting checkable: a junction reported two metres from where
+ * the map says the next one is, is not that junction. `into` and `bearing` are
+ * the ways to be pointing arriving and leaving — see below for why both.
+ */
+function fieldJunctions(plan, heading = 0, map) {
+  const m = map || FIELD;
+  const legs = fieldLegs(plan, heading, m);
+  const out = [];
+  let run = 0;
+  for (let i = 0; i < legs.length; i++) {
+    const node = fieldNode(legs[i].from, m);
+    // The first node of the plan is where the rover already is, so there is
+    // nothing to see there and nothing to decide.
+    if (i > 0 && node && (node.kind === 'junction' || node.kind === 'gate')) {
+      out.push({ id: node.id, kind: node.kind, at: fRound(run, 3),
+                 act: legs[i].act, turn: legs[i].turn,
+                 // Two bearings, because a junction is two moments. `into` is
+                 // the way the rover is pointing when it gets there — what a
+                 // sighting proves — and `bearing` is the way it will be
+                 // pointing when it leaves. Anchoring with the wrong one of
+                 // these puts the whole rest of the run at right angles to
+                 // where it should be, and it does it silently.
+                 into: legs[i - 1].bearing,
+                 bearing: legs[i].bearing });
+    }
+    run += legs[i].len;
+  }
+  return out;
+}
 
-/** Fresh localisation state: nothing read, nothing planned, nothing known. */
-function fieldState() {
+// ── where the rover is ───────────────────────────────────────────────
+
+/**
+ * Dead reckoning, and why it is worth having here.
+ *
+ * The ESP32 version of this robot had to guess how far it had gone from a
+ * throttle percentage and a stopwatch. This one does not: the wheels are
+ * steppers driven by G-code, so rover.js hands out the millimetres it asked
+ * each wheel for, and those are the millimetres the wheels turned unless
+ * something slipped. That makes the distance nearly exact and leaves the
+ * heading as the only real error — it is an integral, so a wheel that slips
+ * once bends the whole rest of the map.
+ *
+ * Which is what mission.js is for. Every junction the camera confirms is a
+ * place with a known position, so the run is dead reckoning between junctions
+ * and truth at them, rather than dead reckoning for the whole lap.
+ */
+const FIELD_TRACK_M = 0.30;    // wheel centre to wheel centre — measure it
+
+/** Fresh state, sitting on a node and pointing somewhere. */
+function fieldState(nodeId = 'START', heading = 0, map) {
+  const n = fieldNode(nodeId, map);
   return {
-    qr: null,          // the last code understood, e.g. 'q5'
-    at: 0,             // when it was read
-    from: null,        // the node the robot left
-    to: null,          // the node it is driving towards
-    sure: false,       // was the direction deduced, or guessed?
-    seen: [],          // [{qr, at, from, to, onPlan}] — newest last
-    stops: [],         // the mission as asked for
-    plan: [],          // node ids, start to finish
-    step: 0,           // index in plan of the node being driven towards
-    onPlan: false,     // was the last code where the plan said it would be?
-    // Set at every read: the field pose and the dead-reckoned pose at the same
-    // instant, which is what lets one be expressed in the other's frame.
-    anchor: null,
-    unknown: null,     // the last code that meant nothing here
-    reads: 0,          // codes understood since boot
-    strays: 0,         // ...and codes that were not ours
+    x: n ? n.x : 0,
+    y: n ? n.y : 0,
+    h: (Number(heading) || 0) % 360,
+    at: n ? n.id : null,      // the last node we were sure of
+    run: 0,                   // metres driven since `at`
+    dist: 0,                  // metres driven in total
+    ds: 0, dth: 0,            // the last step, for a manoeuvre counting itself out
+    path: [{ x: n ? n.x : 0, y: n ? n.y : 0 }],
   };
 }
 
 /**
- * A QR was read. Work out which leg the robot is on and which way it is going.
+ * One step of dead reckoning, from the two wheels' millimetres.
  *
- * A code identifies an edge, and an edge has two ends — reading q5 says the
- * robot is between D3 and the qapı but not whether it is coming or going. That
- * is decided, in order:
+ * Takes millimetres because that is rover.js's own currency — chunkFor()
+ * returns dLeft and dRight in mm — so the caller does not have to convert and
+ * cannot convert wrongly. Everything else on this page is metres.
  *
- *   1. the same code again, from more or less the same spot: one sign, seen
- *      twice, so nothing about the direction has changed. "More or less" is
- *      dead reckoning, which is hopeless at absolute position and perfectly
- *      good at "have we moved half a metre".
- *   2. continuity: the last code left the robot heading for a node, and this
- *      edge touches that node, so it drove through it and is now on the far
- *      side. This is what keeps localisation working with no mission set at
- *      all — and it is what gets a turnaround right, because coming back off
- *      A2 reads the same code from the far side of the node.
- *   3. the plan, if this edge is a leg of it. Only reached on the first code
- *      of a run, when there is no previous reading to be continuous with.
- *   4. failing all three, the edge as written, flagged `sure: false` — a
- *      position that is right and a heading that is a coin toss, said out loud
- *      rather than pretended.
- *
- * @returns {{ok: boolean, qr: string|null, from: string|null, to: string|null,
- *             x: number, y: number, bearing: number, sure: boolean,
- *             onPlan: boolean, turn: object|null}}
+ * The integration is the exact-arc one rather than "advance, then turn": at
+ * the chunk sizes rover.js uses the difference is microscopic, but the exact
+ * form costs two extra lines and cannot accumulate a bias on a long curve.
  */
-function fieldSee(st, text, now = 0, map = null, route = null) {
-  const m = map || FIELD;
-  const qrId = fieldQrId(text, m);
-  if (!qrId) {
-    st.unknown = text == null ? null : String(text).slice(0, 120);
-    st.strays++;
-    return { ok: false, qr: null, reason: 'bu sahaya ait bir QR değil' };
-  }
-  const spot = fieldQr(qrId, m);
+const FIELD_PATH_MAX = 2000;
+const FIELD_PATH_STEP = 0.03;    // metres between kept path points
 
-  // Which way along the edge?
-  let from = spot.a, to = spot.b, sure = false;
-  if (st.qr === qrId && st.from && st.to && fieldMoved(st, route) < FIELD_SAME_M) {
-    from = st.from; to = st.to; sure = st.sure;   // same sign, same spot, same way
-  } else if (st.to === spot.a || st.to === spot.b) {
-    // Drove through the node it was heading for, and out the other side.
-    from = st.to; to = st.to === spot.a ? spot.b : spot.a; sure = true;
+function fieldStep(st, dLeftMm, dRightMm, track = FIELD_TRACK_M) {
+  const dL = (Number(dLeftMm) || 0) / 1000;
+  const dR = (Number(dRightMm) || 0) / 1000;
+  const t = Number(track) > 0 ? Number(track) : FIELD_TRACK_M;
+
+  const ds = (dL + dR) / 2;
+  // Radians of bearing, so clockwise is positive: the LEFT wheel going faster
+  // is what swings the nose to the right. Left and right are the camera's —
+  // the same two numbers the pilot steers with, which is the whole reason
+  // rover.js does its own end-swap and this does not.
+  const dth = (dL - dR) / t;
+  const h0 = st.h * Math.PI / 180;
+
+  if (Math.abs(dth) < 1e-9) {
+    st.x += ds * Math.sin(h0);
+    st.y += ds * Math.cos(h0);
   } else {
-    const guess = fieldPlanIndex(st, spot);
-    if (guess >= 0) { from = st.plan[guess]; to = st.plan[guess + 1]; sure = true; }
+    // Exact arc: the centre of rotation is ds/dth away, square to the heading.
+    const r = ds / dth;
+    st.x += r * (Math.cos(h0) - Math.cos(h0 + dth));
+    st.y += r * (Math.sin(h0 + dth) - Math.sin(h0));
   }
+  st.h = ((st.h + dth * 180 / Math.PI) % 360 + 360) % 360;
+  // `run` is measured against the map — how far past the last known node the
+  // rover is — so backing up has to take it back down again. `dist` is the
+  // odometer, and an odometer counts every metre whichever way it was driven.
+  st.run += ds;
+  st.dist += Math.abs(ds);
+  // What this step was, kept on the state for whoever is counting one out.
+  // A blind manoeuvre — drive 60 cm, turn 180° — has no landmark to end on,
+  // so it ends on its own arithmetic, and this is that arithmetic. Metres and
+  // radians, both signed, both ground rather than commanded.
+  st.ds = ds;
+  st.dth = dth;
 
-  // Where that leg sits in the plan — oriented, so a field the plan crosses
-  // twice matches the crossing being driven rather than the one already done.
-  const planIdx = fieldLegIndex(st, from, to);
-  const bearing = fieldBearing(from, to, m);
-  st.qr = qrId;
-  st.at = now;
-  st.from = from;
-  st.to = to;
-  st.sure = sure;
-  st.reads++;
-  st.unknown = null;
-  st.onPlan = planIdx >= 0;
-  if (planIdx >= 0) st.step = planIdx + 1;
-
-  // The anchor: this position, and the dead reckoning that was running at the
-  // same moment. Everything fieldPose() does afterwards is a difference from
-  // these two, which is why a QR read is worth more than a mark on a map.
-  st.anchor = {
-    x: spot.x, y: spot.y, bearing, at: now,
-    rx: route ? Number(route.x) || 0 : null,
-    ry: route ? Number(route.y) || 0 : null,
-    rb: route ? Number(route.bearing) || 0 : null,
-  };
-
-  st.seen.push({ qr: qrId, text: spot.text, at: now, from, to, onPlan: st.onPlan });
-  while (st.seen.length > 40) st.seen.shift();
-
-  return { ok: true, qr: qrId, text: spot.text, from, to, x: spot.x, y: spot.y, bearing,
-           sure, onPlan: st.onPlan, turn: fieldTurnAt(st, m) };
-}
-
-/**
- * Where in the plan this edge is, ignoring which way round, or -1.
- *
- * Only used to guess a direction on the first code of a run, when there is no
- * previous reading to be continuous with.
- */
-function fieldPlanIndex(st, spot) {
-  const plan = st.plan || [];
-  const hit = (i) => (plan[i] === spot.a && plan[i + 1] === spot.b)
-                  || (plan[i] === spot.b && plan[i + 1] === spot.a);
-  for (let i = Math.max(0, (st.step || 1) - 1); i + 1 < plan.length; i++) if (hit(i)) return i;
-  for (let i = 0; i + 1 < plan.length; i++) if (hit(i)) return i;
-  return -1;
-}
-
-/**
- * Where in the plan this *directed* leg is, or -1.
- *
- * Directed matters on a mission that doubles back: the plan through A2 is
- * …D2 → A2 → D2…, so the leg between them appears twice and only the direction
- * of travel says which of the two the robot is on. Searched from the current
- * step forwards first, so the answer is the crossing still ahead.
- */
-function fieldLegIndex(st, from, to) {
-  const plan = st.plan || [];
-  const hit = (i) => plan[i] === from && plan[i + 1] === to;
-  for (let i = Math.max(0, (st.step || 1) - 1); i + 1 < plan.length; i++) if (hit(i)) return i;
-  for (let i = 0; i + 1 < plan.length; i++) if (hit(i)) return i;
-  return -1;
-}
-
-/**
- * How far the dead reckoning says the robot has come since the last code.
- *
- * Zero when there is nothing to compare — no anchor, or a caller with no dead
- * reckoning to hand in. That reads as "it has not moved", which keeps the
- * previous direction: with no odometry at all, a code seen twice would
- * otherwise flip the heading every single time it is re-read, and a heading
- * that oscillates is worse than one that is merely stale.
- */
-function fieldMoved(st, route) {
-  const a = st.anchor;
-  if (!a || a.rx === null || !route) return 0;
-  return Math.hypot((Number(route.x) || 0) - a.rx, (Number(route.y) || 0) - a.ry);
-}
-
-/** The instruction for the node the robot is driving towards, or null. */
-function fieldTurnAt(st, map) {
-  const m = map || FIELD;
-  if (!st.to) return null;
-  const plan = st.plan || [];
-  const i = st.step;
-  // On plan: the turn is decided by where the plan goes after this node.
-  if (plan[i] === st.to && plan[i + 1]) {
-    return {
-      node: st.to,
-      ...fieldTurn(fieldBearing(st.from, st.to, m), fieldBearing(st.to, plan[i + 1], m)),
-      then: plan[i + 1],
-      dist: fieldDist(st.from, st.to, m),
-    };
+  const last = st.path[st.path.length - 1];
+  if (!last || Math.hypot(st.x - last.x, st.y - last.y) >= FIELD_PATH_STEP) {
+    st.path.push({ x: fRound(st.x), y: fRound(st.y) });
+    if (st.path.length > FIELD_PATH_MAX) st.path.shift();
   }
-  // On plan, and this is where the plan ends.
-  if (plan[i] === st.to && plan.length && i === plan.length - 1) {
-    return { node: st.to, deg: 0, dir: 'arrive', label: 'vardın — dur',
-             then: null, dist: fieldDist(st.from, st.to, m) };
-  }
-  return null;
-}
-
-/**
- * Set the mission, and plan it from where the robot is now.
- *
- * `from` defaults to the node the robot is heading towards, because a mission
- * given mid-run has to start from the next junction rather than from the last
- * one, which is already behind it.
- */
-function fieldMission(st, targets, map, from = null) {
-  const m = map || FIELD;
-  const start = from || st.to || 'START';
-  const plan = fieldPlan(start, targets, m);
-  st.stops = plan.stops;
-  st.plan = plan.nodes;
-  st.step = plan.nodes.length > 1 ? 1 : 0;
-  st.onPlan = false;
-  return plan;
-}
-
-/** Forget the mission; keep knowing where we are. */
-function fieldClearMission(st) {
-  st.stops = []; st.plan = []; st.step = 0; st.onPlan = false;
   return st;
 }
 
 /**
- * Best estimate of the pose, right now.
+ * Put the rover on a node it has just proved it is standing on.
  *
- * Between codes this is the anchor plus however far the dead reckoning has
- * moved since — rotated into the field frame, because route.js starts every
- * run pointing at its own zero and the field does not care which way that was.
- * The rotation is the difference of the two bearings at the anchor, so both
- * the drift *and* the arbitrary starting heading are cancelled at every read.
+ * This is the whole point of the map. A confirmed junction is a measurement —
+ * not "12.4 m into the run" but "at J2, pointing east" — so the position and
+ * the heading are both replaced outright rather than blended. Blending would
+ * be the right thing if there were two noisy estimates; there are not. There
+ * is a guess that has been drifting and a fact.
  *
- * With no anchor there is no answer: an unlocalised robot is not at the origin
- * of the field, it is somewhere, and drawing it at D1 would be a lie the map
- * tells confidently.
+ * The heading is snapped to the leg being driven for the same reason: at a
+ * square junction on a painted line there are only four ways to be pointing,
+ * and the rover is pointing down one of them.
  */
-function fieldPose(st, route) {
-  const a = st.anchor;
-  if (!a) return { known: false, x: null, y: null, bearing: null, since: null };
-  if (!route || a.rx === null) {
-    return { known: true, x: a.x, y: a.y, bearing: a.bearing, since: 0, dead: 0 };
-  }
-  const th = (a.bearing - a.rb) * Math.PI / 180;
-  const dx = (Number(route.x) || 0) - a.rx;
-  const dy = (Number(route.y) || 0) - a.ry;
-  const c = Math.cos(th), s = Math.sin(th);
+function fieldAnchor(st, nodeId, bearing, map) {
+  const n = fieldNode(nodeId, map);
+  if (!n) return st;
+  st.x = n.x;
+  st.y = n.y;
+  if (bearing !== null && bearing !== undefined) st.h = ((Number(bearing) % 360) + 360) % 360;
+  st.at = n.id;
+  st.run = 0;
+  st.path.push({ x: fRound(st.x), y: fRound(st.y) });
+  if (st.path.length > FIELD_PATH_MAX) st.path.shift();
+  return st;
+}
+
+/** The pose, rounded, for a status message or a drawing. */
+function fieldPose(st) {
+  return { x: fRound(st.x), y: fRound(st.y), h: fRound(st.h, 1),
+           at: st.at, run: fRound(st.run), dist: fRound(st.dist) };
+}
+
+// The pages load this with <script src>, so everything above is already
+// global. Node gets at it through shared.js, which evaluates the same bytes.
+
+// ── drawing it ───────────────────────────────────────────────────────
+
+/**
+ * How the field maps onto a canvas: scale, offset, and the two conversions.
+ *
+ * Kept apart from the drawing because a click has to go the other way. The
+ * page hit-tests a tap against station positions in metres, not in pixels, so
+ * the page would otherwise need its own copy of this arithmetic — and a
+ * picker that disagrees with the picture by a few pixels is a picker that
+ * sends the rover to A3 when A2 was tapped.
+ *
+ * y is flipped: the field's +y is north, the canvas's +y is down.
+ */
+function fieldView(w, h, pad = 14, map) {
+  const m = map || FIELD;
+  const s = Math.min((w - pad * 2) / m.building.w, (h - pad * 2) / m.building.h);
+  const ox = (w - m.building.w * s) / 2;
+  const oy = (h - m.building.h * s) / 2;
   return {
-    known: true,
-    x: fieldRound(a.x + dx * c + dy * s),
-    y: fieldRound(a.y + dy * c - dx * s),
-    bearing: fieldRound((((Number(route.bearing) || 0) + a.bearing) % 360 + 360) % 360, 1),
-    // How much of this is measured and how much is a guess: the distance dead
-    // reckoned since the last code. Past a couple of metres, believe the map
-    // less than you believe the next QR.
-    dead: fieldRound(Math.hypot(dx, dy), 2),
+    s, ox, oy,
+    px: (x, y) => [ox + x * s, oy + (m.building.h - y) * s],
+    metres: (px, py) => [(px - ox) / s, m.building.h - (py - oy) / s],
   };
 }
 
 /**
- * The box the whole field fits in, padded — the drawing's viewport. The walls
- * when the field has a size, so an empty corner of the arena is still drawn.
+ * The station nearest a point on the map, or null if nothing is near enough.
+ *
+ * `within` is in metres, not pixels, so the target stays the same size on the
+ * field however big the canvas is — a tap lands on the station a person was
+ * aiming at rather than on whichever one the zoom happened to make fattest.
  */
-function fieldBounds(map, pad = 0.9) {
+function fieldPickAt(x, y, within = 1.4, map) {
   const m = map || FIELD;
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  const pts = m.w && m.h ? [{ x: 0, y: 0 }, { x: m.w, y: m.h }, ...m.nodes] : m.nodes;
-  for (const n of pts) {
-    if (n.x < minX) minX = n.x;
-    if (n.x > maxX) maxX = n.x;
-    if (n.y < minY) minY = n.y;
-    if (n.y > maxY) maxY = n.y;
+  let best = null, bestD = within;
+  for (const n of m.nodes) {
+    if (n.kind === 'junction' || n.kind === 'gate') continue;
+    const d = Math.hypot(n.x - x, n.y - y);
+    if (d < bestD) { bestD = d; best = n; }
   }
-  return { minX: minX - pad, maxX: maxX + pad, minY: minY - pad, maxY: maxY + pad,
-           w: (maxX - minX) + pad * 2, h: (maxY - minY) + pad * 2 };
+  return best;
 }
+
+const FIELD_COLOURS = {
+  wall: '#8b949e', floor: 'rgba(255,255,255,0.02)', gate: '#d29922',
+  blue: '#3465a4', orange: '#ff8000', zone: '#ffe000',
+  ink: '#e6edf3', dim: '#8b949e', plan: '#58a6ff', rover: '#3fb950',
+};
 
 /**
- * Everything a page or a log needs, in one object.
+ * Draw the field.
  *
- * Assembled here rather than in the status frame so the server and the tests
- * describe the robot's position the same way, and so /dashboard does not have
- * to re-derive an instruction that has already been worked out.
+ * @param ctx   a 2D canvas context, already sized
+ * @param w,h   its pixel size
+ * @param o     { pose, plan, target, colours } — everything optional. `pose`
+ *              is field.js's own state (or a fieldPose() of one); `plan` is a
+ *              list of node ids from fieldPlan(), drawn as the route.
+ *
+ * Drawn back to front: room, then paint, then zones, then the route over the
+ * top, then the rover over that. The order is the point — the route has to be
+ * legible against the paint it is drawn on, and the rover has to be legible
+ * against everything.
  */
-function fieldStatus(st, route, map) {
-  const m = map || FIELD;
-  const pose = fieldPose(st, route);
-  const legs = fieldLegs(st.plan, m);
-  return {
-    map: m.name || null,
-    qr: st.qr,
-    text: st.qr ? (fieldQr(st.qr, m) || {}).text || null : null,
-    at: st.at || null,
-    from: st.from,
-    to: st.to,
-    sure: st.sure,
-    known: pose.known,
-    pose,
-    // The two frames, side by side at the moment of the last code. A page
-    // needs it to draw the dead-reckoned trail on the field at all: the trail
-    // is in route coordinates and this is the only thing that says where those
-    // coordinates were on the field.
-    anchor: st.anchor,
-    turn: fieldTurnAt(st, m),
-    plan: st.plan,
-    stops: st.stops,
-    step: st.step,
-    on_plan: st.onPlan,
-    legs,
-    left: legs.slice(Math.max(0, st.step - 1)).map((l) => l.to),
-    reads: st.reads,
-    strays: st.strays,
-    unknown: st.unknown,
-    seen: st.seen.slice(-12),
+function fieldDraw(ctx, w, h, o = {}) {
+  const m = o.map || FIELD;
+  const c = { ...FIELD_COLOURS, ...(o.colours || {}) };
+  const v = fieldView(w, h, o.pad, m);
+  const P = v.px;
+  ctx.clearRect(0, 0, w, h);
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+
+  // ── the building ──
+  // Each hall is drawn as four walls rather than a rectangle, because two of
+  // them have a 3 m hole in the middle that the track goes through, and a hole
+  // is the whole reason the corridor and the gate exist.
+  ctx.lineWidth = Math.max(2, v.s * 0.12);
+  ctx.strokeStyle = c.wall;
+  for (const hall of m.building.halls) {
+    const gaps = m.building.openings.filter((g) => g.x === hall.x0 || g.x === hall.x1);
+    ctx.beginPath();
+    const [x0, y1] = P(hall.x0, m.building.h);
+    const [x1, y0] = P(hall.x1, 0);
+    ctx.moveTo(x0, y1); ctx.lineTo(x1, y1);      // north
+    ctx.moveTo(x0, y0); ctx.lineTo(x1, y0);      // south
+    for (const x of [hall.x0, hall.x1]) {
+      const gap = gaps.find((g) => g.x === x);
+      const [px] = P(x, 0);
+      if (!gap) { ctx.moveTo(px, y0); ctx.lineTo(px, y1); continue; }
+      ctx.moveTo(px, y0); ctx.lineTo(px, P(x, gap.y0)[1]);
+      ctx.moveTo(px, P(x, gap.y1)[1]); ctx.lineTo(px, y1);
+    }
+    ctx.stroke();
+  }
+
+  // The factory door, standing across the corridor. Drawn in warning yellow
+  // because it is the one thing on the field that can stop a run that is
+  // otherwise going perfectly.
+  ctx.strokeStyle = c.gate;
+  ctx.lineWidth = Math.max(2, v.s * 0.10);
+  ctx.beginPath();
+  ctx.moveTo(...P(m.building.gate.x, m.building.gate.y0));
+  ctx.lineTo(...P(m.building.gate.x, m.building.gate.y1));
+  ctx.stroke();
+
+  // ── the paint ──
+  // Blue casing with an orange core, at the line's real width, because that is
+  // what the camera is looking for and seeing it drawn that way is half of
+  // understanding what the detector is doing.
+  //
+  // Every edge on this field is axis-aligned, so both the width and the centre
+  // are snapped: an odd line width centred on a half-pixel is the one
+  // combination a canvas draws without spreading it over two columns. Without
+  // that the orange core — a third of a 100 mm line, which at any sane zoom is
+  // between one and two pixels — lands on the pixel grid for some branches and
+  // between it for others, and the map shows three identical branches painted
+  // three different colours.
+  const snap = (pt) => [Math.round(pt[0]) + 0.5, Math.round(pt[1]) + 0.5];
+  const odd = (n, min) => Math.max(min, Math.round(n) | 1);
+  const paint = (a, b, extra) => {
+    const A = fieldNode(a, m), B = fieldNode(b, m);
+    if (!A || !B) return;
+    // Station edges run PAST the station to where the paint stops.
+    const dx = Math.sign(B.x - A.x), dy = Math.sign(B.y - A.y);
+    const ex = B.x + dx * (extra || 0), ey = B.y + dy * (extra || 0);
+    ctx.beginPath();
+    ctx.moveTo(...snap(P(A.x, A.y)));
+    ctx.lineTo(...snap(P(ex, ey)));
+    ctx.stroke();
   };
-}
+  for (const pass of [[c.blue, odd(m.lineW * v.s, 3)],
+                      [c.orange, odd(m.lineW / 3 * v.s, 1)]]) {
+    ctx.strokeStyle = pass[0];
+    ctx.lineWidth = pass[1];
+    for (const e of m.edges) {
+      const B = fieldNode(e.b, m);
+      paint(e.a, e.b, B && B.tip ? B.tip : 0);
+    }
+  }
 
-function fieldRound(v, n = 3) { return Math.round(v * 10 ** n) / 10 ** n; }
+  // ── the marked areas ──
+  // The zones are the thing a run is actually for. Yellow, as on the field.
+  ctx.lineWidth = Math.max(1, v.s * 0.05);
+  ctx.strokeStyle = c.zone;
+  for (const n of m.nodes) {
+    if (!n.zone) continue;
+    // `along` runs down the branch, which for every station on this field is
+    // north–south except B2, which hangs off the east end of the main line.
+    const alongY = n.id !== 'B2';
+    const ww = alongY ? n.zone.across : n.zone.along;
+    const hh = alongY ? n.zone.along : n.zone.across;
+    const [px, py] = P(n.x - ww / 2, n.y + hh / 2);
+    ctx.strokeRect(px, py, ww * v.s, hh * v.s);
+  }
 
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { FIELD, FIELD_DENEME, FIELDS, fieldFold, FIELD_STRAIGHT_DEG, FIELD_BACK_DEG, FIELD_TURN_LABEL,
-                     fieldNode, fieldLinks, fieldEdge, fieldQrId, fieldQr, fieldQrs,
-                     fieldBearing, fieldDist, fieldWrapDeg, fieldTurn,
-                     fieldPath, fieldPlan, fieldLegs,
-                     fieldState, fieldSee, fieldTurnAt, fieldMission, fieldClearMission,
-                     fieldPose, fieldBounds, fieldStatus };
+  // ── the route ──
+  if (o.plan && o.plan.length > 1) {
+    ctx.strokeStyle = c.plan;
+    ctx.lineWidth = Math.max(2, v.s * 0.09);
+    ctx.setLineDash([v.s * 0.25, v.s * 0.2]);
+    ctx.beginPath();
+    o.plan.forEach((id, i) => {
+      const n = fieldNode(id, m);
+      if (!n) return;
+      const pt = P(n.x, n.y);
+      if (i === 0) ctx.moveTo(...pt); else ctx.lineTo(...pt);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // ── the labels ──
+  ctx.font = `600 ${Math.max(9, Math.round(v.s * 0.34))}px ui-monospace,Menlo,monospace`;
+  ctx.textAlign = 'center';
+  for (const n of m.nodes) {
+    const [px, py] = P(n.x, n.y);
+    const junc = n.kind === 'junction' || n.kind === 'gate';
+    ctx.fillStyle = n.id === o.target ? c.plan : (junc ? c.dim : c.ink);
+    if (junc) {
+      ctx.beginPath();
+      ctx.arc(px, py, Math.max(2, v.s * 0.07), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Stations are labelled beside the zone, junctions under the dot, so a
+    // label never sits on the paint the eye is trying to follow.
+    const half = n.zone ? (n.id === 'B2' ? n.zone.across : n.zone.along) / 2 : 0;
+    ctx.fillText(n.id, px, junc ? py + v.s * 0.62 : py - (half + 0.22) * v.s);
+  }
+
+  // ── the rover ──
+  if (o.pose) {
+    if (o.pose.path && o.pose.path.length > 1) {
+      ctx.strokeStyle = c.rover;
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = Math.max(1, v.s * 0.05);
+      ctx.beginPath();
+      o.pose.path.forEach((p, i) => {
+        const pt = P(p.x, p.y);
+        if (i === 0) ctx.moveTo(...pt); else ctx.lineTo(...pt);
+      });
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    // A triangle, not a dot: which way it is pointing is half of what the pose
+    // says, and the half that goes wrong first.
+    const [px, py] = P(o.pose.x, o.pose.y);
+    const r = Math.max(4, v.s * 0.28);
+    const a = (o.pose.h || 0) * Math.PI / 180;
+    ctx.fillStyle = c.rover;
+    ctx.beginPath();
+    // Bearings, so the nose is (sin, cos) and the canvas's y runs the other way.
+    ctx.moveTo(px + Math.sin(a) * r, py - Math.cos(a) * r);
+    ctx.lineTo(px + Math.sin(a + 2.5) * r * 0.8, py - Math.cos(a + 2.5) * r * 0.8);
+    ctx.lineTo(px + Math.sin(a - 2.5) * r * 0.8, py - Math.cos(a - 2.5) * r * 0.8);
+    ctx.closePath();
+    ctx.fill();
+  }
+  return v;
 }

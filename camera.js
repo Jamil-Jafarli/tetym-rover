@@ -2,26 +2,29 @@
  * The webcam, on the Raspberry Pi.
  *
  * The camera used to be the browser's — `getUserMedia` on a phone propped on
- * the robot. That is gone. The Pi is now on the robot, between the powerbank
- * and the ESP32, and the webcam is plugged into the Pi:
+ * the robot. That is gone. The Pi is now on the robot, between the power
+ * supply and the Creality mainboard, and the webcam is plugged into the Pi:
  *
- *     powerbank → Raspberry Pi → ESP32 → ESC → motor
- *                      └── USB webcam
+ *     power supply → Raspberry Pi → Creality mainboard → steppers
+ *                          └── USB webcam
  *
  * Which removes the whole class of problem the README used to have a section
  * about: no HTTPS to arrange, no camera permission to grant, no phone to keep
  * charged, and the robot still sees when nobody has a browser open at all.
  * A page no longer *is* the camera; it *watches* one.
  *
- * One ffmpeg, one device open, two outputs:
+ * One ffmpeg, one device open, one output: the camera's own MJPEG on stdout,
+ * copied through without re-encoding (`-c:v copy`, so the Pi spends almost no
+ * CPU on it), which is what /camera/stream.mjpg serves and every page draws.
  *
- *   stdout  the camera's own MJPEG, copied through without re-encoding, which
- *           is what /camera/stream.mjpg serves and what every page draws.
- *           `-c:v copy` means the Pi spends no CPU on it at all.
- *   fd 3    a small grey rawvideo at a few frames a second — the QR reader's
- *           input, and nothing else's. Decoding QR from the same JPEGs would
- *           mean decoding JPEGs in Node; asking ffmpeg for exactly the pixels
- *           we want costs less than that and stays out of the video path.
+ * The QR reader's pixels come from the same JPEGs. It used to be a second
+ * ffmpeg output — 320x240 grey — but a 50 mm code seen by a camera leaning
+ * forward is ~30x22 px even at 640x480, and it never read (0 in 1571 frames,
+ * 2026-09-15). At 1920x1080 it reads. A second ffmpeg output at 1080p would
+ * decode *every* frame (27 ms each, ~0.8 of a core at 30 fps) to use five of
+ * them, so instead, a few times a second, one of the JPEGs already here is
+ * handed to jpeg_gray.py, which sends back full-resolution grey. Five
+ * decodes a second, not thirty.
  *
  * A second consumer never opens the device twice: v4l2 would refuse, and the
  * failure would land on whoever asked second rather than on whoever was wrong.
@@ -29,20 +32,27 @@
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // The webcam's own MJPEG is copied through, so this is the size and rate the
-// sensor is asked for, not a transcode target. 640x480 at 15 is a road-facing
-// robot camera: enough to find a road, small enough that a phone on the far
-// side of the wifi keeps up.
+// sensor is asked for, not a transcode target. 1920x1080 because the QR code
+// needs the pixels; the pages cut the old 640x480 framing back out of it
+// (camCrop in public/cam.js), and a 1080p frame from this webcam is 60–85 kB,
+// no bigger than its 640x480 ones were — the wifi does not notice.
 export const CAMERA_DEFAULTS = {
   device: '/dev/video0',
-  width: 640,
-  height: 480,
+  width: 1920,
+  height: 1080,
   fps: 15,
-  qrWidth: 320,      // the QR tap: quarter-area grey, which is plenty for a
-  qrHeight: 240,     // code held up in front of the robot
-  qrFps: 3,
+  // Five looks a second, not three: the code is read while the rover moves
+  // (mission.js's cargo run), and a code going by at a crawl is in shot for
+  // a second or two. Each look is a JPEG decode (~30 ms, jpeg_gray.py) plus a
+  // locate-and-read on the QR worker thread; a look still running when the
+  // next is due means that one is skipped, not queued.
+  qrFps: 5,
 };
+
+const DECODER = fileURLToPath(new URL('./jpeg_gray.py', import.meta.url));
 
 // ffmpeg died: wait before trying again. A camera that was unplugged should not
 // turn into a spawn loop that pins a core while nobody is looking.
@@ -115,11 +125,23 @@ export class Camera {
     this.startedAt = 0;
 
     this._buf = Buffer.alloc(0);
-    this._gray = Buffer.alloc(0);
     this._subs = new Set();     // MJPEG viewers
     this._grayCb = null;
     this._retry = null;
     this._closed = false;
+
+    // The QR decoder (jpeg_gray.py) and the frame it is sending back.
+    this._dec = null;
+    this._decRetryAt = 0;
+    this._qrAt = 0;             // when a JPEG was last handed to it
+    this._qrBusy = false;       // one JPEG in flight at a time
+    this._gHdr = Buffer.alloc(8);
+    this._gHdrN = 0;
+    this._gFrame = null;        // reused while the size stays the same
+    this._gW = 0;
+    this._gH = 0;
+    this._gN = 0;
+    this.qrErr = null;
 
     // Frames in the last second, measured rather than assumed: the number that
     // says whether the camera is delivering is the one nobody configured.
@@ -148,7 +170,7 @@ export class Camera {
       return;
     }
 
-    const { device, width, height, fps, qrWidth, qrHeight, qrFps } = this.cfg;
+    const { device, width, height, fps } = this.cfg;
     const args = [
       '-hide_banner', '-loglevel', 'error', '-nostdin',
       '-f', 'v4l2', '-input_format', 'mjpeg',
@@ -156,14 +178,11 @@ export class Camera {
       '-i', device,
       // the stream everybody watches — the camera's own JPEGs, untouched
       '-map', '0:v', '-c:v', 'copy', '-f', 'mjpeg', 'pipe:1',
-      // the QR tap — small, grey, slow, and on its own pipe
-      '-map', '0:v', '-vf', `scale=${qrWidth}:${qrHeight},format=gray`,
-      '-r', String(qrFps), '-f', 'rawvideo', 'pipe:3',
     ];
 
     let proc;
     try {
-      proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+      proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (e) {
       this.err = `ffmpeg başlatılamadı: ${e.message}`;
       this._later();
@@ -172,10 +191,8 @@ export class Camera {
     this.proc = proc;
     this.startedAt = Date.now();
     this._buf = Buffer.alloc(0);
-    this._gray = Buffer.alloc(0);
 
     proc.stdout.on('data', (d) => this._onJpegData(d));
-    proc.stdio[3].on('data', (d) => this._onGrayData(d));
 
     // ffmpeg writes its complaints to stderr and then usually keeps going, so
     // the last line is the useful one: "device busy", "no such format", the
@@ -244,24 +261,102 @@ export class Camera {
     if (this.frames > 2) this.err = null;       // it is delivering; whatever
                                                 // ffmpeg grumbled about is old
     for (const sub of this._subs) sub(this.frame);
+    this._maybeQr(this.frame);
   }
 
   /**
-   * The grey tap, reassembled into whole frames.
+   * Every 1/qrFps seconds, one of the frames goes to the grey decoder — if
+   * somebody is reading QR, and the last one has come back. A frame due while
+   * one is still in flight is simply not sent: the next will be.
+   */
+  _maybeQr(jpeg, now = Date.now()) {
+    if (!this._grayCb || !(this.cfg.qrFps > 0) || this._qrBusy) return;
+    if (now - this._qrAt < 1000 / this.cfg.qrFps) return;
+    const dec = this._decoder(now);
+    if (!dec) return;
+    this._qrAt = now;
+    this._qrBusy = true;
+    const hdr = Buffer.alloc(4);
+    hdr.writeUInt32BE(jpeg.length);
+    dec.stdin.write(hdr);
+    dec.stdin.write(jpeg);
+  }
+
+  /** jpeg_gray.py, started on first use and again if it dies. */
+  _decoder(now = Date.now()) {
+    if (this._dec) return this._dec;
+    if (this._closed || now < this._decRetryAt) return null;
+    let dec;
+    try {
+      dec = spawn('python3', [DECODER], { stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (e) {
+      this.qrErr = `jpeg_gray.py başlamadı: ${e.message}`;
+      this._decRetryAt = now + RESTART_MS;
+      return null;
+    }
+    this._dec = dec;
+    this._gHdrN = 0;
+    this._gN = 0;
+    dec.stdout.on('data', (d) => this._onGrayData(d));
+    dec.stderr.on('data', (d) => {
+      const line = String(d).trim().split('\n').pop();
+      if (line) this.qrErr = line.slice(0, 160);
+    });
+    dec.stdin.on('error', () => { /* it died mid-write; 'exit' says so */ });
+    const gone = (why) => {
+      if (this._dec !== dec) return;
+      this._dec = null;
+      this._qrBusy = false;
+      this._decRetryAt = Date.now() + RESTART_MS;
+      if (!this._closed) this.qrErr = this.qrErr || `jpeg_gray.py durdu (${why})`;
+    };
+    dec.on('error', (e) => gone(/ENOENT/.test(String(e)) ? 'python3 yoxdur' : e.message));
+    dec.on('exit', (code, sig) => gone(sig || code));
+    return dec;
+  }
+
+  /**
+   * The decoder's answers, reassembled into whole frames.
    *
-   * Fixed size, so this is arithmetic rather than parsing: every
-   * qrWidth × qrHeight bytes is one frame, and a partial one waits.
+   * Each is an 8-byte header (width, height) and then width × height bytes.
+   * A 1080p frame is 2 MB and arrives in 64 kB pieces, so it is copied into
+   * one buffer as it comes rather than concatenated piece by piece (that
+   * would be ~30 copies of a growing buffer per frame). The buffer is reused
+   * for the next frame of the same size — the QR reader copies what it keeps.
+   * 0x0 means "that JPEG did not decode": nothing is delivered, the decoder
+   * is free again.
    */
   _onGrayData(chunk) {
-    if (!this._grayCb) return;                  // nobody reading QR: drop it
-    const need = this.cfg.qrWidth * this.cfg.qrHeight;
-    this._gray = this._gray.length ? Buffer.concat([this._gray, chunk]) : chunk;
-    while (this._gray.length >= need) {
-      const f = this._gray.subarray(0, need);
-      this._gray = this._gray.subarray(need);
-      try {
-        this._grayCb(f, this.cfg.qrWidth, this.cfg.qrHeight);
-      } catch { /* a decoder that throws must not take the camera with it */ }
+    let off = 0;
+    while (off < chunk.length) {
+      if (this._gHdrN < 8) {
+        const n = Math.min(8 - this._gHdrN, chunk.length - off);
+        chunk.copy(this._gHdr, this._gHdrN, off, off + n);
+        this._gHdrN += n;
+        off += n;
+        if (this._gHdrN < 8) break;
+        this._gW = this._gHdr.readUInt32BE(0);
+        this._gH = this._gHdr.readUInt32BE(4);
+        this._gN = 0;
+        const need = this._gW * this._gH;
+        if (need === 0) { this._gHdrN = 0; this._qrBusy = false; continue; }
+        if (!this._gFrame || this._gFrame.length !== need) this._gFrame = Buffer.alloc(need);
+        continue;
+      }
+      const need = this._gW * this._gH;
+      const n = Math.min(need - this._gN, chunk.length - off);
+      chunk.copy(this._gFrame, this._gN, off, off + n);
+      this._gN += n;
+      off += n;
+      if (this._gN === need) {
+        this._gHdrN = 0;
+        this._qrBusy = false;
+        if (this._grayCb) {
+          try {
+            this._grayCb(this._gFrame, this._gW, this._gH);
+          } catch { /* a reader that throws must not take the camera with it */ }
+        }
+      }
     }
   }
 
@@ -295,6 +390,7 @@ export class Camera {
       frames: this.frames,
       viewers: this._subs.size,
       err: this.err,
+      qr_err: this.qrErr,
       up_s: this.startedAt ? Math.round((Date.now() - this.startedAt) / 1000) : 0,
     };
   }
@@ -303,6 +399,7 @@ export class Camera {
     this._closed = true;
     if (this._retry) clearTimeout(this._retry);
     this._subs.clear();
+    if (this._dec) { try { this._dec.kill('SIGTERM'); } catch { /* gone */ } this._dec = null; }
     if (this.proc) {
       const p = this.proc;
       this.proc = null;

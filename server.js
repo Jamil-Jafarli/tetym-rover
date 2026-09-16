@@ -1,83 +1,56 @@
 #!/usr/bin/env node
 /**
- * ESP32 DAC bench — Node.js.
- *
- * Type two percentages in the browser, press START, and they stream to the
- * ESP32's DACs at 20 Hz until you press STOP.
- *
- *     GPIO25 (DAC1)  and  GPIO26 (DAC2)   analog, 0% = idle, 100% = --v-max
- *     GPIO23                              digital ENABLE: 0 at rest, 1 on START
- *
- * The camera is this machine's — a USB webcam on the Raspberry Pi the robot
- * carries — not the browser's. See camera.js.
+ * A differential-drive rover on a Creality mainboard, driven by G-code over
+ * USB serial: X and Y are the left and right stepper drivers, mounted
+ * mirror-image, so a direction is a pair of wheel signs rather than one axis
+ * — see DIRECTIONS in marlin.js, the single definition the page, the API and
+ * the tests all read.
  *
  * The pages, one WebSocket:
- *     /        hub — live status and links
- *     /dashboard  everything at once: speed, volts, ESP32 + Pi, camera, QR, map
- *     /manual  type the two percentages by hand
- *     /drive   hold W / A / S / D, with an editable value table
- *     /vision  camera; finds the road and shows the steering error
- *     /follow  the same detector, driving the motors, recording the run
+ *     /        hub — live status and a tile to every page below
+ *     /gcode   hold W / A / S / D, G-code goes out for as long as the key is down;
+ *              the lift (Q / E), and teaching the routes to the loads
+ *     /vision  camera; finds the road, shows the steering error and the QR code
+ *     /follow  the same detector, driving the motors, recording the run;
+ *              F to follow, W A S D by hand, Q / E for the fork
  *     /tune    drop a run log in, get numbers back out
- *     /obstacle  the forward HC-SR04: stop, wait, carry on
- *     /pins    every spare pin, 0-255 by hand
+ *     /lidar   the iPhone LiDAR map (the relay is on /ws, same port)
+ *     /plc     the factory automation PLC, the mission and the field
+ *     /pins    the Pi's own pins: the reversing buzzer, what is wired where
  *
- * Two ways to reach the board:
- *
- *     node server.js --esp 192.168.1.42     wifi  (flash esp32/ws_dac)
- *     node server.js --serial COM5          USB   (flash esp32/throttle_dac_2ch)
- *     node server.js --esp sim --fake       neither: simulated board
+ *     node server.js                    find the printer, open it, serve the page
+ *     node server.js --port /dev/ttyUSB0
+ *     node server.js --no-connect       serve the page, leave the port alone —
+ *                                        useful when the printer is not plugged
+ *                                        in yet; the page has a Connect button
+ *                                        and a port list of its own
+ *     node server.js --trace            print every serial line, in and out,
+ *                                        timestamped
  *
  * The page and its WebSocket share one port, so there is nothing to configure
  * in the browser — open the URL this prints.
- *
- * Why go through Node at all instead of talking to the ESP32 from the page?
- * Because the board's 300 ms watchdog needs a steady 20 Hz stream, and a
- * browser tab that is backgrounded, throttled or reloading will not deliver
- * one. Node holds that stream, clamps every value, and drops to idle the
- * moment the browser goes away.
- *
- * ── the other machine ──
- *
- * The same rover also exists as a differential drive on a Creality mainboard,
- * driven by G-code over USB instead of by two DAC pins. It is the same robot
- * and the same road-following code; only the thing at the far end of the wire
- * changes. --marlin picks it:
- *
- *     node server.js --marlin                 find the printer, open it, serve
- *     node server.js --marlin --port /dev/ttyUSB0
- *     node server.js --marlin --no-connect    serve the page, leave the port
- *
- *     /        hold W A S D, G-code goes out for as long as the key is down
- *     /vision /follow /tune   exactly as above — same detector, same logs
- *
- * X and Y are the left and right wheels, mounted mirror-image, so a direction
- * is a pair of wheel signs rather than one axis — see DIRECTIONS in marlin.js,
- * the single definition the page, the API and the tests all read.
  */
 
 import http from 'node:http';
-import https from 'node:https';
 import os from 'node:os';
 import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import * as esp from './esp.js';
-import { Bench } from './bench.js';
-import { WsTransport, SerialTransport } from './transports.js';
-import { Esp32WsSim } from './esp32ws_sim.js';
 import { FollowLog, LOG_DIR } from './follow_log.js';
 import { Camera, CAMERA_DEFAULTS, PLACEHOLDER_JPEG } from './camera.js';
-import { QrReader } from './qr.js';
-import { RpiStats } from './rpi.js';
-import { loadShared } from './shared.js';
-import { MarlinLink, Jogger, bestPort, explainSerialError,
+import { MarlinLink, Jogger, listPorts, bestPort, explainSerialError,
          DEFAULT_BAUD } from './marlin.js';
-import { marlinApi } from './marlin_http.js';
+import { marlinApi, reply } from './marlin_http.js';
 import { Rover } from './rover.js';
+import { QrReader, QrLooker } from './qr.js';
+import { Actuator, ACTUATOR_DEFAULTS, actuatorApi, actuatorCommand } from './actuator.js';
+import { Lidar, LIDAR_DEFAULTS, lidarApi } from './lidar.js';
+import { Radar, RADAR_DEFAULTS, radarApi } from './radar.js';
+import { RouteBook, RouteRecorder, Replayer, routesApi, ROUTE_LEGS } from './routes.js';
+import { Nav, FIELD, navQrs } from './nav.js';
+import { RpiStats } from './rpi.js';
 import { LidarRelay, routeUpgrades } from './lidar_relay.js';
 import { LidarSim } from './lidar_sim.js';
 import { advertise } from './lidar_discovery.js';
@@ -85,24 +58,20 @@ import { startCompetition } from './plc_run.js';
 import { Gpio } from './gpio.js';
 import { Buzzer } from './buzzer.js';
 
-// The competition field, straight out of the module the pages load — one copy
-// of the graph, served to anything that asks for it. See public/field.js.
-// FIELDS holds both: the competition field and the practice one (--field).
-const { FIELDS, fieldState, fieldSee, fieldMission, fieldClearMission, fieldStatus } =
-  loadShared('field.js', ['FIELDS', 'fieldState', 'fieldSee', 'fieldMission',
-                          'fieldClearMission', 'fieldStatus']);
-
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Where the saved tuning lives. TETYM_FOLLOW_FILE moves it, which is how the
 // tests write settings without touching the robot's own follow.json.
 const FOLLOW_FILE = process.env.TETYM_FOLLOW_FILE || path.join(HERE, 'follow.json');
+// The taught routes — see routes.js. Saved, unlike the mission target: they
+// are an afternoon of driving, not a choice about this run.
+const ROUTES_FILE = path.join(HERE, 'routes.json');
 
 /**
  * The follow page's sliders and calibration, saved server-side.
  *
- * Same reasoning as presets.json: numbers you found by driving the robot
- * should not depend on which browser or which laptop you drove it from, and
- * they should still be there after a reload in the middle of a session.
+ * Numbers you found by driving the robot should not depend on which browser
+ * or which laptop you drove it from, and they should still be there after a
+ * reload in the middle of a session.
  */
 function loadFollowCfg() {
   try { return JSON.parse(fs.readFileSync(FOLLOW_FILE, 'utf8')) || {}; }
@@ -119,13 +88,8 @@ function parseArgs(argv) {
   // 0.0.0.0 by default: every interface, so a phone on the same wifi can reach
   // it without anything being configured. There is no authentication, which is
   // why it says so on startup.
-  const args = { host: '0.0.0.0', http: 8090, esp: null, serial: null,
-                 vMax: esp.V_MAX, fake: false, list: false,
-                 // --marlin swaps the ESP32 for a Creality mainboard: same
-                 // rover, same pages, G-code over USB instead of two DACs.
-                 marlin: false, port: null, baud: DEFAULT_BAUD,
-                 connect: true, trace: false,
-                 https: false, cert: null, key: null,
+  const args = { host: '0.0.0.0', http: 8090, list: false,
+                 port: null, baud: DEFAULT_BAUD, connect: true, trace: false,
                  // The webcam is plugged into this machine, so it is a server
                  // setting like the serial port is — not something a page asks
                  // for permission to use.
@@ -133,133 +97,147 @@ function parseArgs(argv) {
                  camWidth: CAMERA_DEFAULTS.width,
                  camHeight: CAMERA_DEFAULTS.height,
                  camFps: CAMERA_DEFAULTS.fps,
+                 qrFps: CAMERA_DEFAULTS.qrFps,
                  qr: true,
+                 // The lift's two GPIO pins. Off means dry: the page and the
+                 // cargo run behave the same, no pin is touched — for a laptop,
+                 // and for the test suites, which run on the Pi itself.
+                 actuator: true,
+                 actMaxS: ACTUATOR_DEFAULTS.maxRunMs / 1000,
+                 // The lidar motor on its L298N. Off means dry, for the same
+                 // reasons as the lift.
+                 lidar: true,
+                 lidarV: LIDAR_DEFAULTS.volts,
+                 lidarSupply: LIDAR_DEFAULTS.supplyV,
+                 lidarDrop: LIDAR_DEFAULTS.dropV,
+                 // What the lidar sends to this Pi — see radar.js. Off means
+                 // the port is never opened.
+                 radar: true,
+                 radarPort: RADAR_DEFAULTS.port,
+                 radarOffset: RADAR_DEFAULTS.offset,
+                 radarCcw: RADAR_DEFAULTS.ccw,
+                 radarUnit: RADAR_DEFAULTS.unit,
+                 radarFov: RADAR_DEFAULTS.fov,
+                 routes: ROUTES_FILE,
                  // The LiDAR map. The scanner is a phone running webscan, and it
                  // finds this server the way it used to find the webscan relay.
+                 // Not the lidar motor above: that spins, this draws.
                  lidarRoom: 'default', lidarSim: false, webscan: null,
                  // Announce the relay over mDNS so the phone app lists it
                  // without an address being typed.
                  advertise: true,
-                 // The competition: which field, and the factory automation
-                 // system's PLC (EK TEKNİK ŞARTNAME, bölüm 2). Off unless asked
-                 // for, so a laptop on the office wifi does not spray UDP at
-                 // 192.168.100.100.
-                 field: 'yarisma', plc: null, plcBind: null, plcSim: false };
+                 // The factory automation system's PLC (EK TEKNİK ŞARTNAME,
+                 // bölüm 2). Off unless asked for, so a laptop on the office
+                 // wifi does not spray UDP at 192.168.100.100.
+                 plc: null, plcBind: null, plcSim: false,
+                 // The Pi's own pins (the buzzer, /pins). Off means dry.
+                 gpio: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--fake') args.fake = true;
-    else if (a === '--list') args.list = true;
-    else if (a === '--marlin' || a === '--rover') args.marlin = true;
+    if (a === '--list') args.list = true;
     else if (a === '--baud') args.baud = parseInt(argv[++i], 10);
     else if (a === '--no-connect') args.connect = false;
     else if (a === '--trace') args.trace = true;
     else if (a === '--host') args.host = argv[++i];
     else if (a === '--http') args.http = parseInt(argv[++i], 10);
-    else if (a === '--esp') args.esp = argv[++i];
-    else if (a === '--serial') args.serial = argv[++i];
-    else if (a === '--port') { args.port = argv[++i]; args.marlin = true; }
-    else if (a === '--v-max') args.vMax = parseFloat(argv[++i]);
+    else if (a === '--port') args.port = argv[++i];
     else if (a === '--camera') args.camera = argv[++i];
     else if (a === '--no-camera') args.camera = null;
-    else if (a === '--no-qr') args.qr = false;
     else if (a === '--cam-fps') args.camFps = parseInt(argv[++i], 10);
-    else if (a === '--cam-size') {
-      const [w, h] = String(argv[++i] || '').split(/[x×*]/);
-      if (w && h) { args.camWidth = parseInt(w, 10); args.camHeight = parseInt(h, 10); }
-    }
+    else if (a === '--qr-fps') args.qrFps = Math.max(0.5, parseFloat(argv[++i]) || CAMERA_DEFAULTS.qrFps);
+    else if (a === '--no-qr') args.qr = false;
+    else if (a === '--no-actuator') args.actuator = false;
+    else if (a === '--act-max-s') args.actMaxS = Number(argv[++i]);
+    else if (a === '--no-lidar') args.lidar = false;
+    else if (a === '--lidar-v') args.lidarV = Number(argv[++i]);
+    else if (a === '--lidar-supply') args.lidarSupply = Number(argv[++i]);
+    else if (a === '--lidar-drop') args.lidarDrop = Number(argv[++i]);
+    else if (a === '--no-radar') args.radar = false;
+    else if (a === '--radar-port') args.radarPort = parseInt(argv[++i], 10);
+    else if (a === '--radar-offset') args.radarOffset = Number(argv[++i]) || 0;
+    else if (a === '--radar-ccw') args.radarCcw = true;
+    else if (a === '--radar-unit') args.radarUnit = argv[++i];
+    else if (a === '--radar-fov') args.radarFov = Number(argv[++i]) || RADAR_DEFAULTS.fov;
+    else if (a === '--routes') args.routes = argv[++i];
+    else if (a === '--no-gpio') args.gpio = false;
     else if (a === '--lidar-room') args.lidarRoom = argv[++i];
     else if (a === '--lidar-sim') args.lidarSim = true;
     else if (a === '--webscan') args.webscan = argv[++i];
     else if (a === '--no-advertise') args.advertise = false;
-    else if (a === '--field') args.field = argv[++i];
     else if (a === '--plc') {
       const next = argv[i + 1];
       args.plc = next && !next.startsWith('--') ? argv[++i] : true;
     }
     else if (a === '--plc-bind') args.plcBind = argv[++i];
+    else if (a === '--plc-local') args.plcLocal = parseInt(argv[++i], 10) || 0;
     else if (a === '--plc-sim') {
       args.plcSim = true;
       const next = argv[i + 1];
       if (next && /^\d+$/.test(next)) args.plcSimPort = Number(argv[++i]);
     }
-    else if (a === '--https') args.https = true;
-    else if (a === '--cert') { args.cert = argv[++i]; args.https = true; }
-    else if (a === '--key') { args.key = argv[++i]; args.https = true; }
+    else if (a === '--cam-size') {
+      const [w, h] = String(argv[++i] || '').split(/[x×*]/);
+      if (w && h) { args.camWidth = parseInt(w, 10); args.camHeight = parseInt(h, 10); }
+    }
     else if (a === '--help' || a === '-h') {
       console.log(`usage: node server.js [options]
 
-  --esp <host>      ESP32 over wifi: IP, hostname, or a full ws:// URL.
-                    Default port 81.  e.g. --esp 192.168.1.42
-                                           --esp esp32-dac.local
-  --serial <path>   ESP32 over USB instead (COM5, /dev/ttyUSB0).
-                    Auto-detected if you pass --serial with no value.
-  --fake            simulated board, no hardware. Pairs with --esp or --serial.
   --http <n>        web port (default 8090)
   --host <addr>     bind address (default 0.0.0.0 — every interface)
-  --https           serve over TLS. The camera no longer needs it — it is the
-                    Pi's and is served as MJPEG over plain http. Makes a
-                    self-signed certificate in node/certs/ the first time.
-  --cert <file>     use your own certificate instead (implies --https)
-  --key <file>      ...and its private key
-  --v-max <v>       what 100% means, in volts (default ${esp.V_MAX})
-
-  --marlin          drive a Creality mainboard over USB with G-code instead of
-                    an ESP32's DACs. The road-following pages are the same;
-                    /  becomes the hold-WASD G-code page. On a Pi the board's
-                    CH340 comes up as /dev/ttyUSB0, auto-detected.
-  --port <path>     the printer's serial device (implies --marlin; default:
-                    auto-detected — /dev/ttyUSB0 on a Pi)
-  --baud <n>        serial speed in --marlin mode (default ${DEFAULT_BAUD})
-  --no-connect      --marlin: serve the page without opening the port. Use it
-                    when the printer is not plugged in yet — the page has a
-                    Connect button and a port list of its own.
-  --trace           --marlin: print every serial line, in and out, timestamped.
-                    Hold a key for a few seconds with this on and the output is
-                    the whole story: what went out and what came back.
+  --port <path>     the printer's serial device (default: auto-detected —
+                    /dev/ttyUSB0 on a Pi)
+  --baud <n>        serial speed (default ${DEFAULT_BAUD})
+  --no-connect      serve the page without opening the port. Use it when the
+                    printer is not plugged in yet — the page has a Connect
+                    button and a port list of its own.
+  --trace           print every serial line, in and out, timestamped. Hold a
+                    key for a few seconds with this on and the output is the
+                    whole story: what went out and what came back.
   --camera <dev>    the webcam on this machine (default ${CAMERA_DEFAULTS.device})
   --cam-size <WxH>  capture size (default ${CAMERA_DEFAULTS.width}x${CAMERA_DEFAULTS.height})
   --cam-fps <n>     capture rate (default ${CAMERA_DEFAULTS.fps})
+  --qr-fps <n>      QR reader's looks per second (default ${CAMERA_DEFAULTS.qrFps})
   --no-camera       do not open a camera at all
   --no-qr           camera on, QR reader off
+  --no-actuator     the lift is dry: state kept, GPIO10/GPIO22 never touched
+  --act-max-s <n>   cut a single lift run after this many seconds
+                    (default ${ACTUATOR_DEFAULTS.maxRunMs / 1000}; 0 = never)
+  --no-lidar        the lidar motor is dry: state kept, GPIO${LIDAR_DEFAULTS.pwmPin}/${LIDAR_DEFAULTS.in1Pin}/${LIDAR_DEFAULTS.in2Pin} never touched
+  --lidar-v <n>     the lidar motor's starting voltage (default ${LIDAR_DEFAULTS.volts})
+  --lidar-supply <n> what the L298N is fed (default ${LIDAR_DEFAULTS.supplyV} V)
+  --lidar-drop <n>  the L298N's own loss (default ${LIDAR_DEFAULTS.dropV} V) — duty is
+                    volts / (supply − drop)
+  --radar-port <n>  where the lidar's data arrives: UDP, TCP, HTTP, WebSocket,
+                    TLS (default ${RADAR_DEFAULTS.port})
+  --no-radar        do not open the radar port at all
+  --radar-offset <n> degrees added to every lidar angle — the card sets it too
+  --radar-ccw       the lidar counts anticlockwise
+  --radar-unit <u>  mm | cm | m for distances that do not say (default auto)
+  --radar-fov <n>   the iPhone's depth map width, degrees (default ${RADAR_DEFAULTS.fov})
+  --routes <file>   where the taught routes are kept (default routes.json
+                    next to server.js) — the tests point this elsewhere so
+                    they never touch the real ones
   --lidar-room <r>  the LiDAR relay room the pages show (default "default").
                     A scanner connects to ws://<this machine>:<port>/ws with
-                    any room name; this only picks which one /dashboard draws
+                    any room name; this only picks which one /lidar draws
   --lidar-sim       stream a simulated LiDAR into that room — no phone needed
   --no-advertise    do not announce the relay over mDNS (_webscan._tcp). With it
                     on, the webscan phone app finds this server by itself
   --webscan <dir>   also serve a built webscan web app (apps/web/dist), so its
-                    browser scanner streams straight here. The phone's camera
-                    needs --https for that page
-  --field <name>    yarisma (default, 18 × 10 m) or deneme (10 × 7 m)
+                    browser scanner streams straight here
   --plc [host:port] talk to the factory automation PLC over UDP: PAKET_TX once
                     a second, PAKET_RX back. Default 192.168.100.100:1515
   --plc-bind <ip>   send from this address — the robot's, 192.168.100.10
+  --plc-local <n>   the robot's own UDP port for the PLC link (default: any free
+                    one, chosen at start). Fix it to test by hand with nc
+  --no-gpio         the buzzer and /pins are dry: state kept, no Pi pin touched
   --plc-sim [port]  run a PLC simulator in this server on 127.0.0.1:1515 and
                     talk to it: the whole mission, no field needed. /plc
   --list            list serial ports and exit`);
       process.exit(0);
     }
   }
-  // Which machine is at the other end. --esp, --serial and --fake are the
-  // ESP32's flags, so naming one of them says so; --marlin and --port are the
-  // printer's. With neither, it is the printer: the ESP32 path has never had a
-  // default — it used to refuse to start without being told where the board is
-  // — while the printer is simply found on USB.
-  if (!args.marlin && args.esp === null && args.serial === null && !args.fake) {
-    args.marlin = true;
-  }
-  if (!FIELDS[args.field]) {
-    console.error(`--field must be one of: ${Object.keys(FIELDS).join(', ')}`);
-    process.exit(2);
-  }
   return args;
-}
-
-/** "192.168.1.42" | "esp32-dac.local" | "ws://host:81/" -> ws URL */
-function espUrl(hostArg) {
-  if (/^wss?:\/\//i.test(hostArg)) return hostArg;
-  const [host, port] = hostArg.split(':');
-  return `ws://${host}:${port || 81}/`;
 }
 
 /**
@@ -280,115 +258,18 @@ function localAddresses() {
 }
 
 /**
- * A certificate, for anyone who wants TLS.
- *
- * This used to be load-bearing: browsers only give a page the camera on
- * localhost or over HTTPS, so /vision and /follow were dead from a phone on
- * plain http however open the server was, and a self-signed certificate was the
- * way round it. The camera is the Pi's now and arrives as an ordinary MJPEG
- * response, so nothing needs this — it is here for its own sake.
- *
- * Generated with openssl because writing an X.509 encoder to avoid a one-line
- * shell call would be a strange way to spend an afternoon. If openssl is not
- * there, say so and how to fix it rather than failing obscurely.
- */
-function loadTls(args) {
-  const dir = path.join(HERE, 'certs');
-  const certFile = args.cert || path.join(dir, 'cert.pem');
-  const keyFile = args.key || path.join(dir, 'key.pem');
-
-  if (fs.existsSync(certFile) && fs.existsSync(keyFile)) {
-    return { cert: fs.readFileSync(certFile), key: fs.readFileSync(keyFile) };
-  }
-  if (args.cert || args.key) {
-    throw new Error(`certificate not found: ${args.cert || args.key}`);
-  }
-
-  // Name every address we have, so the certificate matches whichever one you
-  // type in rather than adding a second warning about the hostname.
-  const alt = ['DNS:localhost', 'IP:127.0.0.1',
-               ...localAddresses().map((a) => `IP:${a.address}`)].join(',');
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    execFileSync('openssl', [
-      'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '3650',
-      '-subj', '/CN=esp32-bench', '-addext', `subjectAltName=${alt}`,
-      '-keyout', keyFile, '-out', certFile,
-    ], { stdio: 'ignore' });
-  } catch {
-    throw new Error('--https needs a certificate and openssl could not make one.\n'
-      + `  Make one yourself and put it in ${dir}:\n`
-      + `    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \\\n`
-      + `      -subj "/CN=esp32-bench" -keyout key.pem -out cert.pem\n`
-      + '  ...or pass --cert and --key.');
-  }
-  console.log(`made a self-signed certificate in ${dir}`);
-  return { cert: fs.readFileSync(certFile), key: fs.readFileSync(keyFile) };
-}
-
-async function listPorts() {
-  const { SerialPort } = await import('serialport');
-  return SerialPort.list();
-}
-
-async function pickPort() {
-  const ports = await listPorts();
-  if (ports.length === 0) throw new Error('no serial ports found');
-  // Prefer the usual USB-UART bridges: CP210x, CH340, FTDI.
-  const usb = ports.filter((p) => /wch|silicon|ftdi|prolific|cp210|ch34/i.test(
-    `${p.manufacturer || ''} ${p.friendlyName || ''}`));
-  const chosen = (usb[0] || ports[0]).path;
-  console.log(`serial port auto-detected: ${chosen}`);
-  if (ports.length > 1) {
-    console.log('   others:', ports.map((p) => p.path)
-      .filter((p) => p !== chosen).join(', '));
-    console.log('   use --serial <path> to pick a different one');
-  }
-  return chosen;
-}
-
-async function buildTransport(args) {
-  // Serial only when explicitly asked for; wifi is the default.
-  if (args.serial !== null) {
-    if (args.fake) return new SerialTransport('fake', true);
-    const p = args.serial || await pickPort();
-    return new SerialTransport(p, false);
-  }
-
-  if (args.fake) {
-    const sim = new Esp32WsSim({ port: 8181, host: '127.0.0.1', vMax: args.vMax });
-    await sim.ready;
-    console.log(`simulated ESP32 listening on ${sim.url} — nothing is driven`);
-    const tx = new WsTransport(sim.url);
-    tx.label = 'SIMULATED esp32 (wifi)';
-    tx._sim = sim;
-    return tx;
-  }
-
-  if (!args.esp) {
-    throw new Error('tell me where the board is: --esp <ip>, --serial <path>, '
-                  + 'or --fake to try it with no hardware');
-  }
-  return new WsTransport(espUrl(args.esp));
-}
-
-/**
  * The webcam, as two URLs: a stream and a still.
  *
- * The camera is plugged into this machine, not into either board, so both
- * servers serve it from the same code — /vision and /follow are the same pages
- * on both, and they get their pictures the same way whichever board is driving.
- *
- * Answers the request and returns true, or returns false for a URL that is not
- * the camera's.
+ * Answers the request and returns true, or returns false for a URL that is
+ * not the camera's.
  */
 function serveCamera(camera, req, res, url) {
   // ── the webcam ────────────────────────────────────────────────────
   //
   // An <img> pointed at this is all a page needs to have live video, over
   // plain http, from any device on the wifi. No getUserMedia, no permission
-  // prompt, no certificate — which is the entire reason the camera moved off
-  // the phone and onto the Pi.
+  // prompt, no certificate — which is the entire reason the camera lives on
+  // the Pi rather than the phone.
   if (url === '/camera/stream.mjpg') {
     const BOUND = 'esp32frame';
     res.writeHead(200, {
@@ -452,9 +333,6 @@ function serveCamera(camera, req, res, url) {
  * The runs, so /tune can offer the last lap instead of making you find it in a
  * file dialog. Read-only, and the name is checked rather than joined blindly —
  * this server has no authentication and sits on a shared wifi.
- *
- * Both machines write the same logs through the same FollowLog, so they read
- * them back through the same handler.
  */
 function serveLogs(res, url) {
   const name = url === '/logs' ? '' : decodeURIComponent(url.slice(6));
@@ -497,6 +375,7 @@ const WEBSCAN_TYPES = {
  * The LiDAR map over HTTP.
  *
  * `GET /api/lidar` is every relay room: who is sending, how fast, how stale.
+ * (The lidar *motor* is /api/lidar-motor.)
  *
  * With --webscan, the files of a built webscan web app too — its browser
  * scanner then comes from the same origin whose /ws it streams to, which is the
@@ -504,14 +383,11 @@ const WEBSCAN_TYPES = {
  * own pages, so `/` is still the hub rather than webscan's index.
  *
  * Streamed, not read whole: the depth model's wasm is tens of megabytes, and a
- * synchronous read that size is a stall in the 20 Hz stream to the motors.
+ * synchronous read that size is a stall in the stream to the motors.
  */
 function serveLidar(lidar, dist, res, url) {
   if (url === '/api/lidar') {
-    const b = Buffer.from(JSON.stringify(lidar.info()));
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
-                         'Content-Length': b.length, 'Cache-Control': 'no-store' });
-    res.end(b);
+    reply(res, 200, lidar.info());
     return true;
   }
   if (!dist || url === '/') return false;
@@ -542,26 +418,25 @@ function serveLidar(lidar, dist, res, url) {
 /**
  * Where a scanner should point, for the startup banner.
  *
- * Every address, not the first one: the Pi is normally on the ESP32's access
- * point and on a router at once, and the first interface is the right answer
- * only for phones that happen to be on that network. With mDNS on, the app
- * does not need any of them.
+ * Every address, not the first one: the Pi is often on two networks at once,
+ * and the first interface is the right answer only for phones that happen to
+ * be on that one. With mDNS on, the app does not need any of them.
  */
-function lidarBanner(lidar, args, scheme) {
-  const ws = scheme === 'https' ? 'wss' : 'ws';
+function lidarBanner(lidar, args) {
   const nets = args.host === '0.0.0.0' ? localAddresses()
     : [{ name: 'bind', address: args.host }];
-  console.log(`lidar: relay on /ws, room "${lidar.room}"`
+  console.log(`lidar map: relay on /ws, room "${lidar.room}"`
     + (args.advertise ? ' — the webscan app finds it by itself (mDNS _webscan._tcp)' : ''));
   for (const n of nets.length ? nets : [{ name: 'local', address: 'localhost' }]) {
-    console.log(`   app relay URL, if typed:  ${ws}://${n.address}:${args.http}`.padEnd(52)
+    console.log(`   app relay URL, if typed:  ws://${n.address}:${args.http}`.padEnd(52)
       + `(${n.name})`);
   }
   if (args.lidarSim) console.log(`   simulated LiDAR streaming into room "${lidar.room}"`);
   if (!args.advertise) console.log('   mDNS announcement off (--no-advertise) — type the URL in the app');
   if (args.webscan) {
+    const shown = args.host === '0.0.0.0' ? 'localhost' : args.host;
     console.log(`   webscan web app from ${args.webscan}  ->  `
-      + `${scheme}://${host}:${args.http}/sender.html?room=${lidar.room}`);
+      + `http://${shown}:${args.http}/sender.html?room=${lidar.room}`);
     if (!fs.existsSync(path.join(args.webscan, 'sender.html'))) {
       console.log('   ...but there is no sender.html in it — build webscan first (pnpm build)');
     }
@@ -575,28 +450,32 @@ function lidarBanner(lidar, args, scheme) {
  */
 async function announceLidar(lidar, args) {
   if (!args.advertise) return null;
-  const handle = await advertise({ port: args.http, tls: !!args.https, path: '/ws' });
+  const handle = await advertise({ port: args.http, tls: false, path: '/ws' });
   lidar.announced = handle.name;
-  if (handle.name) console.log(`lidar: announced as "${handle.name}" (_webscan._tcp)`);
-  else console.log(`lidar: mDNS announcement unavailable — ${handle.error}`);
+  if (handle.name) console.log(`lidar map: announced as "${handle.name}" (_webscan._tcp)`);
+  else console.log(`lidar map: mDNS announcement unavailable — ${handle.error}`);
   return handle;
 }
 
-/**
- * The other machine: a differential drive on a Creality mainboard.
- *
- * Same robot, same road-following pages, same run logs — the difference is
- * that a wheel command leaves as G-code down a USB serial port instead of as
- * two DAC percentages over a WebSocket. It gets its own function rather than
- * a set of `if`s through main() because almost nothing survives the swap: no
- * transport, no bench, no 20 Hz watchdog to feed, and a shutdown that has to
- * let the move already on the board finish.
- */
-async function runMarlin(args) {
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+
+  if (args.list) {
+    const ports = await listPorts();
+    if (!ports.length) console.log('no serial ports found');
+    for (const p of ports) console.log(p);
+    return;
+  }
+
   const link = new MarlinLink();
   const jog = new Jogger(link);
-  // held() is read per request, so the rover being declared further down is fine.
-  const api = marlinApi({ link, jog, held: () => rover.holdReason });
+  // A key or a halt on /gcode takes the wheels back from a taught route being
+  // replayed (routes.js) — `replayer` is created further down, before any
+  // request can arrive.
+  // held() is read per request, so the rover being declared further down is
+  // fine: the PLC mission's brake covers the keyboard too.
+  const api = marlinApi({ link, jog, onManual: () => replayer.cancel('əl ilə sürüldü'),
+                          held: () => rover.holdReason });
 
   // --trace mirrors the link's log to the console. The page shows the same
   // thing, but a terminal can be scrolled back, piped and pasted.
@@ -615,73 +494,147 @@ async function runMarlin(args) {
   }
 
   // ── pages ─────────────────────────────────────────────────────────
-  // The ESP32's hub, manual, drive and pins pages are about two DAC pins, so
-  // they are not here; everything that is about the road is.
   const PAGES = {
-    // One page to start from, the same hub the ESP32 side has: status,
-    // then a tile to everything this machine serves.
+    // One page to start from: status, then a tile to everything served here.
     '/':       'home.html',
     '/gcode':  'gcode.html',   // hold WASD, G-code goes out
     '/vision': 'vision.html',  // camera -> line detection, look and tune
     '/follow': 'follow.html',  // the same detector, driving
     '/tune':   'tune.html',    // read a run back and say what to change
-    // The LiDAR map is about the robot, not the board, so it is on both.
-    // /viewer.html is where the webscan phone app tells you to look.
-    '/lidar':  'lidar.html',
-    '/viewer.html': 'lidar.html',
-    // The competition: PLC link, mission, field. On both machines, because the
-    // factory automation system talks to the robot, not to its motor board.
+    '/map':    'map.html',     // the competition field: pick a station, watch it go
+    '/dashboard': 'dashboard.html',  // everything at once: camera, QR, where it is, the Pi
+    '/lidar':  'lidar.html',   // the iPhone LiDAR map, full screen
+    '/viewer.html': 'lidar.html',    // where the webscan phone app says to look
+    // The competition: PLC link, mission, field. The factory automation
+    // system talks to the robot, not to its motor board.
     '/plc':    'plc.html',
-    // The Pi's own pins: the reversing buzzer, and what is wired where.
-    '/pins':   'pins_pi.html',
+    '/pins':   'pins_pi.html', // the Pi's own pins: the reversing buzzer, what is wired where
   };
 
-  // The road pages are shared with the ESP32 half, so they load what those
-  // pages load — cam.js included, which is how /vision and /follow get their
-  // pictures. A missing entry here is a 404 in a <script> tag, which is a page
-  // that renders and then does nothing.
+  // A missing entry here is a 404 in a <script> tag, which is a page that
+  // renders and then does nothing.
   const SCRIPTS = { '/road.js': 'road.js', '/pilot.js': 'pilot.js',
-                    '/analyse.js': 'analyse.js', '/wheels.js': 'wheels.js',
-                    '/sonar.js': 'sonar.js', '/cam.js': 'cam.js',
-                    '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js',
-                    '/field.js': 'field.js', '/plc.js': 'plc.js',
-                    '/wheels.js': 'wheels.js' };
+                    '/analyse.js': 'analyse.js', '/sonar.js': 'sonar.js',
+                    '/cam.js': 'cam.js', '/field.js': 'field.js',
+                    '/mission.js': 'mission.js', '/actuator.js': 'actuator.js',
+                    '/teach.js': 'teach.js', '/qrview.js': 'qrview.js',
+                    '/lidarmotor.js': 'lidarmotor.js', '/qrnav.js': 'qrnav.js',
+                    '/radar.js': 'radar.js', '/plc.js': 'plc.js',
+                    // The LiDAR map's decoder and drawing, for /lidar and /dashboard.
+                    '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js' };
 
-  const lidar = new LidarRelay({ room: args.lidarRoom });
-  const lidarSim = args.lidarSim ? new LidarSim({ relay: lidar }).start() : null;
+  // The LiDAR relay: scanners stream to /ws, pages draw what they stream. The
+  // map lives on the scanner and in the pages; the server only passes it on.
+  const lidarMap = new LidarRelay({ room: args.lidarRoom });
+  const lidarSim = args.lidarSim ? new LidarSim({ relay: lidarMap }).start() : null;
 
   let followCfg = loadFollowCfg();
   const runLog = new FollowLog();
 
-  // The webcam is the Pi's, not the board's, so it is here for the same reason
-  // it is on the ESP32 side: /vision and /follow are the same two pages, and
-  // they read the picture off this machine over plain http.
+  // Where the rover is: an odometer fed off the wire, and the QR codes on top
+  // of it. It hears every G1 that reaches the board, so it keeps count
+  // whichever page — or none — is driving. See nav.js and public/qrnav.js.
+  const nav = new Nav({ link });
+  nav.setCfg(followCfg);
+  let competition = null;         // started once the rover exists, below
+
+  /**
+   * The run, as every open page sees it.
+   *
+   * Deliberately a relay and nothing more. /follow owns the mission — it has
+   * the camera, so it is the only page that can see a junction — and /map owns
+   * the choosing, because a person picking a station should not have to be
+   * standing over the robot's camera feed to do it. This is the two-line
+   * server in between: it holds the last target somebody asked for and the
+   * last status the driver reported, and puts both in the status message that
+   * already goes out ten times a second.
+   *
+   * Not saved to disk, unlike followCfg. A target is about this run; surviving
+   * a restart would mean a rover that starts driving somewhere because of
+   * something asked for yesterday.
+   */
+  let mission = null;      // what /follow last reported
+  let wanted = null;       // the station somebody last picked
+  // …or the cargo run somebody last asked for: {slot, id}. The two are one
+  // choice — picking a station clears this and asking for a cargo run clears
+  // that — because /follow can only be doing one of them. `id` is so /follow
+  // can tell a new request for slot 2 from the old one it already acted on.
+  let cargoWant = null;
+  const askCargo = (slot, id) => {
+    cargoWant = slot ? { slot, id: id || Date.now() } : null;
+    wanted = null;
+    mission = null;
+    console.log(cargoWant ? `cargo run: yuva ${slot}` : 'cargo run cleared');
+  };
+
   const camera = new Camera({
     device: args.camera, width: args.camWidth, height: args.camHeight,
-    fps: args.camFps, enabled: args.camera !== null,
+    fps: args.camFps, qrFps: args.qrFps, enabled: args.camera !== null,
   });
-
-  // The field and the QR codes on it. No dead reckoning on this machine (no
-  // route.js), so between two codes the position is the last code's — which is
-  // what the PLC gets told, and what the page says.
-  const fieldMap = FIELDS[args.field];
-  let fieldSt = fieldState();
-  const qr = new QrReader();
-  let competition = null;         // started once the rover exists, below
-  const seeQr = (text, at, byHand = false) => {
-    const fix = fieldSee(fieldSt, text, at, fieldMap, null);
-    console.log(`qr${byHand ? ' (by hand)' : ''}: ${JSON.stringify(String(text)).slice(0, 60)}`
-      + (fix.ok ? `  → ${fix.from}→${fix.to}, ${fix.x}, ${fix.y} m`
-                  + (fix.turn ? `  ·  ${fix.turn.node}: ${fix.turn.label}` : '')
-                : '  → not on the field map'));
-    if (competition) competition.onFix(fix);
-    return fix;
-  };
-  if (args.qr && qr.available) {
-    camera.onGray((gray, w, h) => qr.feed(gray, w, h));
-    qr.onRead((text, at) => { seeQr(text, at); });
-  }
   camera.start();
+
+  // The Pi's own vitals, for /dashboard. Sampled once, on their own clock, and
+  // shared by every browser: /proc/stat is a delta, and sampling it per client
+  // would give each one a different, shorter window — none of them the load.
+  const sys = new RpiStats();
+  let sysSnap = sys.sample().status();
+  const sysTimer = setInterval(() => { sysSnap = sys.sample().status(); }, 500);
+  sysTimer.unref();
+
+  // ── the QR reader ─────────────────────────────────────────────────
+  // Fed from the camera's full-resolution grey frames (camera.js), so it reads
+  // whether or not a page is open. /vision shows it; /follow's cargo run acts
+  // on it. Each look — locate, straighten, decode — runs on a worker thread
+  // (qr_worker.js), never on the thread that streams to the board.
+  const qr = new QrReader();
+  if (args.qr) {
+    const looker = new QrLooker(qr);
+    camera.onGray((gray, w, h) => looker.offer(gray, w, h));
+    // A code read is a thing that happened at a place — and on this field it
+    // says *which* place, so it both goes on the trail and fixes the position.
+    qr.onRead((text, at) => {
+      const { fix } = nav.seeQr(text, at);
+      if (competition) competition.onFix(fix);
+      console.log(`QR: ${text}` + (fix.ok
+        ? `  → ${fix.from}→${fix.to}, ${fix.x}, ${fix.y} m, ${fix.bearing}°`
+          + (fix.turn ? `  ·  ${fix.turn.node}: ${fix.turn.label}` : '')
+        : '  → not on the field map'));
+    });
+  } else {
+    qr.available = false;
+    qr.error = 'QR oxuma söndürülüb (--no-qr)';
+  }
+
+  // ── the lift ──────────────────────────────────────────────────────
+  const act = new Actuator({ enabled: args.actuator,
+                             maxRunMs: Math.max(0, args.actMaxS || 0) * 1000 });
+  act.init();
+  const actApi = actuatorApi(act);
+
+  // ── the lidar motor ───────────────────────────────────────────────
+  // Nothing is spawned until the first START; until then the Pi's own
+  // pull-downs hold all three pins low. See lidar.js. (The LiDAR *map*, from
+  // the phone, is lidarMap above.)
+  const lidar = new Lidar({ enabled: args.lidar, volts: args.lidarV,
+                            supplyV: args.lidarSupply, dropV: args.lidarDrop });
+  const lidarHttp = lidarApi(lidar);
+
+  // ── the radar ─────────────────────────────────────────────────────
+  // What the lidar sees, sent here by whatever reads it. Opened after the
+  // page's own port, below; a port somebody else holds is a line on the card,
+  // not a server that will not start.
+  const radar = new Radar({ enabled: args.radar, port: args.radarPort, host: args.host,
+                            offset: args.radarOffset, ccw: args.radarCcw,
+                            unit: args.radarUnit, fov: args.radarFov });
+  const radarHttp = radarApi(radar);
+
+  // ── taught routes ─────────────────────────────────────────────────
+  const book = new RouteBook(args.routes);
+  const recorder = new RouteRecorder({ link, jog });
+  const replayer = new Replayer({ link, jog });
+  const cargoApi = routesApi({ book, recorder, replayer,
+                               want: () => cargoWant, run: (slot) => askCargo(slot),
+                               armed: () => rover.running });
 
   const server = http.createServer((req, res) => {
     const url = (req.url || '/').split('?')[0];
@@ -700,23 +653,38 @@ async function runMarlin(args) {
 
     if (url === '/logs' || url.startsWith('/logs/')) { serveLogs(res, url); return; }
 
-    if (url === '/api/pages' || url === '/api/pins') {
-      const b = Buffer.from(JSON.stringify(url === '/api/pages'
-        ? { machine: 'marlin', pages: Object.keys(PAGES) }
-        : { pins: followCfg.pins || [], buzzer: buzzer.status() }));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
-                           'Content-Length': b.length, 'Cache-Control': 'no-store' });
-      res.end(b);
-      return;
-    }
+    // What this machine serves, for the hub to build its tiles from — a page
+    // that is not served is not offered — and the Pi's pin notes.
+    if (url === '/api/pages') { reply(res, 200, { machine: 'marlin', pages: Object.keys(PAGES) }); return; }
+    if (url === '/api/pins') { reply(res, 200, { pins: followCfg.pins || [], buzzer: buzzer.status() }); return; }
+    if (url === '/api/plc') { reply(res, 200, competition.status()); return; }
 
-    if (url === '/api/field' || url === '/api/plc') {
-      const b = Buffer.from(JSON.stringify(url === '/api/field' ? fieldMap : competition.status()));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
-                           'Content-Length': b.length, 'Cache-Control': 'no-store' });
-      res.end(b);
-      return;
-    }
+    // The whole trail, once. The status frame carries only where the rover is
+    // now; a page fetches this on load and appends from the stream after.
+    if (url === '/api/route') { reply(res, 200, nav.routeJson()); return; }
+
+    // The field graph and where each code stands. Static for a whole
+    // competition, so it is fetched once rather than sent ten times a second —
+    // and it is here for anything that is not a browser, too.
+    if (url === '/api/field') { reply(res, 200, { ...FIELD, qrs: navQrs() }); return; }
+
+    // The last code read. /vision polls this rather than opening a socket,
+    // for the same reason it reads /api/wheels: it is a page that looks, and
+    // a socket is what the pages that drive are counted by.
+    if (url === '/api/qr') { reply(res, 200, qr.status()); return; }
+
+    const failed = (err) => {
+      if (res.headersSent) return;
+      reply(res, 500, { error: String(err.message || err) });
+    };
+    if (url === '/api/actuator') { actApi(req, res).catch(failed); return; }
+    if (url === '/api/lidar-motor') { lidarHttp(req, res).catch(failed); return; }
+    if (url === '/api/radar') { radarHttp(req, res).catch(failed); return; }
+    // The last 30 messages whole, base64 — for reading a sender's format.
+    if (url === '/api/radar/frames') { reply(res, 200, { frames: radar.frames }); return; }
+    // The room map, built up turn by turn: [ix, iy, hits, …] in 5 cm cells.
+    if (url === '/api/radar/map') { reply(res, 200, radar.mapJson()); return; }
+    if (url === '/api/cargo') { cargoApi(req, res).catch(failed); return; }
 
     if (url.startsWith('/api/marlin/')) {
       api(req, res, url).catch((err) => {
@@ -731,7 +699,7 @@ async function runMarlin(args) {
 
     const page = PAGES[url], script = SCRIPTS[url];
     if (!page && !script) {
-      if (serveLidar(lidar, args.webscan, res, url)) return;
+      if (serveLidar(lidarMap, args.webscan, res, url)) return;
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('not found');
       return;
@@ -757,29 +725,32 @@ async function runMarlin(args) {
   // ── the road-following pages' socket ──────────────────────────────
   // /vision needs nothing but the page and /api/wheels; /follow drives, so it
   // gets a socket. Same port as the page, so there is nothing to configure in
-  // the browser. `/ws` on the same port is the LiDAR relay — see lidar_relay.js.
-  const rover = new Rover({ link, jog });
+  // the browser.
+  const rover = new Rover({ link, jog, replayer });
   rover.setCfg(followCfg);
 
   // The Pi's own pins: the reversing buzzer first of all. Driven from the
   // demand rather than from a page, so it sounds with no browser open.
-  const gpio = new Gpio();
+  const gpio = new Gpio({ enabled: args.gpio });
   const buzzer = new Buzzer({ gpio, cfg: followCfg });
   const buzzerTimer = setInterval(() => buzzer.setReversing(rover.reversing), 100);
   buzzerTimer.unref?.();
 
+  // The competition: the PLC mission holds the rover's wheels, plans the task's
+  // stops on the field, and hears about every code the QR reader places.
   competition = startCompetition(args, {
-    map: fieldMap,
-    field: () => fieldSt,
-    route: () => null,
-    setMission: (stops) => fieldMission(fieldSt, stops, fieldMap, 'START'),
+    map: FIELD,
+    pose: () => nav.status().field.pose,
+    setMission: (stops) => nav.setMission(stops, 'START'),
     hold: (reason, all) => rover.hold(reason, all),
     armed: () => rover.running,
     fault: () => (link.connected ? null : 'motor kartı bağlı değil'),
     estop: () => rover.stop('acil stop'),
   });
+
+  // Every path but /ws, which is the LiDAR relay — see lidar_relay.js.
   const wss = new WebSocketServer({ noServer: true });
-  routeUpgrades(server, { relay: lidar, wss });
+  routeUpgrades(server, { relay: lidarMap, wss });
 
   wss.on('connection', (ws, req) => {
     const peer = req.socket.remoteAddress;
@@ -790,13 +761,21 @@ async function runMarlin(args) {
       if (ws.readyState !== ws.OPEN) return;
       ws.send(JSON.stringify({
         type: 'status', ...extra, ...rover.snapshot(),
-        machine: 'marlin',
         follow_cfg: followCfg,
+        mission, want: wanted,
         log: { active: runLog.active, file: runLog.file, rows: runLog.rows },
         cam: camera.status(),
-        lidar: lidar.status(),
         qr: qr.status(),
-        field: fieldStatus(fieldSt, null, fieldMap),
+        act: act.status(),
+        cargo: { want: cargoWant, routes: book.summary(), rec: recorder.status() },
+        // Where the rover is — `route` (the odometer) and `field` (the QR
+        // localisation, the plan and the next turn) — and the Pi's vitals.
+        ...nav.status(),
+        rpi: sysSnap,
+        machine: 'marlin',
+        lidar_motor: lidar.status(),
+        lidar: lidarMap.status(),
+        radar: radar.status(),
         plc: competition.status(),
         buzzer: buzzer.status(),
       }));
@@ -826,7 +805,8 @@ async function runMarlin(args) {
 
         case 'follow_cfg':
           followCfg = saveFollowCfg({ ...followCfg, ...(msg.cfg || {}) });
-          rover.setCfg(followCfg);
+          nav.setCfg(followCfg);          // route.track, if a page sets it
+          rover.setCfg(followCfg);        // the fork's speed and direction
           buzzer.setCfg(followCfg);
           break;
 
@@ -839,7 +819,7 @@ async function runMarlin(args) {
 
         // A pin set by hand from /pins. Only pins written down there as
         // outputs: driving a number somebody typed in could be the serial
-        // console, the I²C bus, or something with a motor on it.
+        // console, the I²C bus, or the lift's enable line.
         case 'pi_pin': {
           const note = (followCfg.pins || []).find((p) => Number(p.pin) === Number(msg.pin));
           if (!note || note.dir !== 'out') {
@@ -873,6 +853,77 @@ async function runMarlin(args) {
           break;
         }
 
+        // Forget the LiDAR map — on the server and on every page drawing it.
+        // The phone keeps its own copy; the next scans rebuild from here.
+        case 'lidar_reset':
+          if (lidarMap.reset(msg.room || lidarMap.room)) console.log('lidar map cleared');
+          break;
+
+        // ── the dashboard's map ──
+        case 'route_reset':
+          nav.reset();
+          console.log('route reset — the trail starts here');
+          break;
+        // The stops to call at, in order — ['A2', 'B3'] — planned against the
+        // QR localisation. /follow's own map run is `mission`, above; this
+        // one steers nothing, it tells a person which way the next turn is.
+        case 'field_mission': {
+          const plan = nav.setMission(msg.targets, msg.from || null);
+          console.log(plan.ok && plan.nodes.length
+            ? `field plan ${(plan.stops || []).join(' → ')}: ${plan.nodes.join(' > ')}`
+            : plan.ok ? 'field plan cleared' : `field plan refused: ${plan.reason}`);
+          break;
+        }
+        // A code tapped on the map rather than seen. The camera is the real
+        // reader; this is how a route is rehearsed with no printed codes.
+        case 'field_qr': {
+          const { fix } = nav.seeQr(msg.text, Date.now());
+          competition.onFix(fix);
+          console.log(`qr (by hand): ${JSON.stringify(String(msg.text || '')).slice(0, 40)}`
+            + (fix.ok ? ` → ${fix.from}→${fix.to}` : ' → not recognised'));
+          break;
+        }
+
+        // /map picked a station. Stored and broadcast; /follow is what acts
+        // on it, and it may not even be open.
+        case 'mission':
+          wanted = msg.target || null;
+          mission = null;
+          cargoWant = null;
+          console.log(wanted ? `mission: ${wanted}` : 'mission cleared');
+          break;
+
+        // A cargo run — /follow's own buttons, or /gcode's via /api/cargo.
+        case 'cargo':
+          askCargo(Number(msg.slot) || null, msg.id);
+          break;
+
+        // /follow's cargo run reached a taught leg: drive it from memory.
+        // Answered through `replay` in the status, under the page's own id.
+        case 'replay': {
+          const route = `yuva ${msg.slot}, ${ROUTE_LEGS[msg.leg] || msg.leg}`;
+          let segs = null;
+          // A recording on /gcode listens to the wire; this replay would end
+          // up taught back into it.
+          if (recorder.active) { replayer.fail(msg.id, '/gcode-da yazılır — əvvəl bitir', route); break; }
+          try { segs = book.get(msg.slot, msg.leg); }
+          catch (e) { replayer.fail(msg.id, e.message, route); break; }
+          rover.replay(msg.id, segs, route);
+          console.log(`replay: ${route}`);
+          break;
+        }
+
+        // The lift, from /follow's cargo run.
+        case 'actuator':
+          try { actuatorCommand(act, msg.action, msg.dir); }
+          catch (e) { console.warn('actuator:', e.message); }
+          break;
+
+        // /follow reporting where the run has got to, for /map to draw.
+        case 'mission_state':
+          mission = msg.state || null;
+          break;
+
         case 'log_start': {
           const file = runLog.start({ ...(msg.meta || {}),
                                       max_feed: rover.maxFeed,
@@ -891,31 +942,6 @@ async function runMarlin(args) {
           }
           break;
         }
-        case 'lidar_reset':
-          if (lidar.reset(msg.room || lidar.room)) console.log('lidar map cleared');
-          break;
-
-        // ── the field, as on the ESP32 side ──
-        case 'field_mission': {
-          if (!Array.isArray(msg.targets) || msg.targets.length === 0) {
-            fieldClearMission(fieldSt);
-            console.log('mission cleared');
-            break;
-          }
-          const plan = fieldMission(fieldSt, msg.targets, fieldMap, msg.from || null);
-          console.log(plan.ok ? `mission ${plan.stops.join(' → ')}: ${plan.nodes.join(' > ')}`
-                              : `mission refused: ${plan.reason}`);
-          break;
-        }
-        case 'field_qr':
-          seeQr(msg.text, Date.now(), true);
-          break;
-        case 'route_reset': {
-          const stops = fieldSt.stops;
-          fieldSt = fieldState();
-          if (stops && stops.length) fieldMission(fieldSt, stops, fieldMap, 'START');
-          break;
-        }
         default:
           if (!competition.command(msg)) return;
       }
@@ -925,6 +951,9 @@ async function runMarlin(args) {
     ws.on('close', () => {
       clearInterval(pusher);
       rover.clientLeft();
+      // The last page gone is a released dead-man for the lift too: nothing
+      // is left that could show it running, or stop it.
+      if (rover.clients === 0 && act.running) act.stop();
       if (rover.clients === 0 && runLog.active) {
         const done = runLog.stop();
         if (done) console.log(`saved on disconnect: ${path.basename(done.file)}`);
@@ -935,6 +964,7 @@ async function runMarlin(args) {
   });
 
   await new Promise((res) => server.listen(args.http, args.host, res));
+  await radar.start();
 
   const shown = args.host === '0.0.0.0' ? 'localhost' : args.host;
   const base = `http://${shown}:${args.http}`;
@@ -942,22 +972,33 @@ async function runMarlin(args) {
   console.log(`  drive by hand:  ${base}/gcode`);
   console.log(`  camera / line:  ${base}/vision`);
   console.log(`  follow a line:  ${base}/follow`);
+  console.log(`  the field map:  ${base}/map`);
+  console.log(`  dashboard:      ${base}/dashboard`);
   console.log(`  read a run back:${base}/tune`);
   console.log(`  lidar map:      ${base}/lidar`);
   console.log(`  plc / görev:    ${base}/plc`);
   console.log(`  pi pinleri:     ${base}/pins`);
-  console.log(`  field:          ${fieldMap.label} (${fieldMap.w} × ${fieldMap.h} m)`);
   competition.banner();
-  if (camera.enabled && !args.qr) console.log('   qr reader: off (--no-qr)');
-  else if (camera.enabled && !qr.available) console.log(`   qr reader: off — ${qr.error}`);
-  lidarBanner(lidar, args, 'http');
-  const lidarAd = await announceLidar(lidar, args);
   if (!camera.enabled) {
     console.log('camera: off (--no-camera)');
   } else {
     console.log(`camera: ${args.camera} @ ${args.camWidth}x${args.camHeight} `
       + `${args.camFps} fps  ->  ${base}/camera/stream.mjpg`);
   }
+  console.log(!args.qr ? 'qr: off (--no-qr)'
+    : qr.available ? 'qr: reading from the camera' : `qr: ${qr.error}`);
+  console.log(`lift: GPIO${act.cfg.enPin} enable, GPIO${act.cfg.dirPin} direction`
+    + (act.enabled ? '' : '  (dry — --no-actuator)'));
+  console.log(`lidar: GPIO${lidar.cfg.pwmPin} ENA (PWM), GPIO${lidar.cfg.in1Pin} IN1, `
+    + `GPIO${lidar.cfg.in2Pin} IN2 — ${lidar.volts} V = ${lidar.duty()} % of `
+    + `${lidar.cfg.supplyV} V less ${lidar.cfg.dropV} V drop`
+    + (lidar.enabled ? '' : '  (dry — --no-lidar)'));
+  console.log(!radar.enabled ? 'radar: off (--no-radar)'
+    : radar.err ? `radar: ${radar.err}`
+    : `radar: lidar data on :${args.radarPort} — UDP, TCP, HTTP POST, WebSocket, TLS; `
+      + 'LD06, JSON or "angle,distance" lines');
+  lidarBanner(lidarMap, args);
+  const lidarAd = await announceLidar(lidarMap, args);
   if (args.host === '0.0.0.0') {
     const nets = localAddresses();
     if (nets.length) {
@@ -1000,10 +1041,8 @@ async function runMarlin(args) {
   }
 
   // ── shutdown ──────────────────────────────────────────────────────
-  // Stop feeding the stream, drop anything queued, and give the one move that
-  // is already on the board a moment to finish before the port closes. There
-  // is nothing to cancel beyond that: a chunk is only ever sent once its
-  // predecessor is done, so at most one move is outstanding.
+  // Stop feeding the stream, drop anything queued, and give the machine a
+  // moment to finish before the port closes.
   let closing = false;
   const shutdown = async () => {
     if (closing) return;
@@ -1016,12 +1055,19 @@ async function runMarlin(args) {
     await gpio.close();
     jog.stop();
     rover.stop('shutting down');
+    recorder.cancel();
+    clearInterval(sysTimer);
+    nav.close();
+    act.stop();
+    await act.settled();
+    await lidar.close();
+    await radar.close();
     for (const c of wss.clients) c.close();
     if (lidarSim) lidarSim.stop();
     // Goodbye packets before the socket goes, so a phone browsing right now
     // does not latch onto a relay that is already gone.
     if (lidarAd) await lidarAd.stop();
-    lidar.close();
+    lidarMap.close();
     await camera.close();
     if (link.connected) {
       link.drain();
@@ -1035,505 +1081,10 @@ async function runMarlin(args) {
   process.on('SIGTERM', shutdown);
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-
-  if (args.list) {
-    const ports = await listPorts();
-    if (!ports.length) console.log('no serial ports found');
-    for (const p of ports) {
-      console.log(`${p.path.padEnd(16)} ${p.friendlyName || p.manufacturer || ''}`);
-    }
-    return;
-  }
-
-  // The other machine. Nothing below this line applies to it — no DACs, no
-  // watchdog, no camera on the Pi — so it runs its own server end to end.
-  if (args.marlin) return runMarlin(args);
-
-  const transport = await buildTransport(args);
-  const bench = new Bench({ transport, vMax: args.vMax, field: FIELDS[args.field] });
-
-  // The competition: the PLC mission holds the bench's wheels and hears about
-  // every code the field recognises. See plc_run.js.
-  const competition = startCompetition(args, {
-    map: bench.fieldMap,
-    field: () => bench.field,
-    route: () => bench.routePose(),
-    setMission: (stops) => bench.setMission(stops, 'START'),
-    hold: (reason, all) => bench.hold(reason, all),
-    armed: () => bench.running,
-    fault: () => (bench.tx.fresh ? null : 'esp32 erişilemiyor'),
-    estop: () => bench.stop(),
-  });
-  await bench.open();
-
-  // The persisted tuning. Declared here rather than next to the socket because
-  // the HTTP handler below closes over it too, and a `let` read before its own
-  // declaration throws rather than reading undefined.
-  let followCfg = loadFollowCfg();
-  bench.setCfg(followCfg);          // obstacle thresholds, wheelbase, calibration
-
-  // ── the webcam, the QR reader, and the Pi's own vitals ────────────
-  //
-  // All three belong to the machine, not to a page: the robot sees, reads and
-  // reports whether or not a browser is open, and two browsers watching get
-  // the same answer rather than each computing their own.
-  const camera = new Camera({
-    device: args.camera, width: args.camWidth, height: args.camHeight,
-    fps: args.camFps, enabled: args.camera !== null,
-  });
-  const qr = new QrReader();
-  const sys = new RpiStats();
-
-  // The reversing buzzer on the Pi's own pins — the same one the rover has.
-  const gpio = new Gpio();
-  const buzzer = new Buzzer({ gpio, cfg: followCfg });
-  const buzzerTimer = setInterval(() => buzzer.setReversing(bench.reversing), 100);
-  buzzerTimer.unref?.();
-
-  if (args.qr && qr.available) {
-    camera.onGray((gray, w, h) => qr.feed(gray, w, h));
-    // A code read is a thing that happened at a place — and on this field it
-    // says *which* place, so it both goes on the map and fixes the position.
-    qr.onRead((text, at, entry) => {
-      const { mark, fix } = bench.seeQr(text, at);
-      competition.onFix(fix);
-      if (entry) entry.pos = { x: mark.x, y: mark.y };
-      console.log(`qr: ${JSON.stringify(text).slice(0, 80)}  @ ${mark.x}, ${mark.y} m`
-        + (fix.ok ? `  → ${fix.from}→${fix.to}, ${fix.x}, ${fix.y} m, ${fix.bearing}°`
-                    + (fix.turn ? `  ·  ${fix.turn.node}: ${fix.turn.label}` : '')
-                  : '  → not on the field map'));
-    });
-  }
-  camera.start();
-
-  // Sampled once, on its own clock, and shared by every connected browser.
-  // /proc/stat is a delta: reading it once per client per frame would give
-  // each of them a different and shorter window, and none of the answers would
-  // be the CPU load.
-  let sysSnap = sys.sample().status();
-  const sysTimer = setInterval(() => { sysSnap = sys.sample().status(); }, 500);
-
-  // ── static pages ──────────────────────────────────────────────────
-  const PAGES = {
-    '/':       'home.html',    // hub: status + links to everything
-    '/manual': 'manual.html',  // type the two percentages by hand
-    '/drive':  'drive.html',   // hold W / A / S / D
-    '/vision': 'vision.html',  // camera -> road detection, look and tune
-    '/follow': 'follow.html',  // the same detector, driving
-    '/tune':   'tune.html',    // read a run back and say what to change
-    '/obstacle': 'obstacle.html',  // the forward HC-SR04, as a stop
-    '/pins':   'pins.html',    // the ESP32's spare pins, by hand
-    '/pi-pins': 'pins_pi.html',  // the Pi's own pins and the reversing buzzer
-    '/setup':  'setup.html',   // what to measure, in order, and where it goes
-    '/dashboard': 'dashboard.html',  // everything at once, on one screen
-    '/panel':  'panel.html',   // the same, plus driving, fixed at 1920 × 1080
-    '/lidar':  'lidar.html',   // the LiDAR map, full screen
-    '/viewer.html': 'lidar.html',    // where the webscan phone app says to look
-    '/plc':    'plc.html',     // the factory automation PLC and the mission
-  };
-
-  // The two pages that see the road share their code rather than each keeping
-  // a copy, so tuning on /vision is tuning what /follow drives with.
-  //
-  // wheels.js is the same idea one level down: the per-wheel trim is a property
-  // of the robot, not of a page, so every page reads it from one file and shows
-  // the same numbers.
-  const SCRIPTS = { '/road.js': 'road.js', '/pilot.js': 'pilot.js',
-                    '/analyse.js': 'analyse.js', '/sonar.js': 'sonar.js',
-                    '/wheels.js': 'wheels.js', '/route.js': 'route.js',
-                    '/cam.js': 'cam.js', '/field.js': 'field.js',
-                    '/lift.js': 'lift.js', '/plc.js': 'plc.js',
-                    '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js' };
-
-  // The LiDAR relay: scanners stream to /ws, pages draw what they stream. The
-  // map lives on the scanner and in the pages; the server only passes it on.
-  const lidar = new LidarRelay({ room: args.lidarRoom });
-  const lidarSim = args.lidarSim ? new LidarSim({ relay: lidar }).start() : null;
-
-  const onRequest = (req, res) => {
-    const url = (req.url || '/').split('?')[0];
-
-    if (serveCamera(camera, req, res, url)) return;
-
-    // The whole path, once. The status frame carries only where the robot is
-    // now — sending 1 500 points ten times a second to say the last one moved
-    // 5 cm is how a dashboard becomes the reason the robot stutters. A page
-    // fetches this on load and appends from the status stream afterwards.
-    if (url === '/api/route') {
-      const r = bench.route;
-      const b = Buffer.from(JSON.stringify({
-        path: r.path, marks: r.marks, seq: r.seq, since: r.since,
-        x: r.x, y: r.y, dist: r.dist,
-      }));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
-                           'Content-Length': b.length, 'Cache-Control': 'no-store' });
-      res.end(b);
-      return;
-    }
-
-    // The field graph: nodes, edges and where each QR stands. Static for a
-    // whole competition, so it is fetched once and cached in the page rather
-    // than repeated in a status frame ten times a second. A page could read
-    // FIELD out of /field.js instead — this exists so anything that is not a
-    // browser (a phone, curl, the firmware one day) can have the map too.
-    if (url === '/api/pages' || url === '/api/pins') {
-      const b = Buffer.from(JSON.stringify(url === '/api/pages'
-        ? { machine: 'esp32', pages: Object.keys(PAGES) }
-        : { pins: followCfg.pins || [], buzzer: buzzer.status() }));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
-                           'Content-Length': b.length, 'Cache-Control': 'no-store' });
-      res.end(b);
-      return;
-    }
-
-    if (url === '/api/field' || url === '/api/plc') {
-      const b = Buffer.from(JSON.stringify(url === '/api/field' ? bench.fieldMap : competition.status()));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
-                           'Content-Length': b.length, 'Cache-Control': 'no-store' });
-      res.end(b);
-      return;
-    }
-
-    if (url === '/logs' || url.startsWith('/logs/')) { serveLogs(res, url); return; }
-
-    // The wheel trim, for the two pages that have no socket. Read-only: the
-    // only writer is the follow_cfg command, so there is one code path that
-    // can change the robot and it is the one that is already tested.
-    if (url === '/api/wheels') {
-      const b = Buffer.from(JSON.stringify(followCfg || {}));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8',
-                           'Content-Length': b.length, 'Cache-Control': 'no-store' });
-      res.end(b);
-      return;
-    }
-
-    const page = PAGES[url], script = SCRIPTS[url];
-    if (!page && !script) {
-      if (serveLidar(lidar, args.webscan, res, url)) return;
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('not found');
-      return;
-    }
-    // A page that is in the table but not on disk is a mistake in this file,
-    // not a reason for the robot to lose its 20 Hz stream: an unhandled throw
-    // in a request handler takes the whole process down, motors included.
-    let body;
-    try {
-      body = fs.readFileSync(path.join(HERE, 'public', page || script));
-    } catch (err) {
-      console.warn(`cannot serve ${url}: ${err.message}`);
-      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('page missing on disk');
-      return;
-    }
-    res.writeHead(200, {
-      'Content-Type': page ? 'text/html; charset=utf-8'
-                           : 'text/javascript; charset=utf-8',
-      'Content-Length': body.length,
-      'Cache-Control': 'no-store',
-    });
-    res.end(body);
-  };
-
-  const server = args.https
-    ? https.createServer(loadTls(args), onRequest)
-    : http.createServer(onRequest);
-
-  // ── browser websocket, same port ──────────────────────────────────
-  // Every path but /ws, which is the LiDAR relay.
-  const wss = new WebSocketServer({ noServer: true });
-  routeUpgrades(server, { relay: lidar, wss });
-  const runLog = new FollowLog();
-
-  wss.on('connection', (ws, req) => {
-    const peer = req.socket.remoteAddress;
-    bench.clientJoined();
-    console.log(`browser connected: ${peer}`);
-
-    const send = (extra = {}) => {
-      if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'status', ...extra, ...bench.snapshot(),
-          machine: 'esp32',
-          follow_cfg: followCfg,
-          log: { active: runLog.active, file: runLog.file, rows: runLog.rows },
-          // The three things that are the Pi's rather than the ESP32's.
-          cam: camera.status(),
-          qr: qr.status(),
-          rpi: sysSnap,
-          lidar: lidar.status(),
-          plc: competition.status(),
-          buzzer: buzzer.status(),
-        }));
-      }
-    };
-    const pusher = setInterval(send, 100);
-    send();
-
-    ws.on('message', (raw) => {
-      let msg;
-      try { msg = JSON.parse(raw.toString()); } catch { return; }
-      switch (msg.cmd) {
-        case 'set':
-          bench.setValues(msg.p25, msg.p26);
-          break;
-        case 'keys':
-          bench.setKeys(msg.keys);
-          break;
-        case 'presets':
-          bench.setPresets(msg.presets);
-          console.log('presets updated:', JSON.stringify(bench.presets));
-          break;
-        case 'level':
-          bench.setLevel(msg.level);
-          console.log(`level ${bench.level} %`);
-          break;
-        // The two fixed speeds. `gear` arrives at 20 Hz while one is engaged —
-        // that is its dead-man — so only a change is worth a line of log.
-        case 'gear': {
-          const before = bench.gear;
-          bench.setGear(msg.gear);
-          if (bench.gear !== before) {
-            console.log(bench.gear
-              ? `gear ${bench.gear}: dac ${bench.gears[bench.gear].join(' / ')}`
-              : 'gear released');
-          }
-          break;
-        }
-        case 'gears':
-          bench.setGears(msg.gears);
-          console.log('gears updated:', JSON.stringify(bench.gears));
-          break;
-        case 'start':
-          if ('p25' in msg || 'p26' in msg) bench.setValues(msg.p25, msg.p26);
-          bench.start();
-          console.log(`START  25=${bench.p25}%  26=${bench.p26}%  enable=1`);
-          break;
-        case 'stop':
-          bench.stop();
-          console.log('STOP  enable=0');
-          break;
-        case 'idle':
-          bench.idle();
-          break;
-
-        // ── follow page ──
-        // One command per frame, carrying what the vision loop decided. The
-        // server does not steer; it clamps, streams and times out.
-        case 'follow':
-          bench.setAuto(msg.p25, msg.p26, msg.reason);
-          break;
-        case 'pin':
-          bench.setPin(msg.gpio, msg.val);
-          break;
-
-        // The lift, held. Arrives at 20 Hz while a button is down — that is its
-        // dead-man — so only a change is worth a line of log, the same rule the
-        // gears follow.
-        case 'lift': {
-          const before = bench.lift;
-          bench.setLift(msg.dir);
-          if (bench.lift !== before) {
-            console.log(bench.lift
-              ? `lift ${bench.lift > 0 ? 'up' : 'down'} (${bench.liftOut})`
-              : 'lift released');
-          }
-          break;
-        }
-        case 'follow_cfg':
-          followCfg = saveFollowCfg({ ...followCfg, ...(msg.cfg || {}) });
-          // The obstacle thresholds and the wheelbase are the server's
-          // business now, so a page editing them has to reach the brake and
-          // the map, not just the file.
-          bench.setCfg(followCfg);
-          buzzer.setCfg(followCfg);
-          break;
-
-        case 'buzzer_test':
-          buzzer.test(Number(msg.ms) || 600);
-          console.log('buzzer test');
-          break;
-
-        // A pin set by hand from /pins. Only pins written down there as
-        // outputs: driving a number somebody typed in could be the serial
-        // console, the I²C bus, or something with a motor on it.
-        case 'pi_pin': {
-          const note = (followCfg.pins || []).find((p) => Number(p.pin) === Number(msg.pin));
-          if (!note || note.dir !== 'out') {
-            console.log(`pin refused: GPIO${msg.pin} is not a written-down output`);
-            break;
-          }
-          const on = msg.value ? 1 : 0;
-          gpio.set(note.pin, on).then((done) => {
-            console.log(`GPIO${note.pin} = ${on}`
-              + (done ? '' : ` (not driven: ${gpio.status().error || 'no backend'})`));
-          });
-          break;
-        }
-        case 'route_reset':
-          bench.resetRoute();
-          console.log('route reset — map starts here');
-          break;
-        // Forget the LiDAR map — on the server and on every page drawing it.
-        // The phone keeps its own copy; the next scans rebuild from here.
-        case 'lidar_reset':
-          if (lidar.reset(msg.room || lidar.room)) console.log('lidar map cleared');
-          break;
-
-        // ── the field ──
-        // Where to go: a list of stops, in order, e.g. ['A2', 'B3']. The
-        // planner works out the junctions in between and what to do at each.
-        case 'field_mission': {
-          const plan = bench.setMission(msg.targets, msg.from || null);
-          console.log(plan.ok && plan.nodes.length
-            ? `mission ${(plan.stops || []).join(' → ') || '(none)'}: ${plan.nodes.join(' > ')}`
-            : `mission refused: ${plan.reason || 'boş'}`);
-          break;
-        }
-        // A code, typed or clicked rather than seen. The camera is the real
-        // source, but a field is walked before it is driven — and it is the
-        // only way to rehearse the route with no camera and no printed codes.
-        // Flagged in the log so a run is never read back as if it drove past a
-        // sign that was never there.
-        case 'field_qr': {
-          const { fix } = bench.seeQr(msg.text, Date.now());
-          competition.onFix(fix);
-          console.log(`qr (by hand): ${JSON.stringify(String(msg.text || '')).slice(0, 40)}`
-            + (fix.ok ? ` → ${fix.from}→${fix.to}` : ' → not recognised'));
-          break;
-        }
-        case 'log_start': {
-          const file = runLog.start({ ...(msg.meta || {}), vmax: bench.vMax,
-                                      level: bench.level });
-          console.log(`recording: ${path.basename(file)}`);
-          break;
-        }
-        case 'log':
-          runLog.add(msg.rows);
-          break;
-        case 'log_stop': {
-          const done = runLog.stop();
-          if (done) {
-            console.log(`saved: ${path.basename(done.file)}  `
-              + `${done.summary.rows} rows, ${done.summary.duration_s} s, `
-              + `${done.summary.lost_events} lost`);
-          }
-          break;
-        }
-        default:
-          if (!competition.command(msg)) return;
-      }
-      // `ack` marks this status as the direct answer to that command, so a
-      // client can tell it apart from the 10 Hz background push.
-      send({ ack: msg.cmd });
-    });
-
-    ws.on('close', () => {
-      clearInterval(pusher);
-      bench.clientLeft();
-      // A closed tab is the end of the run whether or not anyone pressed the
-      // button, and a run that ends by the laptop being shut is exactly the
-      // one worth keeping.
-      if (bench.clients === 0 && runLog.active) {
-        const done = runLog.stop();
-        if (done) console.log(`saved on disconnect: ${path.basename(done.file)}`);
-      }
-      console.log(`browser gone: ${peer} -> idle`);
-    });
-    ws.on('error', () => ws.close());
-  });
-
-  server.listen(args.http, args.host, () => {
-    const scheme = args.https ? 'https' : 'http';
-    const shown = args.host === '0.0.0.0' ? 'localhost' : args.host;
-    const base = `${scheme}://${shown}:${args.http}`;
-    console.log(`\nESP32 DAC bench:  ${base}/`);
-    console.log(`  dashboard:      ${base}/dashboard`);
-    console.log(`  1920x1080 panel:${base}/panel`);
-    console.log(`  manual page:    ${base}/manual`);
-    console.log(`  keyboard drive: ${base}/drive`);
-    console.log(`  camera / road:  ${base}/vision`);
-    console.log(`  follow the road:${base}/follow`);
-    console.log(`  read a run back:${base}/tune`);
-    console.log(`  obstacle stop:  ${base}/obstacle`);
-    console.log(`  spare pins:     ${base}/pins`);
-    console.log(`  pi pins:        ${base}/pi-pins`);
-    console.log(`  lidar map:      ${base}/lidar`);
-    console.log(`  plc / görev:    ${base}/plc`);
-    console.log(`  field:          ${bench.fieldMap.label} (${bench.fieldMap.w} × ${bench.fieldMap.h} m)`);
-    competition.banner();
-
-    // "0.0.0.0" is not something anyone can type into a phone, so print what
-    // they can. Every interface, every address, ready to copy.
-    if (args.host === '0.0.0.0') {
-      const nets = localAddresses();
-      if (nets.length) {
-        console.log('\nreachable from this network at:');
-        for (const n of nets) {
-          console.log(`  ${scheme}://${n.address}:${args.http}/`.padEnd(38) + `(${n.name})`);
-        }
-      } else {
-        console.log('\nno network interface found — only localhost will work');
-      }
-    }
-
-    console.log(`\nboard: ${transport.label}`);
-    console.log(`0% = ${esp.V_IDLE} V (idle)   100% = ${args.vMax} V   enable pin: GPIO23`);
-
-    // The camera is this machine's now, so its state belongs in this machine's
-    // startup output rather than being discovered as a black rectangle.
-    if (!camera.enabled) {
-      console.log('camera: off (--no-camera)');
-    } else {
-      console.log(`camera: ${args.camera} @ ${args.camWidth}x${args.camHeight} `
-        + `${args.camFps} fps  ->  ${base}/camera/stream.mjpg`);
-      if (!args.qr) console.log('   qr reader: off (--no-qr)');
-      else if (!qr.available) console.log(`   qr reader: off — ${qr.error}`);
-    }
-    console.log(`obstacle: stop under ${bench.obsCfg.stopCm} cm, clear over `
-      + `${bench.obsCfg.clearCm} cm — enforced for every drive path`);
-    lidarBanner(lidar, args, scheme);
-    lidarAd = announceLidar(lidar, args);
-
-    if (args.host === '0.0.0.0') {
-      console.log('NOTE: reachable by anyone on this network, with no authentication.');
-    }
-  });
-  let lidarAd = null;           // a promise of the mDNS handle, once listening
-
-  // ── shutdown ──────────────────────────────────────────────────────
-  let closing = false;
-  const shutdown = async () => {
-    if (closing) return;
-    closing = true;
-    console.log('\nshutting down — outputs to idle');
-    clearInterval(sysTimer);
-    clearInterval(buzzerTimer);
-    buzzer.close();
-    await gpio.close();
-    competition.close();
-    for (const c of wss.clients) c.close();
-    if (lidarSim) lidarSim.stop();
-    // Goodbye packets first — see announceLidar.
-    const ad = await lidarAd;
-    if (ad) await ad.stop();
-    lidar.close();
-    await camera.close();
-    await bench.close();
-    if (transport._sim) await transport._sim.close();
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 500);
-  };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
-}
-
 main().catch((err) => {
   console.error('fatal:', err.message || err);
   if (/cannot find module 'serialport'/i.test(String(err))) {
-    console.error('run `npm install` first, or use --fake to try the UI without hardware');
+    console.error('run `npm install` first');
   }
   process.exit(1);
 });

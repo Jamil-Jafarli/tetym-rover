@@ -34,10 +34,12 @@ const STRAIGHT = 0.18;
 // Above this, it was genuinely in a bend.
 const BEND = 0.35;
 
-// Where the wheels start turning, when the log does not say. 22 % of a 3.3 V
-// ceiling is 1.5 V, which is this robot's measured threshold — and logs written
-// before the pilot knew about it have no `stall` field to read.
-const DEFAULT_STALL = 22;
+// Where the wheels start turning, when the log does not say. 0 by default —
+// steppers have no dead band, so a log with no `stall` field is read as not
+// having one, not as having some unknown one. Only a log that explicitly
+// carries `pilot.stall` (from the ESP32 era, when 22 % of a 3.3 V ceiling —
+// 1.5 V — was this robot's measured threshold) is analysed for one at all.
+const DEFAULT_STALL = 0;
 
 /**
  * Split a run into what it was doing, moment to moment.
@@ -48,6 +50,12 @@ const DEFAULT_STALL = 22;
  */
 function segments(rows) {
   const kindOf = (r) => {
+    // A corner is its own kind of thing, and it is tested before `lost`
+    // because the chain going away IS the middle of a 90° turn — calling that
+    // stretch "lost the road" would be reporting the manoeuvre as its own
+    // failure. Older logs have no `turn` field and fall through unchanged.
+    const turn = Number(r.turn) || 0;
+    if (turn) return turn > 0 ? '90° sağa' : '90° sola';
     if (r.lost) return 'kayıp';
     const s = Number(r.steer) || 0;
     if (Math.abs(s) < 0.12) return 'düz';
@@ -111,6 +119,10 @@ function metrics(rows, stall = 0) {
   // robot was never actually driving".
   let deadWheel = 0, deadBoth = 0, wheelN = 0;
   let recoverRows = 0, recoverRuns = 0, wasRecover = false;
+  // The 90° corners the pilot actually committed to, and the ones it gave up
+  // on: a turn that ends without the road coming back in front of the robot
+  // is the one number that says the corner handling itself needs tuning.
+  let turnRows = 0, turnRuns = 0, wasTurn = false, turnFails = 0;
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
@@ -137,6 +149,24 @@ function metrics(rows, stall = 0) {
       if (b > 0 && b < stall) deadWheel++;
       if (Math.max(a, b) < stall) deadBoth++;
     }
+
+    // A corner being driven is not the road being lost, however much the two
+    // look alike from the outside: no chain, wheels differential, crawling.
+    // Counted as its own thing, and kept out of the lost totals — otherwise
+    // every corner on the lap argues for lowering the speed on the straights.
+    const turn = Number(r.turn) || 0;
+    if (turn) {
+      turnRows++;
+      if (!wasTurn) turnRuns++;
+      wasTurn = true;
+      wasLost = false;
+      prevSign = 0;
+      continue;
+    }
+    // The frame after a turn tells us how it went: road in front of the robot
+    // means the corner was taken, still nothing means it was given up on.
+    if (wasTurn && r.lost) turnFails++;
+    wasTurn = false;
 
     if (r.lost) {
       lostRows++;
@@ -191,6 +221,9 @@ function metrics(rows, stall = 0) {
     dead_both_frac: around(rows.length ? deadBoth / rows.length : 0),
     recover_events: recoverRuns,
     recover_s: around(recoverRows * dt),
+    corner_events: turnRuns,
+    corner_s: around(turnRows * dt),
+    corner_failed: turnFails,
   };
 }
 
@@ -310,6 +343,21 @@ function findings(m, pilot) {
       { kD: around(aclamp(p.kD + 0.05, 0, 0.6)) });
   }
 
+  // 3b. The 90° corners. Reported whichever way they went, because "it took
+  // six of them and gave up on none" is the sentence the corner handling is
+  // there to earn — and a corner given up on is a different fault from a
+  // corner never seen, which is why they are counted apart.
+  if (m.corner_events > 0) {
+    const took = m.corner_events - m.corner_failed;
+    add(m.corner_failed > 0 ? 'warn' : 'info', '90° köşe',
+      `${m.corner_events} köşeye girdi, ${took} tanesinde yol tekrar önüne geldi, `
+      + `toplam ${m.corner_s} s döndü.`
+      + (m.corner_failed > 0
+          ? ` ${m.corner_failed} tanesinde gelmedi — robot köşeyi kesiyor ya da `
+            + `geçiyor: «dönmeden önce düz gitme süresi»ni değiştir.`
+          : ''));
+  }
+
   // 4b. How much of the lap was spent recovering rather than following?
   if (m.recover_events > 0) {
     add(m.recover_s > m.duration_s * 0.25 ? 'warn' : 'info', 'Yoldan uzaklaşıyor',
@@ -322,7 +370,8 @@ function findings(m, pilot) {
 
   // 5. Nothing troubled it → there is speed left.
   const calm = m.worst_err < 0.45 && m.lost_events === 0 && m.recover_events === 0
-    && m.sat_frac < 0.02 && m.wobble < 1.2 && m.dead_frac < 0.1;
+    && m.sat_frac < 0.02 && m.wobble < 1.2 && m.dead_frac < 0.1
+    && !m.corner_failed;
   if (calm) {
     add('info', 'Hız payı var',
       `En kötü sapma ${m.worst_err}, hiç yol kaybolmadı, direksiyon hiç dayanmadı. `

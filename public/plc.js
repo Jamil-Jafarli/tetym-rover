@@ -92,6 +92,9 @@ const PLC_PHASE_CODE = {
   ready: 1, accepted: 2, to_pick: 3, to_drop: 4, gate: 5, returning: 6,
 };
 
+/** The phases a task is being driven in — where bekle / devam pause and resume. */
+const PLC_DRIVING = new Set(['to_pick', 'to_drop', 'returning']);
+
 // ── the packets ──────────────────────────────────────────────────────
 
 /**
@@ -175,6 +178,7 @@ function plcMission() {
     homing: false,      // BASLA has been read on the way back
     done: null,         // the task just finished — see plcMissionRx
     estop: false,
+    wait: false,        // the PLC said bekle (kontrol 1) mid-task: hold until devam
     fault: null,
     since: 0,           // when the phase last changed
     pose: { x: 0, y: 0, known: false },   // the last position worth reporting
@@ -194,6 +198,7 @@ function plcMissionHold(ms) {
   if (ms.estop) return 'acil stop';
   if (ms.phase === 'accepted') return 'PLC başlat komutu bekleniyor';
   if (ms.phase === 'gate') return 'kapı: PLC devam komutu bekleniyor';
+  if (ms.wait) return 'PLC bekle dedi — devam komutu bekleniyor';
   return null;
 }
 
@@ -235,6 +240,21 @@ function plcMissionRx(ms, rx, now = 0) {
   }
 
   if (ms.estop) return out;
+
+  // Bekle / devam while a task is being driven. Kontrol 1 is taken at its word
+  // — the robot stops where it is, a taught route pauses mid-way — and kontrol
+  // 2 lets it carry on from there. (Before the start and at the door the
+  // phases below already wait for kontrol 2; this is the same rule everywhere
+  // else.)
+  if (PLC_DRIVING.has(ms.phase)) {
+    if (rx.control === 1 && !ms.wait) {
+      ms.wait = true;
+      plcLog(ms, now, 'PLC bekle dedi — robot duruyor');
+    } else if (rx.control === 2 && ms.wait) {
+      ms.wait = false;
+      plcLog(ms, now, 'PLC devam dedi — kaldığı yerden devam');
+    }
+  }
 
   if (ms.phase === 'ready' && hasTask && !ms.done) {
     ms.task = { a: rx.a, b: rx.b };
@@ -288,7 +308,9 @@ function plcMissionFix(ms, fix, now = 0) {
   // The door. The code before it, read heading for it, is the place to stop —
   // once per approach, so the same sign read again after the PLC has said
   // continue does not stop the robot a second time.
-  if ((ms.phase === 'to_drop' || ms.phase === 'returning') && fix.to === 'GATE') {
+  // KAPI is the door's node on the rover's map (field.js); GATE was its name on
+  // the older one, and is still accepted so a fix from either reads the same.
+  if ((ms.phase === 'to_drop' || ms.phase === 'returning') && (fix.to === 'KAPI' || fix.to === 'GATE')) {
     const key = `${ms.phase}:${fix.from}`;
     if (ms.gateKey !== key) {
       ms.gateKey = key;
@@ -335,7 +357,7 @@ function plcMissionEvent(ms, ev, now = 0) {
       // Abandon the task. Remember it as done, so a PLC still naming it does
       // not hand it straight back before anyone has looked at why.
       if (ms.task) ms.done = ms.task;
-      ms.task = null; ms.resume = null; ms.gateKey = null; ms.homing = false;
+      ms.task = null; ms.resume = null; ms.gateKey = null; ms.homing = false; ms.wait = false;
       plcGo(ms, 'ready', now, 'görev sıfırlandı');
       return true;
     }
@@ -347,7 +369,7 @@ function plcMissionEvent(ms, ev, now = 0) {
 function plcFinish(ms, now) {
   ms.done = ms.task;
   const t = ms.task;
-  ms.task = null; ms.resume = null; ms.gateKey = null; ms.homing = false;
+  ms.task = null; ms.resume = null; ms.gateKey = null; ms.homing = false; ms.wait = false;
   plcGo(ms, 'ready', now, t ? `görev tamamlandı: A${t.a} → B${t.b}` : 'başlangıçta');
 }
 
@@ -389,6 +411,7 @@ function plcMissionStatus(ms, now = 0) {
     code,
     label: PLC_CODE_LABEL[code],
     hold: plcMissionHold(ms),
+    wait: ms.wait,
     task: ms.task,
     stops: plcTaskStops(ms.task),
     estop: ms.estop,

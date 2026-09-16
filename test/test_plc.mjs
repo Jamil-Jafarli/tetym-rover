@@ -1,18 +1,19 @@
 /**
- * The factory automation PLC: packets, mission, UDP link, and both servers.
+ * The factory automation PLC: packets, mission, UDP link, and the server.
  *
  * The bytes first, because they are the part that is silently wrong: a Y that
  * goes out big-endian is a robot the PLC sees at -115 m, and nothing on the
  * robot side notices. Then the mission, played through the real field model
  * with the real QR texts — a whole lap, door both ways — so "robot stops at the
  * door" is checked against the codes that are actually taped to the floor.
- * Then the link against the simulator over real UDP, and last a server of each
- * kind with the simulator inside it.
+ * Then the link against the simulator over real UDP, and last the rover's
+ * server with the simulator inside it.
  *
  *   node test/test_plc.mjs
  */
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
 
@@ -26,8 +27,7 @@ const P = loadShared('plc.js', [
   'plcMissionRx', 'plcMissionFix', 'plcMissionEvent', 'plcMissionTick', 'plcTxFields',
   'plcMissionStatus',
 ]);
-const F = loadShared('field.js', ['FIELD', 'FIELD_DENEME', 'fieldState', 'fieldSee',
-                                  'fieldMission']);
+const F = loadShared(['field.js', 'qrnav.js'], ['FIELD', 'navState', 'navSee', 'navMission']);
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -89,14 +89,14 @@ console.log('\nAdres ayarları');
 /** A robot on paper: the mission, the field it plans on, and a read. */
 function paperRobot(map = F.FIELD) {
   const ms = P.plcMission();
-  const st = F.fieldState();
+  const st = F.navState();
   const rx = (a, b, control, replyTo) => {
     const out = P.plcMissionRx(ms, { ok: true, a, b, control, replyTo }, 0);
-    if (out.plan) F.fieldMission(st, out.plan, map, 'START');
+    if (out.plan) F.navMission(st, out.plan, map, 'START');
     return out;
   };
   const see = (text) => {
-    const fix = F.fieldSee(st, text, 0, map, null);
+    const fix = F.navSee(st, text, 0, map, null);
     P.plcMissionFix(ms, fix, 0);
     return fix;
   };
@@ -112,7 +112,7 @@ console.log('\nGörev: PLC görevi verir, robot başlat komutunu bekler');
   const out = r.rx(2, 3, 1, 1);
   ok(out.plan && out.plan.join(' ') === 'A2 B3 START', 'görev A2 → B3 → başlangıç olarak planlanıyor');
   ok(r.code() === 2 && !!r.hold(), 'görev alındı (2), robot tutuluyor');
-  ok(r.st.plan.join('>') === 'START>D1>D2>A2>D2>D3>GATE>D4>B3>D4>GATE>D3>D2>D1>START',
+  ok(r.st.plan.join('>') === 'START>J1>J2>A2>J2>J3>KAPI>J4>B3>J4>KAPI>J3>J2>J1>START',
      `rota sahada: ${r.st.plan.join('>')}`);
   const tx = P.plcTxFields(r.ms);
   ok(tx.code === 2 && tx.a === 2 && tx.b === 3, 'PAKET_TX görevi geri bildiriyor');
@@ -145,7 +145,7 @@ console.log('\nGörev: tam tur, kapıda iki yönde bekleme');
   ok(out.from === 'A2' && r.code() === 4, `A2'den çıkarken ALIM2 → yüklü hareket (4)  (${back.from}→${back.to}, sonra ${out.from}→${out.to})`);
 
   const k1 = r.see('KAPI1');
-  ok(k1.to === 'GATE' && r.code() === 5 && /kapı/.test(r.hold()),
+  ok(k1.to === 'KAPI' && r.code() === 5 && /kapı/.test(r.hold()),
      'KAPI1 kapıya doğru okundu → fabrika komutu bekleniyor (5), robot tutuluyor');
   r.rx(2, 3, 2, 4);
   ok(r.code() === 5, 'yüklü (4) paketine gelen kontrol 2 kapıyı açmıyor');
@@ -165,7 +165,7 @@ console.log('\nGörev: tam tur, kapıda iki yönde bekleme');
   ok(r.st.from === 'B3' && r.code() === 6, "B3'ten çıkarken BIRAK3 → dönüş (6)");
 
   const k2 = r.see('KAPI2');
-  ok(k2.to === 'GATE' && r.code() === 5, 'dönüşte KAPI2 kapıya doğru → yine bekleme (5)');
+  ok(k2.to === 'KAPI' && r.code() === 5, 'dönüşte KAPI2 kapıya doğru → yine bekleme (5)');
   r.rx(2, 3, 2, 5);
   ok(r.code() === 6, 'kontrol 2 → dönüşe devam');
   r.see('KAPI1');
@@ -184,6 +184,24 @@ console.log('\nGörev: tam tur, kapıda iki yönde bekleme');
   ok(r.code() === 2, 'PLC bekle dedikten sonra aynı görev yeniden alınabiliyor');
 }
 
+console.log('\nGörev: yolda bekle / devam');
+{
+  const r = paperRobot();
+  r.rx(1, 2, 2, 1); r.rx(1, 2, 2, 2);
+  ok(r.code() === 3 && !r.hold(), 'yola çıktı, serbest');
+  r.rx(1, 2, 1, 3);
+  ok(r.code() === 3 && /bekle/.test(r.hold() || ''), `yolda kontrol 1 → robot tutuluyor, durum 3 kalıyor  («${r.hold()}»)`);
+  r.rx(1, 2, 1, 3);
+  ok(r.ms.events.filter((e) => /bekle dedi/.test(e.text)).length === 1, 'tekrar eden bekle bir kez yazılıyor');
+  r.rx(1, 2, 2, 3);
+  ok(r.code() === 3 && !r.hold(), 'kontrol 2 → kaldığı yerden devam');
+  P.plcMissionEvent(r.ms, 'picked');
+  r.rx(1, 2, 1, 4);
+  ok(r.code() === 4 && !!r.hold(), 'yüklüyken de bekle tutuyor');
+  P.plcMissionEvent(r.ms, 'reset');
+  ok(!r.hold() && r.ms.wait === false, 'görev sıfırlanınca bekle de kalkıyor');
+}
+
 console.log('\nGörev: düğmeler, acil stop, hata');
 {
   const r = paperRobot();
@@ -199,7 +217,7 @@ console.log('\nGörev: düğmeler, acil stop, hata');
   P.plcMissionEvent(r.ms, 'release');
   ok(r.code() === 6 && !r.hold(), 'acil stop kalkınca kaldığı yerden');
 
-  P.plcMissionTick(r.ms, { armed: true, fault: 'esp32 erişilemiyor' }, 0);
+  P.plcMissionTick(r.ms, { armed: true, fault: 'motor kartı bağlı değil' }, 0);
   ok(r.code() === 7, 'sürüş kartına erişilemiyor → hata (7)');
   P.plcMissionTick(r.ms, { armed: true, fault: null }, 0);
   ok(r.code() === 6, 'hata giderilince dönüş kodu geri geliyor');
@@ -210,16 +228,6 @@ console.log('\nGörev: düğmeler, acil stop, hata');
   ok(r.code() === 1, '«başlangıca vardı» → 1');
   const s = P.plcMissionStatus(r.ms, 0);
   ok(s.events.length > 5 && s.label === 'Göreve hazır bekleme durumu', 'durum özeti ve olay günlüğü');
-}
-
-console.log('\nGörev: deneme alanında');
-{
-  const r = paperRobot(F.FIELD_DENEME);
-  r.rx(1, 1, 2, 1); r.rx(1, 1, 2, 2);
-  ok(r.st.plan.join('>') === 'START>D1>A1>D1>GATE>D4>B1>D4>GATE>D1>START', 'deneme alanında rota');
-  P.plcMissionEvent(r.ms, 'picked');
-  const k = r.see('KAPI1');
-  ok(k.to === 'GATE' && r.code() === 5, 'deneme alanında da KAPI1 kapıda durduruyor');
 }
 
 // ══ the link, over real UDP ══════════════════════════════════════════
@@ -294,64 +302,27 @@ async function until(fn, ms) {
   return false;
 }
 
-console.log('\nESP32 sunucusu, içinde PLC simülatörü: kapıda tekerlekler duruyor');
+console.log('\nRover sunucusu: kart yokken hata, tutulurken klavye de reddediliyor');
 {
-  const srv = serve(['--fake', '--http', '18195', '--host', '127.0.0.1', '--no-camera',
-                     '--no-advertise', '--plc-sim', '18515']);
-  await sleep(1500);
-  try {
-    const c = client('ws://127.0.0.1:18195/');
-    await c.open;
-    const code = () => c.got.last && c.got.last.plc && c.got.last.plc.mission.code;
-    ok(await until(() => code() === 3, 5000), 'simülatör görevi verdi, başlat dedi → 3');
-    const m = c.got.last.plc.mission;
-    ok(m.task && m.task.a === 1 && m.task.b === 1, 'görev A1 → B1');
-    ok(c.got.last.field.plan.includes('A1') && c.got.last.field.plan.includes('B1'), 'saha rotası kuruldu');
-    ok(/SİMÜLATÖR/.test(srv.out.text) && /plc: görev alındı/.test(srv.out.text), 'konsol durumu yazıyor');
-
-    c.send({ cmd: 'start' });
-    c.send({ cmd: 'field_qr', text: 'BASLA' });
-    c.send({ cmd: 'plc', event: 'picked' });
-    ok(await until(() => code() === 4, 2000), '«yük alındı» → 4');
-    c.send({ cmd: 'field_qr', text: 'KAPI1' });
-    ok(await until(() => code() === 5, 2000), 'KAPI1 → 5');
-    ok(await until(() => /kapı/.test(c.got.last.reason || ''), 1000),
-       `sürüş katmanı tutuyor  (sebep: «${c.got.last.reason}»)`);
-    ok(c.got.last.out && c.got.last.out[0] === 0 && c.got.last.out[1] === 0, 'çıkışlar sıfır');
-    ok(await until(() => code() === 4, 6000), 'simülatör kapıyı açtı → 4');
-    ok(!/kapı/.test(c.got.last.reason || ''), 'tutma kalktı');
-
-    c.send({ cmd: 'plc', event: 'estop' });
-    ok(await until(() => code() === 8, 1500), 'acil stop → 8');
-    ok(await until(() => c.got.last.plc.link.tx && c.got.last.plc.link.tx.code === 8, 2500),
-       'PAKET_TX acil stopu PLCye iletti');
-    ok(c.got.last.running === false, 'acil stop sürüşü de kapattı');
-    c.ws.close();
-
-    const page = await fetch('http://127.0.0.1:18195/plc');
-    ok(page.status === 200 && /Fabrika otomasyonu/.test(await page.text()), '/plc sayfası sunuluyor');
-    const api = await (await fetch('http://127.0.0.1:18195/api/plc')).json();
-    ok(api.mission && api.link.enabled && api.sim, '/api/plc durumu veriyor');
-  } finally {
-    srv.proc.kill();
+  // Dry everything the Pi has wired up, and throw-away routes: this runs on
+  // the robot itself.
+  const srv = serve(['--no-connect', '--http', '18196', '--host', '127.0.0.1',
+                     '--no-camera', '--no-advertise', '--no-actuator', '--no-lidar', '--no-radar',
+                     '--no-gpio', '--routes', path.join(os.tmpdir(), `routes-plc-${process.pid}.json`),
+                     '--plc-sim', '18516']);
+  // Until it answers: on a throttled Pi the server takes seconds to come up.
+  for (let i = 0; i < 150; i++) {
+    try { await fetch('http://127.0.0.1:18196/api/pages'); break; } catch { await sleep(100); }
   }
-}
-
-console.log('\nEnder (Marlin) sunucusu: kart yokken hata, tutulurken klavye de reddediliyor');
-{
-  const srv = serve(['--marlin', '--no-connect', '--http', '18196', '--host', '127.0.0.1',
-                     '--no-camera', '--no-advertise', '--plc-sim', '18516', '--field', 'deneme']);
-  await sleep(1500);
   try {
     const c = client('ws://127.0.0.1:18196/');
     await c.open;
     ok(await until(() => c.got.last && c.got.last.plc && c.got.last.plc.link.rx_count > 0, 3000),
-       'Marlin tarafında da PLC bağlantısı çalışıyor');
+       'PLC bağlantısı çalışıyor');
     const s = c.got.last;
     ok(s.plc.mission.code === 7 && /motor kartı/.test(s.plc.mission.fault || ''),
        'motor kartı bağlı değil → hata (7)');
-    ok(s.field && s.field.map === 'deneme', '--field deneme seçildi');
-    ok(s.plc.mission.pose.x === 1.2 && s.plc.mission.pose.known === false,
+    ok(s.plc.mission.pose.x === 1.9 && s.plc.mission.pose.known === false,
        'QR okunmadan konum başlangıç alanı olarak bildiriliyor, tahmin diye işaretli');
     ok(await until(() => c.got.last.plc.mission.phase === 'accepted', 3000), 'görev alındı');
     ok(await until(() => c.got.last.hold && /başlat/.test(c.got.last.hold), 1500),
@@ -361,7 +332,9 @@ console.log('\nEnder (Marlin) sunucusu: kart yokken hata, tutulurken klavye de r
     ok(run.status === 423, `tutulurken WASD sürüşü reddediliyor  (HTTP ${run.status})`);
     c.send({ cmd: 'field_qr', text: 'BASLA' });
     ok(await until(() => c.got.last.field.qr === 'q1' && c.got.last.field.text === 'BASLA', 1500),
-       'Marlin tarafında QR sahaya işleniyor');
+       'QR sahaya işleniyor');
+    ok(await until(() => c.got.last.plc.mission.pose.known && c.got.last.plc.mission.pose.x === 1.9, 1500),
+       `QR okununca PLC'ye giden konum ölçülmüş oluyor  (${JSON.stringify(c.got.last.plc.mission.pose)})`);
     c.ws.close();
   } finally {
     srv.proc.kill();

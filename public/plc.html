@@ -155,6 +155,7 @@
 </main>
 
 <script src="/field.js"></script>
+<script src="/qrnav.js"></script>
 <script src="/plc.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -163,8 +164,28 @@ const fmt = (v, n = 2) => (v == null || !Number.isFinite(Number(v)) ? '–' : Nu
 const clock = (at) => at ? new Date(at).toLocaleTimeString('tr-TR', { hour12: false }) : '';
 
 let ws = null;
-let map = FIELD;
-let mapName = null;
+// The rover's one field (public/field.js). The drawing below wants a size, a
+// name and wall segments; the map keeps the building as halls with openings,
+// so they are worked out from that once rather than written down twice.
+const map = {
+  ...FIELD, label: 'Yarışma alanı', w: FIELD.building.w, h: FIELD.building.h,
+  walls: fieldWalls(FIELD.building),
+  doors: [[FIELD.building.gate.x, FIELD.building.gate.y0, FIELD.building.gate.x, FIELD.building.gate.y1]],
+};
+
+/** Each hall's four walls as [x1, y1, x2, y2], with its openings left out. */
+function fieldWalls(b) {
+  const out = [];
+  for (const hall of b.halls) {
+    out.push([hall.x0, 0, hall.x1, 0], [hall.x0, b.h, hall.x1, b.h]);
+    for (const x of [hall.x0, hall.x1]) {
+      const gap = b.openings.find((g) => g.x === x);
+      if (!gap) { out.push([x, 0, x, b.h]); continue; }
+      out.push([x, 0, x, gap.y0], [x, gap.y1, x, b.h]);
+    }
+  }
+  return out;
+}
 
 function sendWs(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 
@@ -196,11 +217,6 @@ function bytesHtml(hex, names) {
 
 function paint(s) {
   const f = s.field || {};
-  if (f.map && f.map !== mapName) {
-    mapName = f.map;
-    map = FIELDS[f.map] || FIELD;
-    drawStatic();
-  }
   const p = s.plc || {};
   const m = p.mission || {};
   const l = p.link || {};
@@ -236,7 +252,7 @@ function paint(s) {
   } else {
     $('linkState').innerHTML = l.connected ? '<span class="ok">bağlı</span>'
       : l.bound ? '<span class="warnc">cevap yok</span>' : '<span class="bad">soket yok</span>';
-    $('linkAddr').textContent = `${l.host}:${l.port}`;
+    $('linkAddr').textContent = `${l.host}:${l.port}` + (l.local_port ? ` · robot :${l.local_port}` : '');
     $('linkNote').textContent = (l.error ? `Hata: ${l.error}. ` : '')
       + `Robot IP ${p.robot_ip || '192.168.100.10'} (elle), ağ geçidi 192.168.100.1, bilgisayar 192.168.100.20. `
       + `Paket her ${l.period_ms} ms'de gider; en geç gönderim ${fmt(l.late_ms, 0)} ms.`
@@ -321,7 +337,7 @@ function drawStatic() {
       parts.push(`<text x="${sx(n.x) + 14}" y="${sy(n.y) + 34}" font-size="21" fill="${col}" font-weight="600">${esc(n.kind === 'gate' ? 'KAPI' : n.id)}</text>`);
     }
   }
-  for (const q of fieldQrs(map)) {
+  for (const q of navQrs(map)) {
     parts.push(`<rect x="${sx(q.x) - 13}" y="${sy(q.y) - 13}" width="26" height="26" fill="#1c2128" rx="3"/>`);
     parts.push(`<rect x="${sx(q.x) - 6}" y="${sy(q.y) - 6}" width="12" height="12" fill="#fff"/>`);
     const vertical = Math.abs(fieldNode(q.a, map).x - fieldNode(q.b, map).x) < 0.01;
@@ -332,7 +348,7 @@ function drawStatic() {
   parts.push('<g id="robot"></g>');
   svg.innerHTML = parts.join('');
 
-  $('qrs').innerHTML = fieldQrs(map).map((q) =>
+  $('qrs').innerHTML = navQrs(map).map((q) =>
     `<button data-text="${esc(q.text || q.qr)}" title="${esc(q.qr)}: ${esc(q.a)}–${esc(q.b)}">${esc(q.text || q.qr)}</button>`).join('');
 }
 

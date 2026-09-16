@@ -94,8 +94,8 @@
     </div>
     <div class="row" style="margin-top:10px">
       <span class="muted"><a href="/">&larr; ana sayfa</a></span>
-      <span class="muted"><a href="/vision">kamera</a> ·
-        <a href="/obstacle">engel</a> · <a href="/tune">kayıt &rarr;</a></span>
+      <span class="muted"><a href="/dashboard">panel</a> · <a href="/vision">kamera</a> ·
+        <a href="/tune">kayıt &rarr;</a></span>
     </div>
     <div class="err" id="err" hidden></div>
   </div>
@@ -111,6 +111,19 @@
 
   <div class="card" style="padding:10px">
     <canvas id="view" width="480" height="360"></canvas>
+  </div>
+
+  <!-- The robot's own QR reader, reading while it drives. It lives on the
+       server (qr.js, fed by the Pi's camera); this shows its answer, and the
+       cargo run acts on the same one. See public/qrview.js. -->
+  <div class="card">
+    <div class="row">
+      <span class="lbl" style="margin:0">QR kod — hərəkətdə oxunur</span>
+      <span class="muted" id="qrState">–</span>
+    </div>
+    <div id="qrText" style="font:600 26px/1.2 ui-monospace,Menlo,monospace;margin-top:8px;word-break:break-all">–</div>
+    <div class="muted" id="qrMeta" style="margin-top:6px"></div>
+    <ol id="qrHist" class="muted" style="margin:8px 0 0;padding-left:20px;font:12px/1.6 ui-monospace,Menlo,monospace"></ol>
   </div>
 
   <!-- ── the two buttons that matter ── -->
@@ -150,7 +163,7 @@
           Tuşlar basılı tutulduğu sürece çalışır, bırakınca durur. Takip sürerken
           <b>W A S D</b>'ye basmak pilotu durdurur ve sürüşü ele alır — tekrar
           başlatmak için <b>F</b>. Fork (<b>Q / E</b>) takip sürerken de çalışır.</p>
-        <div id="handMarlin" hidden>
+        <div id="handMarlin">
           <label class="lbl" style="display:block;margin-top:10px">Elle sürüş hızı · <span id="handPctV">40</span> %</label>
           <input type="range" id="handPct" min="5" max="100" step="5" value="40">
           <div class="btnrow">
@@ -161,16 +174,59 @@
               <input type="checkbox" id="liftInvert"> yönü ters çevir</label>
           </div>
         </div>
-        <p class="muted" id="handEsp" hidden style="margin:8px 0 0;font-size:13px">
-          ESP32 kartında elle hız, <b>/drive</b> sayfasındaki tuş hızları ve ana seviyedir.</p>
       </div>
     </div>
   </div>
 
+  <!-- ── the run ──
+       The map is here as well as on /map because the two questions a person
+       asks mid-run — "which junction is it looking for" and "is that where it
+       thinks it is" — are only answerable next to the picture the rover is
+       actually steering by. Same fieldDraw(), same FIELD, one canvas each. -->
+  <div class="card">
+    <div class="row">
+      <span class="lbl" style="margin:0">Görev</span>
+      <span class="muted"><a href="/map">haritada seç &rarr;</a></span>
+    </div>
+    <canvas id="mini" width="720" height="400"
+            style="width:100%;display:block;border-radius:10px;margin-top:10px;
+                   background:#0b0e13;aspect-ratio:9/5"></canvas>
+    <div class="btnrow">
+      <button data-go="A1">A1</button>
+      <button data-go="A2">A2</button>
+      <button data-go="A3">A3</button>
+    </div>
+    <div class="btnrow" style="margin-top:8px">
+      <button data-go="B1">B1</button>
+      <button data-go="B2">B2</button>
+      <button data-go="B3">B3</button>
+    </div>
+    <!-- The cargo run: the way to a slot is its scenario, taught step by step
+         on /gcode, not read off the map. See missionCargo() in mission.js and
+         routes.js. -->
+    <div class="row" style="margin-top:14px">
+      <span class="lbl" style="margin:0">Yük daşı — ssenari ilə</span>
+      <span class="muted"><a href="/gcode#teachCard">ssenarilər &rarr;</a></span>
+    </div>
+    <div class="btnrow" style="margin-top:6px">
+      <button data-cargo="1">A1 · yuva 1</button>
+      <button data-cargo="2">A2 · yuva 2</button>
+      <button data-cargo="3">A3 · yuva 3</button>
+    </div>
+    <div class="read" style="grid-template-columns:repeat(3,1fr);margin-top:14px">
+      <div><span class="lbl">Durum</span><b id="mPhase">–</b></div>
+      <div><span class="lbl">Sıradaki</span><b id="mNext">–</b></div>
+      <div><span class="lbl">Kalan</span><b id="mLeft">–</b></div>
+    </div>
+    <div class="btnrow" style="margin-top:8px">
+      <button id="mResume" hidden>QAPI AÇILDI — DEVAM ET</button>
+    </div>
+    <div class="muted" style="margin-top:10px;text-align:center" id="mWhy">hedef yok</div>
+  </div>
+
   <div class="card">
     <div class="read">
-      <div><span class="lbl">Hız</span><b id="rSpeed">–</b>
-        <span class="muted" id="rSpeedV">–</span></div>
+      <div><span class="lbl">Hız</span><b id="rSpeed">–</b></div>
       <div><span class="lbl">Sapma</span><b id="rErr">–</b></div>
       <div><span class="lbl">Zolaq</span><b id="rBands">–</b></div>
       <div><span class="lbl">Mesafe</span><b id="rDist">–</b></div>
@@ -184,8 +240,8 @@
       <div class="bar"><i id="b26"></i></div>
     </div>
     <div class="row" style="margin-top:4px">
-      <span class="muted">GPIO25 <b id="rP25">0</b> % · <b id="rV25">–</b></span>
-      <span class="muted"><b id="rV26">–</b> · <b id="rP26">0</b> % GPIO26</span>
+      <span class="muted">sol <b id="rP25">0</b> %</span>
+      <span class="muted"><b id="rP26">0</b> % sağ</span>
     </div>
     <div class="steer"><i id="steer"></i></div>
     <div class="row" style="margin-top:10px">
@@ -207,6 +263,7 @@
       <button id="start">Kamerayı durdur</button>
       <button id="mirror">Güzgü</button>
       <button id="flip">180°</button>
+      <button id="mask">Maska</button>
     </div>
     <div class="btnrow">
       <button id="pick" style="flex:1">Video dosyasıyla dene (motorsuz)</button>
@@ -218,26 +275,76 @@
     </div>
     <div class="btnrow" style="margin-top:0">
       <button id="mAuto" class="on">Avto</button>
+      <button id="mLine">Yarışma çizgisi</button>
       <button id="mDark">Siyah yol</button>
       <button id="mWhite">Ağ yol</button>
     </div>
   </div>
 
   <div class="card">
-    <div class="row"><span class="lbl" style="margin:0">Hız sınırı</span>
-      <span class="muted">100 % = <b id="vFull">–</b></span></div>
-    <p class="muted" style="margin:0 0 14px">Bu yüzdeler bir <b>taleptir</b>:
-    0 = dur, 100 = tam gaz. Aşağıdaki «dönme eşiği»nin üstündeki aralığa
-    yayılırlar, bu yüzden yanındaki volt değeri pine giden gerçek gerilimdir.</p>
-
+    <div class="lbl" style="margin-bottom:4px">Yol tanıma (AI)</div>
+    <p class="muted" style="margin:0 0 12px">/vision ilə aynı dedektör — burada
+    dəyişdirmək onu da dəyişdirir. <b>Maska</b> düyməsi yuxarıdakı kameranın
+    üstündə dedektörün nəyi yol saydığını göstərir.</p>
     <div class="sl">
-      <div class="row"><span class="muted">Dönme eşiği — teker kaç volttan
-        sonra döner</span><b id="vStall">1.50 V</b></div>
-      <input type="range" id="stall" min="0" max="60" step="1" value="22">
-      <p class="muted" style="margin:4px 0 0">Bunun altı «yavaş» değil,
-      «durmuş»tur. Ölç: manual sayfasında yüzdeyi yavaş yavaş yükselt, teker ilk
-      döndüğü anı yaz.</p>
+      <div class="row"><span class="muted">ROI — yukarıdan kes</span><b id="vRoi">45 %</b></div>
+      <input type="range" id="roi" min="0" max="80" step="1" value="45">
     </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Eşik düzeltmesi</span><b id="vBias">0</b></div>
+      <input type="range" id="bias" min="-60" max="60" step="1" value="0">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Kontrast — 0 kapalı, + güçlendirir, − griye yaklaştırır</span><b id="vContrast">0 (kapalı)</b></div>
+      <input type="range" id="contrast" min="-300" max="300" step="5" value="0">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Kenar keskinliği — çizgi kenarı en az bu kadar sıçramalı</span><b id="vEdge">18</b></div>
+      <input type="range" id="edge" min="0" max="80" step="1" value="18">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Renk toleransı</span><b id="vSat">60</b></div>
+      <input type="range" id="sat" min="0" max="150" step="1" value="60">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Minimum en</span><b id="vMinw">6 %</b></div>
+      <input type="range" id="minw" min="1" max="40" step="1" value="6">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Şerit sayısı</span><b id="vBands">8</b></div>
+      <input type="range" id="bands" min="4" max="14" step="1" value="8">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Yan kesim</span><b id="vSide">18 %</b></div>
+      <input type="range" id="side" min="0" max="45" step="1" value="18">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Süreklilik</span><b id="vJump">14 %</b></div>
+      <input type="range" id="jump" min="4" max="50" step="1" value="14">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Köşe kolu</span><b id="vArm">0.80</b></div>
+      <input type="range" id="arm" min="20" max="250" step="5" value="80">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Renk gücü</span><b id="vChroma">45</b></div>
+      <input type="range" id="chroma" min="10" max="140" step="1" value="45">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Renk toleransı</span><b id="vHueTol">32°</b></div>
+      <input type="range" id="hueTol" min="8" max="70" step="1" value="32">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Sütun doluluğu</span><b id="vFill">50 %</b></div>
+      <input type="range" id="fill" min="15" max="90" step="1" value="50">
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="lbl" style="margin-bottom:4px">Hız sınırı</div>
+    <p class="muted" style="margin:0 0 14px">Bu yüzdeler bir <b>taleptir</b>:
+    0 = dur, 100 = tam gaz — doğrudan tekerin faizi.</p>
+
     <div class="sl">
       <div class="row"><span class="muted">Düz yolda hız</span><b id="vBase">34 %</b></div>
       <input type="range" id="base" min="5" max="100" step="1" value="34">
@@ -261,34 +368,6 @@
   </div>
 
   <div class="card">
-    <div class="lbl" style="margin-bottom:4px">Teker dengesi</div>
-    <p class="muted" style="margin:0 0 12px">İki motor hiçbir zaman aynı motor
-    değil. Her tekerin kendi dönme eşiği ve kendi gücü var — aynı gerilimde biri
-    daha hızlı gidiyorsa robot düz gitmez. Bunlar <b>ölçüldükten sonra</b>
-    doldurulur: <a href="/manual">manual sayfasında</a> her tekeri ayrı ayrı
-    kaldır, ilk döndüğü yüzdeyi yaz.</p>
-    <div class="sl">
-      <div class="row"><span class="muted">GPIO25 — dönme eşiği</span><b id="vS25">genel</b></div>
-      <input type="range" id="stall25" min="0" max="60" step="1" value="0">
-    </div>
-    <div class="sl">
-      <div class="row"><span class="muted">GPIO26 — dönme eşiği</span><b id="vS26">genel</b></div>
-      <input type="range" id="stall26" min="0" max="60" step="1" value="0">
-    </div>
-    <div class="sl">
-      <div class="row"><span class="muted">GPIO25 — güç düzeltmesi</span><b id="vG25">1.00</b></div>
-      <input type="range" id="gain25" min="50" max="150" step="1" value="100">
-    </div>
-    <div class="sl">
-      <div class="row"><span class="muted">GPIO26 — güç düzeltmesi</span><b id="vG26">1.00</b></div>
-      <input type="range" id="gain26" min="50" max="150" step="1" value="100">
-    </div>
-    <p class="muted" style="margin:10px 0 0">Eşik sürgüsü <b>0</b> ise yukarıdaki
-    genel eşik kullanılır. Güç düzeltmesini en son kullan: önce eşikleri düzelt,
-    yalnızca sonra hâlâ fark varsa hızlı tekeri azalt.</p>
-  </div>
-
-  <div class="card">
     <div class="lbl" style="margin-bottom:12px">Sükan</div>
     <div class="sl">
       <div class="row"><span class="muted">Sertlik (kP)</span><b id="vKp">0.85</b></div>
@@ -298,12 +377,15 @@
       <div class="row"><span class="muted">İleri bakış (kD) — saniye</span><b id="vKd">0.12</b></div>
       <input type="range" id="kd" min="0" max="60" step="1" value="12">
     </div>
-    <div class="btnrow" style="margin-top:0">
-      <button id="swap">Tekerleri değiştir (sol/sağ)</button>
+    <div class="sl">
+      <div class="row"><span class="muted">Sükan yumşaqlığı — vahid/saniye</span><b id="vSteerRate">4</b></div>
+      <input type="range" id="steerRate" min="1" max="20" step="0.5" value="4">
+      <p class="muted" style="margin:4px 0 0">Sükanın tam -1-dən +1-ə keçmə sürəti.
+      Aşağı — daha yumşaq, amma kəskin döngəyə gec cavab verir. Təkərin bir
+      kadrda 0-dan sıçraması («impuls») buradan gəlir.</p>
     </div>
-    <p class="muted" style="margin:10px 0 0">Robot düzeltme yerine yoldan
-    uzaklaşıyorsa — bu düğme. Direksiyon düz yolda salınıyorsa kPyi azalt, virajı
-    gec tutursa kD-ni artır.</p>
+    <p class="muted" style="margin:10px 0 0">Direksiyon düz yolda salınıyorsa
+    kPyi azalt, virajı gec tutursa kD-ni artır.</p>
   </div>
 
   <div class="card">
@@ -313,8 +395,8 @@
       <button id="sonOn" class="on">Engelde dur</button>
       <button id="sonOff">Dikkate alma</button>
     </div>
-    <p class="muted" style="margin:10px 0 0">Eşikleri <a href="/obstacle">engel
-    sayfasında</a> ayarla — aynı sayılar burada da geçerli. Engel görününce
+    <p class="muted" style="margin:10px 0 0">Eşikler sunucuda saxlanılır — aynı
+    sayılar hər səhifədə keçərlidir. Engel görününce
     robot tam durur (yavaşlamaz: duvara hangi hızla çarpacağını seçmek değil), yol
     açıldıktan sonra gecikmeyle devam eder. Bu süre boyunca «yol kayboldu» sayacı
     işlemez, yoksa robot bekleye bekleye kendini kapatırdı.</p>
@@ -336,6 +418,56 @@
     tam durdurup yerinde — yolun olduğu tarafa — sürünerek döner, sapma
     0.15 azalana kadar. Geri dönmek için giriş eşiğinin altına inmek gerekir, bu
     yüzden eşiğin üstünde titremez.</p>
+  </div>
+
+  <!-- ── the 90° corner ── -->
+  <div class="card">
+    <div class="lbl" style="margin-bottom:12px">90° köşe</div>
+    <div class="sl">
+      <div class="row"><span class="muted">Köşe bu kadar yaklaşınca dönüşe geçer</span>
+        <b id="vCornerAt">0.80</b></div>
+      <input type="range" id="cornerAt" min="30" max="100" step="1" value="80">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">Dönmeden önce gidilecek yol</span>
+        <b id="vCreepCm">15 sm</b></div>
+      <input type="range" id="creepCm" min="0" max="60" step="1" value="15">
+    </div>
+    <div class="sl">
+      <div class="row"><span class="muted">…kalibrasyon yoksa: süre</span>
+        <b id="vCreepMs">250 ms</b></div>
+      <input type="range" id="creepMs" min="0" max="1500" step="10" value="250">
+    </div>
+    <div class="row" style="margin-top:2px">
+      <span class="muted">Şu an geçerli olan</span>
+      <b id="vCreepWhich" style="font:600 13px ui-monospace,Menlo,monospace">–</b>
+    </div>
+    <p class="muted" style="margin:10px 0 0">Parkur 90° dönüyorsa yol
+    <b>kaybolmaz — biter</b>: dedektör köşeyi bir <b>L</b> olarak görür (şerit
+    aşağıdaki yolu içinde tutar ama tek yana yolun kendi eninden fazla taşar) ve
+    kolun hangi yanda olduğunu bildirir. Sapmayla dönmek burada işe yaramaz,
+    çünkü dönülecek bir sapma yok; robot köşeye kadar sürünür, sonra
+    <b>yerinde</b> o yana döner ve yol yeniden önüne gelince normal sürüşe
+    devam eder.</p>
+    <p class="muted" style="margin:8px 0 0"><b>Kamera robotun önünde.</b>
+    Karenin altı, tekerlerden bir kamera-aks mesafesi kadar <b>ileride</b>ki
+    yerdir — yani köşe karenin altına geldiğinde aks henüz köşeye varmamıştır.
+    Orada dönerse robot köşenin <b>önünde</b> döner ve yeni yolun yanına
+    düşer. Bu yüzden önce o mesafe kadar düz gider: <b>bir süre değil, bir
+    yol</b> — hızdan bağımsız olarak hep aynı ~15 sm. Kısa olursa köşeyi keser,
+    uzun olursa köşeyi geçer; şeridi ölç ve buraya yaz.</p>
+    <p class="muted" style="margin:8px 0 0">Mesafe, aşağıdaki <b>mesafe
+    kalibrasyonu</b>ndan hesaplanır (enkoder yok). Kalibrasyon yoksa — ya da
+    talep motorun ölü bölgesindeyse, yani teker hiç dönmüyorsa — santimetre
+    ölçülemez; o zaman süreye düşer. Süre yanlış birimdir ve robotun erken
+    dönmesinin sebebiydi: üç kutuyu doldur, santimetre geçerli olsun.</p>
+    <p class="muted" style="margin:8px 0 0">Köşe eşiği <b>Köşe kolu</b>
+    sürgüsüyle ayarlanır (dedektör kartında); kol ne kadar taşmalı, yolun kendi
+    eninin katı olarak.</p>
+    <p class="muted" style="margin:8px 0 0">Dönüş sırasında «yol yok» sayaçları
+    <b>durur</b> — zincirin kaybolması köşenin arızası değil, tarifidir. Yol
+    2.5 saniyede önüne gelmezse dönüşten vazgeçer ve normal «yol yok»
+    davranışına döner.</p>
   </div>
 
   <!-- ── the run recorder ── -->
@@ -373,11 +505,10 @@
     yalnızca <b>hız farkıyla</b> olur — yön röleleri kullanılmaz, bu yüzden
     virajda durma duraklaması yoktur.</p>
     <p class="muted" style="margin:8px 0 0">Yüzdeler <b>doğrudan</b> pine gider —
-    /drive sayfasındaki ana seviye bu sayfada uygulanmaz. Yani 100 %
-    <code>--v-max</code>tır (varsayılan 3.3 V), 0 % ise boştur (1.00 V). Tek yol,
-    tek sınır: burada tavan «en yüksek hız» sürgüsüdür.</p>
-    <p class="muted" style="margin:8px 0 0"><b>Ölü bölge.</b> Motor 1.5 Vun
-    altında hiç dönmez, yani 22 %-in altındaki her yüzde «yavaş» değil,
+    /drivedaki master seviye bu sayfada uygulanmaz. Tek yol, tek sınır: burada
+    tavan «en yüksek hız» sürgüsüdür.</p>
+    <p class="muted" style="margin:8px 0 0"><b>Ölü bölge.</b> Motor «dönme
+    eşiği»nin altında hiç dönmez, yani onun altındaki her yüzde «yavaş» değil,
     «durmuş» demektir. Eski kayıtlarda 59 saniyelik bir sürüşte teker
     komutlarının <b>91 %-i</b> tam o bölgedeydi — hareket komutu veriliyordu, teker
     dönmüyordu. Şimdi talep [eşik, 100] aralığına yayılıyor; yalnızca tam sıfır sıfır
@@ -385,6 +516,23 @@
     <p class="muted" style="margin:8px 0 0">Hız virajda kendi azalır: karenin
     üst yarısındaki sapma büyükse robot <b>viraja girmeden önce</b>
     yavaşlar. Zincir kısaysa — yani uzağı görmüyorsa — biraz daha yavaşlar.</p>
+    <p class="muted" style="margin:8px 0 0"><b>Yarışma çizgisi</b> eşit üç
+    şeritten oluşur: <b>mavi | turuncu | mavi</b>. Dedektör onu <b>mavi
+    şeritlerinden</b> bulur, merkezi de aralarındaki boşluktur — çünkü çizginin
+    ucundaki 50 mm QR kod turuncuyu örter, maviyi örtmez. Turuncuyu arasaydık
+    çizgi tam da gidilen yerde kaybolurdu. Əsl QR kağızı narıncıdan enlidir və
+    yanındakı göyü soldurur — ona görə QR-a oxşayan zolaqda (ağ kağız + qara
+    modul) göylər arası daha geniş ola bilər, lazım gələrsə o zolaq keçilir və
+    xətt QR-ın o biri üzündən davam etdirilir.</p>
+    <p class="muted" style="margin:8px 0 0"><b>QR hərəkətdə oxunur.</b> Oxuyucu
+    heç dayanmır: yük daşımasında yuvanın kodu yolda və ya axtarışda görünübsə,
+    rover xəttə çatan kimi xətti izləməyə başlayır. Görünməyibsə, xətt üzrə yavaş
+    irəliləyərək axtarır — durub gözləmir.</p>
+    <p class="muted" style="margin:8px 0 0"><b>Çizgi sadece istasyonlarda
+    var</b> — başlangıçta 3.4 m, her yük alma/bırakma noktasında 2.7 m; arası
+    boyasızdır. Bu yüzden zincirin karenin ortasında bitmesi bir arıza değil,
+    <b>istasyona varmak</b>tır: video üstünde «ÇİZGİ SONU» olarak çizilir ve
+    loga <code>end</code> alanı olarak düşer.</p>
     <p class="muted" style="margin:8px 0 0"><b>Parkur türü sürüş boyunca
     değişmez.</b> Oto mod kamerayı gezdirirken her karede karar verir, ama
     «sürmeye başla»ya bastığın anda hangi renkteyse sonuna kadar o kalır —
@@ -394,18 +542,23 @@
     başlat düğmesi aynı zamanda «yazmaya başla» düğmesidir. Sonra <a href="/tune">kaydı
     oku</a> sayfasına geçip ne değiştirmen gerektiğini görürsün.</p>
     <p class="muted" style="margin:8px 0 0">Yol kaybolursa son yönle
-    <b>0.6 saniye</b> yavaş devam eder (keskin virajda kare kaybolur), sonra
-    durur, 1.5 saniye daha sonra ENABLE düşer. Sunucu tarafında da ölü adam
-    var: kare 400 ms gelmezse yüzde sıfırlanır.</p>
+    <b>0.6 saniye</b> yavaş devam eder (bir iki karelik kayıp: gölge, bantta
+    ek), sonra durur, 1.5 saniye daha sonra ENABLE düşer. Sunucu tarafında da
+    ölü adam var: kare 400 ms gelmezse yüzde sıfırlanır. <b>90° köşe artık
+    buraya düşmez</b> — köşe önceden görülür ve bilerek dönülür; ayrıntı
+    yukarıdaki «90° köşe» kartında.</p>
   </div>
 
 </div>
 
 <script src="/road.js"></script>
 <script src="/pilot.js"></script>
+<script src="/field.js"></script>
+<script src="/mission.js"></script>
 <script src="/sonar.js"></script>
 <script src="/cam.js"></script>
-<script src="/wheels.js"></script>
+<script src="/qrview.js"></script>
+<script>qrViewMount();</script>
 <script>
 const $ = id => document.getElementById(id);
 const view = $('view'), vctx = view.getContext('2d', { willReadFrequently: true });
@@ -413,19 +566,121 @@ const view = $('view'), vctx = view.getContext('2d', { willReadFrequently: true 
 const src = camMount({ onState: paintSource });
 
 let camOn = true;
-let mirrored = false, flipped = false;
+let mirrored = false, flipped = false, showMask = false;
 let frames = 0, fpsAt = performance.now(), fps = 0;
 
 // ── the pilot ───────────────────────────────────────────────────────
 const pcfg = { ...PILOT_DEFAULTS };
 let pst = pilotState(performance.now());
 let armed = false, dist = 0, distAt = 0;
+// Whether the server has said `running: true` since this page armed, and when
+// it armed. See the `running` check in ws.onmessage for why both are needed.
+let armAck = false, armAt = 0;
+const ARM_ACK_MS = 2000;
 let last = { p25: 0, p26: 0, speed: 0, steer: 0, reason: '–', lost: true };
 let status = null;                 // the newest server status
 let calib = { pct: 50, metres: 0, seconds: 0, dead: 0 };
 
-// The forward HC-SR04, gating everything the pilot decides. Tuned on
-// /obstacle; this page only obeys it.
+// ── the run ────────────────────────────────────────────────────────
+// The mission is the only thing on this page that knows the field. It does not
+// steer: it hands the pilot a corner when the map says to turn, and the pilot
+// cannot tell that from a corner it saw for itself. See mission.js.
+const mst = missionState();
+const mini = $('mini'), mctx = mini.getContext('2d');
+let mOut = missionOut(mst);
+let mAt = performance.now();
+
+/**
+ * Point the run at a station.
+ *
+ * `tell` is false when the target came FROM the server — /map picked it — so
+ * that adopting it does not bounce it straight back and set the two pages
+ * telling each other about the same choice for ever.
+ *
+ * A new target always starts from where the rover believes it is now, not from
+ * the start area: a run that ends at A2 and is then sent to B1 has to plan
+ * from A2, and the rover is pointing up the branch when it gets there.
+ */
+function missionGo(id, tell = true) {
+  const from = mst.pose && mst.pose.at ? mst.pose.at : 'START';
+  const head = mst.pose ? mst.pose.h : 0;
+  if (!id) Object.assign(mst, missionState());
+  else missionSet(mst, id, from, head);
+  mOut = missionOut(mst);
+  if (tell) sendWs({ cmd: 'mission', target: id || null });
+  paintMission();
+}
+for (const b of document.querySelectorAll('[data-go]')) {
+  b.onclick = () => missionGo(b.dataset.go);
+}
+
+/**
+ * Point the run at a cargo slot instead — see missionCargo().
+ *
+ * What the slot's QR must say, and which of its two legs have been taught,
+ * are the server's (routes.js); they arrive in every status. `id` names the
+ * run, so a request that came from /gcode is adopted once and not rebuilt on
+ * every status that still carries it.
+ */
+function cargoGo(slot, tell = true, id = Date.now()) {
+  const routes = (status && status.cargo && status.cargo.routes) || {};
+  const r = routes[slot] || null;
+  // Every slot's key, because a slot with no scenario of its own is reached
+  // along the QR row from the one routes.js names in `via`, reading the codes
+  // on the way.
+  const keys = {};
+  for (const k of [1, 2, 3]) if (routes[k]) keys[k] = routes[k].qr_key;
+  missionCargo(mst, slot, { qrKey: r ? r.qr_key : 'ALIM' + slot, keys,
+                            via: r ? r.via : null,
+                            have: { to: !!(r && r.to), out: !!(r && r.out) },
+                            runId: id });
+  mOut = missionOut(mst);
+  if (tell) sendWs({ cmd: 'cargo', slot, id });
+  paintMission();
+}
+for (const b of document.querySelectorAll('[data-cargo]')) {
+  b.onclick = () => cargoGo(Number(b.dataset.cargo));
+}
+// What has been asked of the server on the cargo run's behalf, so each is
+// asked once: the taught leg by its id, the lift by the state it should be in.
+let replaySent = null, actSent = null;
+
+// Only offered when the run is actually held at the door, so it cannot be
+// pressed as a general "go" — the one thing it must not become.
+$('mResume').onclick = () => { missionResume(mst); mOut = missionOut(mst); paintMission(); };
+
+function paintMission() {
+  $('mResume').hidden = mOut.phase !== 'gate';
+  // The phase says what kind of thing is happening; the move says which one of
+  // six it is. Both, because "blind" on its own does not tell you whether the
+  // rover is leaving the start area or turning round at a station.
+  $('mPhase').textContent = mOut.move && mOut.move !== 'follow'
+    ? `${mOut.phase}/${mOut.move}` : mOut.phase;
+  $('mNext').textContent = mst.cargo
+    ? `yuva ${mst.cargo}${mst.via && mst.via !== mst.cargo ? ` · A${mst.via}-dən` : ''}`
+      + `${mOut.qrOk ? ' · QR ✓' : ''}`
+    : mOut.next || (mOut.target || '–');
+  $('mLeft').textContent = mOut.left == null || !mst.target || mOut.move !== 'follow'
+    ? '–' : `${mOut.left.toFixed(2)} m`;
+  $('mWhy').textContent = mOut.why;
+  for (const b of document.querySelectorAll('[data-go]')) {
+    b.classList.toggle('on', b.dataset.go === mst.target);
+  }
+  for (const b of document.querySelectorAll('[data-cargo]')) {
+    b.classList.toggle('on', Number(b.dataset.cargo) === mst.cargo);
+  }
+  const r = mini.getBoundingClientRect();
+  const dpr = Math.min(3, window.devicePixelRatio || 1);
+  if (r.width && Math.abs(mini.width - r.width * dpr) > 2) {
+    mini.width = Math.round(r.width * dpr);
+    mini.height = Math.round(r.height * dpr);
+  }
+  fieldDraw(mctx, mini.width, mini.height,
+            { pose: mst.pose, target: mst.target, plan: mst.plan });
+}
+
+// The forward HC-SR04, gating everything the pilot decides. Thresholds are
+// server-side config; this page only obeys them.
 const ocfg = { ...OBSTACLE_DEFAULTS };
 let ost = obstacleState(performance.now());
 let obs = { blocked: false, phase: 'go', cm: null, reason: '', waitLeft: 0 };
@@ -451,18 +706,36 @@ function connect() {
   ws.onmessage = ev => {
     let s; try { s = JSON.parse(ev.data); } catch { return; }
     if (s.type !== 'status') return;
-    if (WT) WT.fromStatus(s);
     status = s;
+    // /map picked a station. Adopted rather than argued with: whoever chooses,
+    // both pages end up on the same target, and the one holding the camera is
+    // the one that acts on it.
+    if (s.want !== undefined && (s.want || null) !== mst.target) {
+      missionGo(s.want || null, false);
+    }
+    // …and a cargo run somebody asked for on /gcode, the same way. After the
+    // station check, because asking for one clears the other on the server
+    // and both changes can arrive in the same status.
+    const cw = s.cargo && s.cargo.want;
+    if (cw && cw.id !== mst.runId) cargoGo(cw.slot, false, cw.id);
     paintLink(s);
-    $('handMarlin').hidden = s.machine !== 'marlin';
-    $('handEsp').hidden = s.machine !== 'esp32';
     if (!sawLift && s.machine === 'marlin' && s.lift) {
       sawLift = true;
       $('liftFeed').value = s.lift.feed;
       $('liftInvert').checked = !!s.lift.invert;
     }
     if (!armed && s.follow_cfg) applySaved(s.follow_cfg);
-    if (armed && !s.running) disarm('sunucu durdurdu');
+    // `running: false` only means "the server stopped us" once the server has
+    // said `running: true` since we armed. Statuses go out every 100 ms, and
+    // one sent before our START reached the server still says false — and it
+    // is handled late: the vision loop keeps this thread so busy that statuses
+    // arrive up to ~300 ms behind, and Chromium runs the click that armed us
+    // ahead of network messages already waiting. Believed, that stale status
+    // disarmed the run within 10–150 ms of pressing the button, and the STOP
+    // it sent cancelled the taught leg a cargo run had just asked for — every
+    // cargo run on 2026-09-14 ended that way, A1 as well as A2.
+    if (armed && s.running) armAck = true;
+    if (armed && armAck && !s.running) disarm('sunucu durdurdu');
   };
 }
 
@@ -474,7 +747,7 @@ function applySaved(c) {
   if (c.pilot) for (const k of Object.keys(PILOT_DEFAULTS)) {
     if (k in c.pilot) pcfg[k] = c.pilot[k];
   }
-  if (c.vision) for (const k of ['roi','bias','sat','minw','bands','side','jump','mode']) {
+  if (c.vision) for (const k of ['roi','bias','contrast','edge','sat','minw','bands','side','jump','arm','chroma','hueTol','fill','mode']) {
     if (k in c.vision) cfg[k] = c.vision[k];
   }
   if (c.calib) calib = { ...calib, ...c.calib };
@@ -489,8 +762,10 @@ function applySaved(c) {
 
 const saveCfg = () => sendWs({ cmd: 'follow_cfg', cfg: {
   pilot: pcfg,
-  vision: { roi: cfg.roi, bias: cfg.bias, sat: cfg.sat, minw: cfg.minw,
-            bands: cfg.bands, side: cfg.side, jump: cfg.jump },
+  vision: { roi: cfg.roi, bias: cfg.bias, contrast: cfg.contrast, edge: cfg.edge,
+            sat: cfg.sat, minw: cfg.minw, bands: cfg.bands, side: cfg.side,
+            jump: cfg.jump, arm: cfg.arm, chroma: cfg.chroma, hueTol: cfg.hueTol,
+            fill: cfg.fill, mode: cfg.mode },
   calib,
 } });
 
@@ -498,8 +773,7 @@ function paintLink(s) {
   const ok = s.esp_fresh && !s.serial_error;
   $('dot').className = 'dot ' + (armed ? 'go' : ok ? 'ok' : 'bad');
   $('state').textContent = s.serial_error ? 'seri port hatası'
-    : !ok ? 'ESP32 erişilemiyor' : armed ? 'SÜRÜR' : 'hazır';
-  $('vFull').textContent = `${(s.vmax ?? 3.3).toFixed(2)} V`;
+    : !ok ? 'kart bağlı değil' : armed ? 'SÜRÜR' : 'hazır';
   $('logState').textContent = s.log && s.log.active
     ? `${s.log.file} · ${s.log.rows} satır` : 'yazılmır';
   $('rec').textContent = s.log && s.log.active ? 'Yazmayı durdur' : 'Yazmaya başla';
@@ -509,37 +783,62 @@ function paintLink(s) {
 // Every slider is an integer; the ones that are really fractions are stored
 // ×100 so the same widget works for 0.85 and for 34 %.
 const S = [
-  ['base',  v => pcfg.base = v,        () => `${pcfg.base} % · ${showV(lift(pcfg.base, pcfg.stall))}`, () => pcfg.base],
-  ['min',   v => pcfg.min = v,         () => `${pcfg.min} % · ${showV(lift(pcfg.min, pcfg.stall))}`,   () => pcfg.min],
-  ['max',   v => pcfg.max = v,         () => `${pcfg.max} % · ${showV(lift(pcfg.max, pcfg.stall))}`,   () => pcfg.max],
+  ['base',  v => pcfg.base = v,        () => `${pcfg.base} %`,            () => pcfg.base],
+  ['min',   v => pcfg.min = v,         () => `${pcfg.min} %`,             () => pcfg.min],
+  ['max',   v => pcfg.max = v,         () => `${pcfg.max} %`,             () => pcfg.max],
   ['curve', v => pcfg.curve = v / 100, () => pcfg.curve.toFixed(2),       () => pcfg.curve * 100],
   ['accel', v => pcfg.accel = v,       () => String(pcfg.accel),          () => pcfg.accel],
   ['kp',    v => pcfg.kP = v / 100,    () => pcfg.kP.toFixed(2),          () => pcfg.kP * 100],
   ['kd',    v => pcfg.kD = v / 100,    () => pcfg.kD.toFixed(2),          () => pcfg.kD * 100],
-  // The stall point is a voltage in the real world, so it is shown as one — but
-  // stored as a percentage, because pilot.js has no idea what --v-max is.
-  ['stall', v => pcfg.stall = v,       () => showV(pcfg.stall + 0.001),   () => pcfg.stall],
+  ['steerRate', v => pcfg.steerRate = v, () => String(pcfg.steerRate),    () => pcfg.steerRate],
   ['hard',  v => pcfg.hard = v / 100,  () => pcfg.hard.toFixed(2),        () => pcfg.hard * 100],
-  ['crawl', v => pcfg.crawl = v,       () => `${pcfg.crawl} % · ${showV(lift(pcfg.crawl, pcfg.stall))}`, () => pcfg.crawl],
-  // 0 on these sliders means "no override" — the shared threshold is used.
-  ['stall25', v => pcfg.stall25 = (v || null), () => wheelStall(pcfg.stall25), () => pcfg.stall25 || 0],
-  ['stall26', v => pcfg.stall26 = (v || null), () => wheelStall(pcfg.stall26), () => pcfg.stall26 || 0],
-  ['gain25', v => pcfg.gain25 = v / 100, () => pcfg.gain25.toFixed(2), () => pcfg.gain25 * 100],
-  ['gain26', v => pcfg.gain26 = v / 100, () => pcfg.gain26.toFixed(2), () => pcfg.gain26 * 100],
+  ['crawl', v => pcfg.crawl = v,       () => `${pcfg.crawl} %`,           () => pcfg.crawl],
+  ['cornerAt', v => pcfg.cornerAt = v / 100, () => pcfg.cornerAt.toFixed(2), () => pcfg.cornerAt * 100],
+  ['creepCm',  v => pcfg.creepCm = v,  () => `${pcfg.creepCm} sm`,        () => pcfg.creepCm],
+  ['creepMs',  v => pcfg.creepMs = v,  () => `${pcfg.creepMs} ms`,        () => pcfg.creepMs],
 ];
 
-const wheelStall = (v) => (v ? `${v} % · ${showV(v + 0.001)}` : 'ümumi');
 const LABEL = { base:'vBase', min:'vMin', max:'vMax', curve:'vCurve',
-                accel:'vAccel', kp:'vKp', kd:'vKd',
-                stall:'vStall', hard:'vHard', crawl:'vCrawl',
-                stall25:'vS25', stall26:'vS26', gain25:'vG25', gain26:'vG26' };
+                accel:'vAccel', kp:'vKp', kd:'vKd', steerRate:'vSteerRate',
+                hard:'vHard', crawl:'vCrawl',
+                cornerAt:'vCornerAt', creepCm:'vCreepCm', creepMs:'vCreepMs' };
+
+// The vision/AI sliders — the same `cfg` object /vision reads and writes,
+// just exposed here too so the detector never needs a second tab to tune.
+const V = [
+  ['roi',   v => cfg.roi = v / 100,  () => `${Math.round(cfg.roi * 100)} %`,  () => cfg.roi * 100],
+  ['bias',  v => cfg.bias = v,       () => String(cfg.bias),                  () => cfg.bias],
+  ['contrast', v => cfg.contrast = v / 100,
+              () => cfg.contrast === 0 ? '0 (kapalı)' : cfg.contrast.toFixed(2), () => cfg.contrast * 100],
+  ['edge',  v => cfg.edge = v,
+              () => cfg.edge === 0 ? '0 (kapalı)' : String(cfg.edge),          () => cfg.edge],
+  ['sat',   v => cfg.sat = v,        () => String(cfg.sat),                   () => cfg.sat],
+  ['minw',  v => cfg.minw = v / 100, () => `${Math.round(cfg.minw * 100)} %`, () => cfg.minw * 100],
+  ['bands', v => cfg.bands = v,      () => String(cfg.bands),                 () => cfg.bands],
+  ['side',  v => cfg.side = v / 100, () => `${Math.round(cfg.side * 100)} %`, () => cfg.side * 100],
+  ['jump',  v => cfg.jump = v / 100, () => `${Math.round(cfg.jump * 100)} %`, () => cfg.jump * 100],
+  ['arm',   v => cfg.arm = v / 100,  () => cfg.arm.toFixed(2),                () => cfg.arm * 100],
+  ['chroma', v => cfg.chroma = v,    () => String(cfg.chroma),                () => cfg.chroma],
+  ['hueTol', v => cfg.hueTol = v,    () => cfg.hueTol + '°',                  () => cfg.hueTol],
+  ['fill',   v => cfg.fill = v / 100, () => `${Math.round(cfg.fill * 100)} %`, () => cfg.fill * 100],
+];
+const VLABEL = { roi:'vRoi', bias:'vBias', contrast:'vContrast', edge:'vEdge', sat:'vSat',
+                  minw:'vMinw', bands:'vBands', side:'vSide', jump:'vJump', arm:'vArm',
+                  chroma:'vChroma', hueTol:'vHueTol', fill:'vFill' };
+
+for (const [id, apply, text] of V) {
+  $(id).addEventListener('input', () => { apply(parseFloat($(id).value)); $(VLABEL[id]).textContent = text(); });
+  $(id).addEventListener('change', saveCfg);
+}
+function relabelV() { for (const [id, , text] of V) $(VLABEL[id]).textContent = text(); }
 
 for (const [id, apply, text] of S) {
   $(id).addEventListener('input', () => {
     apply(parseFloat($(id).value));
-    // The stall point is the origin every other number is measured from, so
-    // moving it re-labels the lot rather than just its own row.
-    if (id === 'stall') relabel(); else $(LABEL[id]).textContent = text();
+    $(LABEL[id]).textContent = text();
+    // `crawl` and the two creep sliders all change what the creep works out
+    // to, so the line that says so has to move with them.
+    if (id === 'crawl' || id === 'creepCm' || id === 'creepMs') showCalib();
   });
   $(id).addEventListener('change', saveCfg);
 }
@@ -549,20 +848,15 @@ function relabel() {
 }
 
 function showAll() {
-  for (const [id, , , value] of S) $(id).value = String(Math.round(value()));
+  for (const [id, , , value] of S) $(id).value = String(Math.round(value() * 10) / 10);
+  for (const [id, , , value] of V) $(id).value = String(Math.round(value() * 10) / 10);
   relabel();
-  $('swap').classList.toggle('on', !!pcfg.swap);
+  relabelV();
   paintSonar();
   $('cPct').value = calib.pct; $('cM').value = calib.metres; $('cS').value = calib.seconds;
   showCalib();
   setMode(cfg.mode);
 }
-
-$('swap').addEventListener('click', () => {
-  pcfg.swap = !pcfg.swap;
-  $('swap').classList.toggle('on', pcfg.swap);
-  saveCfg();
-});
 
 for (const id of ['cPct', 'cM', 'cS']) {
   $(id).addEventListener('change', () => {
@@ -573,25 +867,27 @@ for (const id of ['cPct', 'cM', 'cS']) {
   });
 }
 
-// 0 % is idle (1.00 V, zero throttle) and 100 % is --v-max, so a percentage is
-// only meaningful next to the ceiling it was taken against. The server tells us
-// both, and until it has, we say nothing rather than guess.
-function volts(pct) {
-  if (!status) return null;
-  const idle = status.idle_v ?? 1.0, top = status.vmax ?? 3.3;
-  return idle + (Math.max(0, Math.min(100, pct)) / 100) * (top - idle);
-}
-const showV = (pct) => { const v = volts(pct); return v == null ? '–' : v.toFixed(2) + ' V'; };
-
 function showCalib() {
   const at = metresPerSecond(calib.pct, calib);
   $('vCalib').textContent = at == null ? 'kalibrasyon yok'
     : `${at.toFixed(2)} m/s @ ${calib.pct} %`;
+  // Which unit the corner's creep is actually running in. Two sliders where
+  // only one is in force is exactly the kind of control that gets tuned for an
+  // afternoon with no effect, so the page says which one it is — and, when it
+  // is the wrong one, what to do about it.
+  const crawl = metresPerSecond(pcfg.crawl, calib);
+  $('vCreepWhich').textContent = at == null
+    ? `${pcfg.creepMs} ms — kalibrasyon yok`
+    : !(crawl > 0)
+      ? `${pcfg.creepMs} ms — ${pcfg.crawl} % ölü bölgede, teker dönmüyor`
+      : `${pcfg.creepCm} sm ≈ ${(pcfg.creepCm / 100 / crawl).toFixed(1)} s`;
+  $('vCreepWhich').style.color = at != null && crawl > 0 ? '' : 'var(--warn)';
 }
 
 // Track mode — the buttons are this page's, the state lives in road.js.
 function setMode(m) {
   $('mAuto').classList.toggle('on',  m === 'auto');
+  $('mLine').classList.toggle('on',  m === 'line');
   $('mDark').classList.toggle('on',  m === 'dark');
   $('mWhite').classList.toggle('on', m === 'white');
   roadSetMode(m);
@@ -612,6 +908,7 @@ function paintSonar() {
 }
 
 $('mAuto').addEventListener('click',  () => { setMode('auto');  saveCfg(); });
+$('mLine').addEventListener('click',  () => { setMode('line');  saveCfg(); });
 $('mDark').addEventListener('click',  () => { setMode('dark');  saveCfg(); });
 $('mWhite').addEventListener('click', () => { setMode('white'); saveCfg(); });
 
@@ -621,7 +918,12 @@ $('mirror').addEventListener('click', () => {
 $('flip').addEventListener('click', () => {
   flipped = !flipped; $('flip').classList.toggle('on', flipped);
 });
+$('mask').addEventListener('click', () => {
+  showMask = !showMask; $('mask').classList.toggle('on', showMask);
+});
 
+// Green is always "what the detector currently thinks the road is" — same
+// convention as /vision, so a wrong threshold looks the same on both pages.
 // ── camera ──────────────────────────────────────────────────────────
 // The Pi's webcam by default — see public/cam.js. It is the same picture the
 // robot's QR reader is looking at, over plain http, with nothing to grant.
@@ -685,6 +987,7 @@ function arm() {
   ost = obstacleState(performance.now());
   dist = 0; distAt = performance.now();
   armed = true;
+  armAck = false; armAt = performance.now();   // see the `running` check in ws.onmessage
   // Whatever the detector has decided by now is what this run is. A track does
   // not change type halfway round, so from here on a shadow or a bright
   // doorway cannot talk it into the other reading.
@@ -707,6 +1010,9 @@ function disarm(why) {
   $('arm').textContent = 'SÜRÜŞE BAŞLA';
   $('why').textContent = why || 'durdu';
   sendWs({ cmd: 'stop' });
+  // A lift the cargo run started stops with the run. (A replay does not need
+  // saying: 'stop' cancels it on the server.)
+  if (actSent) { sendWs({ cmd: 'actuator', action: 'stop' }); actSent = null; }
   flushRows(true);
   sendWs({ cmd: 'log_stop' });
 }
@@ -850,8 +1156,10 @@ function startLog() {
   sendWs({ cmd: 'log_start', meta: {
     note: $('note').value,
     pilot: { ...pcfg },
-    vision: { roi: cfg.roi, bias: cfg.bias, sat: cfg.sat, minw: cfg.minw,
-              bands: cfg.bands, side: cfg.side, jump: cfg.jump, mode: cfg.mode },
+    vision: { roi: cfg.roi, bias: cfg.bias, contrast: cfg.contrast, edge: cfg.edge,
+              sat: cfg.sat, minw: cfg.minw, bands: cfg.bands, side: cfg.side,
+              jump: cfg.jump, arm: cfg.arm, chroma: cfg.chroma, hueTol: cfg.hueTol,
+              fill: cfg.fill, mode: cfg.mode },
     calib,
   } });
   rows = [];
@@ -876,6 +1184,8 @@ function flushRows(force) {
 // ── loop ────────────────────────────────────────────────────────────
 let sentCmdAt = 0, t0 = performance.now();
 
+let missSentAt = 0;
+
 function loop() {
   requestAnimationFrame(loop);
   if (!camOn || !src.ready()) return;
@@ -883,17 +1193,107 @@ function loop() {
   vctx.save();
   vctx.translate(mirrored ? W : 0, flipped ? H : 0);
   vctx.scale(mirrored ? -1 : 1, flipped ? -1 : 1);
-  vctx.drawImage(src.el, 0, 0, W, H);
+  // The old 4:3 framing out of a 1080p frame — see camCrop() in cam.js.
+  vctx.drawImage(src.el, ...src.crop(), 0, 0, W, H);
   vctx.restore();
 
   const now = performance.now();
-  const res = detect(vctx.getImageData(0, 0, W, H).data);
+  const img = vctx.getImageData(0, 0, W, H);
+  const res = detect(img.data);
+  // Drawn by road.js, so it shows the split the scan itself used.
+  if (showMask) { roadPaintMask(img.data, res); vctx.putImageData(img, 0, 0); }
   const e = roadError(res);
+
+  // ── the run ──
+  // Stepped BEFORE the pilot, because it may have a corner to hand it, and
+  // fed with the PREVIOUS frame's demand, because that is the demand the
+  // wheels were running on during the interval that just elapsed. Using this
+  // frame's would credit the rover with millimetres it has not driven yet.
+  //
+  // The millimetres are rover.js's own arithmetic: percent of `max_feed` for
+  // the elapsed time. The wheels are steppers taking G-code, so unlike the
+  // ESP32 this replaced, what was asked for is what turned — the distance is
+  // not a calibration, it is a count.
+  const mdt = Math.min(0.25, (now - mAt) / 1000) / 60;      // minutes
+  mAt = now;
+  const feed = (status && status.max_feed) || 0;
+  const mmL = armed ? (last.p25 / 100) * feed * mdt : 0;
+  const mmR = armed ? (last.p26 / 100) * feed * mdt : 0;
+  // The cargo run's clocks — the QR wait and the lift — only run while armed:
+  // a page left disarmed must not time a run out, or finish a lift, that
+  // nothing is actually doing.
+  mOut = missionStep(mst, { junction: e.junction, end: e.end, bands: e.bands,
+                            near: e.near,
+                            dLeftMm: mmL, dRightMm: mmR, turning: !!last.turn,
+                            dt: armed ? mdt * 60 : 0,
+                            qr: status ? status.qr : null,
+                            replay: status ? status.replay : null });
+
+  // The cargo run asking the server for what only the server can do: drive a
+  // taught leg (by id, once), and run the lift (by state, on each change).
+  if (armed && mOut.replay && mOut.replay.id !== replaySent) {
+    replaySent = mOut.replay.id;
+    sendWs({ cmd: 'replay', id: mOut.replay.id, slot: mOut.replay.slot, leg: mOut.replay.leg });
+  }
+  const actWant = armed ? mOut.act : null;
+  if (actWant !== actSent) {
+    sendWs(actWant ? { cmd: 'actuator', action: 'start', dir: actWant }
+                   : { cmd: 'actuator', action: 'stop' });
+    actSent = actWant;
+  }
+
+  // /map has no camera and cannot run any of this, so it is told the answer.
+  // 5 Hz: a map is watched, not steered by. A cargo run is reported without a
+  // pose: it has no map, and the pose it keeps for counting turns is not a
+  // place on the field.
+  if (now - missSentAt >= 200) {
+    missSentAt = now;
+    paintMission();
+    if (mst.target || mst.cargo) {
+      const onMap = !mst.cargo && mst.pose;
+      sendWs({ cmd: 'mission_state',
+               state: { ...mOut, pose: onMap ? mOut.pose : null,
+                        at: onMap ? mst.pose.at : null,
+                        h: onMap ? mst.pose.h : 0,
+                        path: onMap ? mst.pose.path.slice(-400) : [] } });
+    }
+  }
+
   // Not armed still runs the pilot, so the steer arrow is live while you tune —
   // but with the speed budget forced to zero, so nothing accumulates and the
   // readout cannot show a speed the robot is not being given.
-  let out = pilotStep(pst, { ...e, want: cfg.bands },
-                      armed ? pcfg : { ...pcfg, base: 0, min: 0 }, now);
+  // `calib` rides along in the pilot's config rather than in `pcfg` itself:
+  // the corner's creep is a distance and needs the same metres-per-percent the
+  // lap distance uses, but the calibration is its own saved thing and must not
+  // end up duplicated inside the pilot block of follow.json.
+  // The mission's corner outranks the detector's. There is only one on this
+  // field — a station's own paint has no corners in it — and when the two
+  // disagree the one that knows which junction this is wins.
+  // The cargo run's QR step creeps: the pilot still steers, under a lower
+  // speed ceiling, so the reader gets its looks at a code as it goes by.
+  const creep = mOut.creep ? { base: Math.min(pcfg.base, mOut.creep),
+                               max: Math.min(pcfg.max, mOut.creep) } : {};
+  let out = pilotStep(pst, { ...e, corner: mOut.corner || e.corner, want: cfg.bands },
+                      armed ? { ...pcfg, calib, ...creep } : { ...pcfg, calib, base: 0, min: 0 },
+                      now);
+
+  // A blind step drives itself. `go`, `back`, `spin` and the sweep have no line
+  // to steer by — two of them happen with the line deliberately out of shot —
+  // so the mission's wheel demand replaces the pilot's outright rather than
+  // being mixed with it. There is nothing to mix: the pilot's answer to "I
+  // cannot see the road" is to stop, and stopping is the one thing a
+  // half-finished 180° must not do.
+  //
+  // The pilot's own lost-timers are held down for the same reason. Losing the
+  // line during one of these is not the line being lost, it is the step doing
+  // what it was asked to.
+  if (mOut.drive) {
+    out = { ...out, p25: mOut.drive.p25, p26: mOut.drive.p26,
+            speed: Math.max(Math.abs(mOut.drive.p25), Math.abs(mOut.drive.p26)),
+            steer: 0, reason: mOut.why, lost: false, stop: false };
+    pst.lostAt = 0;
+    pst.recover = false;
+  }
 
   // The obstacle sensor has the last word. It runs whether or not it is
   // enabled, so the readout is honest either way, but it only takes the wheels
@@ -918,6 +1318,20 @@ function loop() {
 
   // The pilot asked to give up: stop rather than sit at 0 % with a live driver.
   if (armed && out.stop) disarm(out.reason);
+
+  // Arriving is a reason to stop, and so is losing the count. The second one
+  // especially: a rover that cannot say which junction it is at must not keep
+  // driving past more of them — see the `lost` note in mission.js.
+  //
+  // So is the gate, which is a genuine stop and not a pause: the door does not
+  // open until the factory automation says so, and nothing here can ask it
+  // yet. Pressing DEVAM ET is what a person does instead.
+  if (armed && (mOut.phase === 'done' || mOut.phase === 'lost'
+                || mOut.phase === 'gate')) disarm(mOut.why);
+
+  // The other half of ignoring a stale `running: false`: a START the server
+  // never confirms is not a run to keep "driving" on the page.
+  if (armed && !armAck && now - armAt > ARM_ACK_MS) disarm('sunucu START-ı təsdiqləmədi');
 
   if (armed) {
     // 20 Hz is the board's watchdog rate. Sending every rendered frame would
@@ -946,7 +1360,10 @@ function loop() {
         out25: status ? status.out[0] : null,
         out26: status ? status.out[1] : null,
         v25: esp.vL ?? null, v26: esp.vR ?? null,
-        lost: out.lost, recover: out.recover, fps, dist: +dist.toFixed(2),
+        lost: out.lost, recover: out.recover, turn: out.turn, corner: out.corner,
+        creep: out.creep,
+        end: e.end ? +e.end.dist.toFixed(2) : null,
+        fps, dist: +dist.toFixed(2),
         fwd_cm: son.fwd_cm ?? null, blocked: !!out.blockedBySonar,
         reason: out.reason,
       });
@@ -967,6 +1384,9 @@ function loop() {
 }
 
 function drawOverlay(res, e) {
+  // The code the server just read, outlined where it is — on the Pi's camera
+  // only, the picture the reader actually looked at.
+  qrViewDraw(vctx, W, H, { mirrored, flipped, show: src.mode === 'rpi', crop: src.crop(), size: src.size() });
   const half = W / 2;
   vctx.save();
   vctx.fillStyle = 'rgba(0,0,0,.35)';
@@ -987,6 +1407,32 @@ function drawOverlay(res, e) {
     vctx.fillStyle = 'rgba(63,185,80,.22)';
     vctx.fillRect(p.x - p.w / 2, p.y - 3, p.w, 6);
   }
+  // Where the paint runs out — on the competition track, a station arriving.
+  if (res.end) {
+    vctx.strokeStyle = '#d29922'; vctx.fillStyle = '#d29922'; vctx.lineWidth = 3;
+    vctx.beginPath(); vctx.moveTo(0, res.end.y); vctx.lineTo(W, res.end.y); vctx.stroke();
+    vctx.font = '600 12px ui-monospace,Menlo,monospace';
+    vctx.fillText('ÇİZGİ SONU', 8, res.end.y - 6);
+  }
+
+  // The 90° corner and the way its arm goes — the same drawing as /vision, for
+  // the same reason: a corner reported on the wrong side has to be visible as
+  // a wrong side, not inferred from the robot having driven into a wall.
+  if (res.corner) {
+    const dir = res.corner.dir;
+    vctx.strokeStyle = '#d29922'; vctx.fillStyle = '#d29922'; vctx.lineWidth = 3;
+    vctx.setLineDash([6, 4]);
+    vctx.beginPath(); vctx.moveTo(0, res.corner.y); vctx.lineTo(W, res.corner.y); vctx.stroke();
+    vctx.setLineDash([]);
+    const tip = dir > 0 ? W - 12 : 12;
+    vctx.beginPath(); vctx.moveTo(dir > 0 ? W - 70 : 70, res.corner.y); vctx.lineTo(tip, res.corner.y); vctx.stroke();
+    vctx.beginPath();
+    vctx.moveTo(tip, res.corner.y);
+    vctx.lineTo(tip - dir * 14, res.corner.y - 9);
+    vctx.lineTo(tip - dir * 14, res.corner.y + 9);
+    vctx.fill();
+  }
+
   // Where the pilot is steering, as opposed to where the road is: the gap
   // between the two arrows is the whole of what kP and kD do.
   if (e.near != null) {
@@ -1002,7 +1448,6 @@ function drawOverlay(res, e) {
 
 function paintReadout(res, e, out) {
   $('rSpeed').textContent = Math.round(out.speed) + ' %';
-  $('rSpeedV').textContent = showV(lift(out.speed, pcfg.stall));
   $('rErr').textContent = e.near == null ? '–'
     : (e.near >= 0 ? '+' : '') + e.near.toFixed(2);
   $('rBands').textContent = e.bands + '/' + cfg.bands;
@@ -1010,19 +1455,24 @@ function paintReadout(res, e, out) {
     ? '–' : dist.toFixed(1) + ' m';
   $('rP25').textContent = out.p25.toFixed(0);
   $('rP26').textContent = out.p26.toFixed(0);
-  $('rV25').textContent = showV(out.p25);
-  $('rV26').textContent = showV(out.p26);
   $('b25').style.width = Math.min(100, out.p25) + '%';
   $('b26').style.width = Math.min(100, out.p26) + '%';
   $('steer').style.left = (50 + out.steer * 48) + '%';
   $('rFps').textContent = fps;
-  $('rMode').textContent = res.mode === 'dark' ? 'siyah yol' : 'beyaz yol';
+  $('rMode').textContent = res.mode === 'line' ? 'yarışma çizgisi'
+    : res.mode === 'dark' ? 'siyah yol' : 'beyaz yol';
+  const modeName = res.mode === 'line' ? 'yarışma çizgisi'
+    : res.mode === 'dark' ? 'siyah yol' : 'beyaz yol';
   $('lockNote').textContent = cfg.mode !== 'auto' ? 'elle seçildi'
-    : armed ? `kilitli: ${res.mode === 'dark' ? 'siyah yol' : 'beyaz yol'}`
-    : 'sürüş boyunca kilitlenir';
-  $('rReason').textContent = armed ? out.reason
-    : (status && status.reason) || 'durdu';
-  $('rReason').style.color = (out.recover || out.blockedBySonar) ? 'var(--stop)' : '';
+    : armed ? `kilitli: ${modeName}` : 'sürüş boyunca kilitlenir';
+  // While creeping up to a corner, how far it has got. Without it the approach
+  // looks like a robot that has stopped steering for no reason — and it is the
+  // number you watch to decide whether the 15 cm wants to be 12 or 20.
+  $('rReason').textContent = !armed ? ((status && status.reason) || 'durdu')
+    : out.creep == null ? out.reason
+    : `${out.reason} ${out.creep.toFixed(0)}/${pcfg.creepCm} sm`;
+  $('rReason').style.color = (out.recover || out.blockedBySonar) ? 'var(--stop)'
+    : out.turn ? 'var(--warn)' : '';
   $('rSon').textContent = !sonarOn ? 'kapalı'
     : obs.cm == null ? 'yankı yok'
     : obs.phase === 'go' ? `açık · ${obs.cm} sm`
@@ -1039,17 +1489,6 @@ paintSonar();
 src.useRpi();               // the robot's own eye, by default
 connect();
 loop();
-
-// The wheel trim, shown the same way on every page — see public/wheels.js.
-// `mode` is a promise to the reader about THIS page: 'raw' means the
-// numbers below are not applied here, which is deliberate on the pages
-// where the threshold is measured.
-const WT = wheelsMount({ strip: false, mode: 'applied' });
-wheelsAnnotate({
-  base: 'base', kp: 'kP', kd: 'kD', curve: 'curve', hard: 'hard',
-  stall: 'stall', stall25: 'stall25', stall26: 'stall26',
-  gain25: 'gain25', gain26: 'gain26', swap: 'swap',
-});
 </script>
 </body>
 </html>

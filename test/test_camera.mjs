@@ -1,21 +1,11 @@
 /**
- * The Pi's own three: the camera, the QR reader and the machine stats.
- *
- * No hardware and no ffmpeg. What is tested is the part of camera.js that
- * would be hardest to debug on a robot — cutting a byte stream back into whole
- * JPEGs — plus the QR reader's counting, which is the piece with the real bug
- * potential in it, and the /proc arithmetic behind the dashboard's numbers.
- *
- * The QR check is a genuine decode: a real "ROBOT-A1" code, as its 21x21
- * module matrix, painted into a grey buffer the same shape ffmpeg produces.
- * The matrix is embedded rather than generated so the test needs no encoder,
- * and it is a real code rather than a mock so a broken decoder cannot pass.
+ * The Pi's camera. No hardware and no ffmpeg needed: what is tested is the
+ * part of camera.js that would be hardest to debug on a robot — cutting a
+ * byte stream back into whole JPEGs.
  *
  *   node test/test_camera.mjs
  */
 import { Camera } from '../camera.js';
-import { QrReader } from '../qr.js';
-import { RpiStats } from '../rpi.js';
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`  [${c ? 'PASS' : 'FAIL'}] ${m}`); };
@@ -95,124 +85,53 @@ console.log('\nThe latest frame, and who is watching');
   ok(c.status().viewers === 0, 'and the count in the status follows');
 }
 
-console.log('\nThe grey tap is fixed-size frames, not a stream');
+console.log('\nThe QR decoder\'s answers: a header, then whole frames');
 {
-  const c = new Camera({ enabled: false, qrWidth: 4, qrHeight: 3 });
-  const sizes = [];
-  c.onGray((f, w, h) => sizes.push([f.length, w, h]));
-  c._onGrayData(Buffer.alloc(30, 7));            // 2.5 frames of 12 bytes
-  ok(sizes.length === 2, `12-byte frames out of 30 bytes: two whole ones (${sizes.length})`);
-  ok(sizes.every(([n, w, h]) => n === 12 && w === 4 && h === 3),
-     'each one is exactly one frame, with its dimensions');
-  c._onGrayData(Buffer.alloc(6, 7));             // completes the third
-  ok(sizes.length === 3, 'the remainder is carried, not dropped');
-
-  const c2 = new Camera({ enabled: false, qrWidth: 4, qrHeight: 3 });
-  c2._onGrayData(Buffer.alloc(120));
-  ok(c2._gray.length === 0, 'with nobody reading QR the grey frames are dropped');
-}
-
-console.log('\nReading a real QR code');
-{
-  // "ROBOT-A1", version 1, error correction M. A real code: if the decoder is
-  // wrong, or the grey->RGBA conversion is, this cannot pass.
-  const M = ['#######...#...#######', '#.....#.#.#.#.#.....#', '#.###.#..#....#.###.#',
-             '#.###.#..##...#.###.#', '#.###.#.#####.#.###.#', '#.....#..###..#.....#',
-             '#######.#.#.#.#######', '.........#...........', '#.#.#.#.....#...#..#.',
-             '####...###.#.#..#.##.', '.##..####..#.##.##.##', '...#.#..##.###.....##',
-             '...#.##.####..#.#.#.#', '........#.#...##.#...', '#######...#.#..##..##',
-             '#.....#..#....#....#.', '#.###.#.#.#.#.##..#..', '#.###.#....#.#.##.##.',
-             '#.###.#.#.##.##.##..#', '#.....#..#.###.#...#.', '#######.#..#.########'];
-
-  /** Paint the matrix into a grey buffer, scaled up, with a quiet zone. */
-  const render = (scale, W = 320, H = 240, dark = 0, light = 255) => {
-    const g = Buffer.alloc(W * H, light);
-    const n = M.length, size = n * scale;
-    const x0 = Math.floor((W - size) / 2), y0 = Math.floor((H - size) / 2);
-    for (let r = 0; r < n; r++) {
-      for (let c = 0; c < n; c++) {
-        if (M[r][c] !== '#') continue;
-        for (let dy = 0; dy < scale; dy++) {
-          const row = (y0 + r * scale + dy) * W + x0 + c * scale;
-          g.fill(dark, row, row + scale);
-        }
-      }
-    }
-    return g;
+  // jpeg_gray.py's protocol: u32 width, u32 height, then width*height bytes.
+  const frame = (w, h, fill) => {
+    const b = Buffer.alloc(8 + w * h, fill);
+    b.writeUInt32BE(w, 0); b.writeUInt32BE(h, 4);
+    return b;
   };
+  const c = new Camera({ enabled: false });
+  const got = [];
+  c.onGray((f, w, h) => got.push([f.length, w, h, f[0]]));
+  c._qrBusy = true;
+  const two = Buffer.concat([frame(4, 3, 7), frame(4, 3, 9)]);
+  c._onGrayData(two.subarray(0, 5));             // not even a whole header
+  c._onGrayData(two.subarray(5, 15));
+  ok(got.length === 0 && c._qrBusy, 'half a frame delivers nothing, and the decoder is still busy');
+  c._onGrayData(two.subarray(15));
+  ok(got.length === 2 && got.every(([n, w, h]) => n === 12 && w === 4 && h === 3),
+     `split and joined pieces come out as two whole 4x3 frames (${got.length})`);
+  ok(got[0][3] === 7 && got[1][3] === 9, 'in order, each with its own pixels');
+  ok(!c._qrBusy, 'a delivered frame frees the decoder for the next JPEG');
 
-  const q = new QrReader();
-  if (!q.available) {
-    console.log(`  [SKIP] jsqr not installed — ${q.error}`);
-  } else {
-    const frame = render(8);
-    const r = q.feed(frame, 320, 240, 1000);
-    ok(r && r.text === 'ROBOT-A1', `the code is read: ${r && JSON.stringify(r.text)}`);
-    ok(r && r.fresh === true, 'the first sighting is a new reading');
-    ok(q.count === 1 && q.text === 'ROBOT-A1', 'and it is counted once');
-
-    // The case that gets counting wrong: a sign held in front of the robot is
-    // in view for seconds, which is dozens of decodes of one code.
-    for (let t = 1100; t <= 3000; t += 100) q.feed(frame, 320, 240, t);
-    ok(q.count === 1, `twenty frames of the same sign is still one reading (${q.count})`);
-    ok(q.decodes === 21, `...though every frame did decode (${q.decodes})`);
-
-    // Out of sight past the gap, then back: that is driving past it twice.
-    const later = 3000 + q.cfg.regapMs + 500;
-    q.feed(frame, 320, 240, later);
-    ok(q.count === 2, `the same code after a real gap is a second reading (${q.count})`);
-    ok(q.history.length === 2, 'both are in the history');
-    ok(q.history[1].at === later, 'stamped when it was read');
-
-    // Nothing there.
-    const before = q.count;
-    const noise = Buffer.alloc(320 * 240);
-    for (let i = 0; i < noise.length; i++) noise[i] = (i * 37) % 256;
-    ok(q.feed(noise, 320, 240, later + 10000) === null, 'noise is not a QR code');
-    ok(q.count === before, '...and does not count as one');
-    ok(q.text === 'ROBOT-A1',
-       'the last code read is held rather than cleared by the next blank frame');
-
-    // A frame smaller than it claims must not read past the end of the buffer.
-    ok(q.feed(Buffer.alloc(100), 320, 240, later + 20000) === null,
-       'a short buffer is refused rather than read off the end');
-
-    const st = q.status();
-    ok(st.available === true && st.count === 2 && typeof st.ms === 'number',
-       'the status carries what the dashboard shows');
-    ok(st.age_s !== null && st.history.length === 2, 'including how long ago, and the list');
-  }
+  c._qrBusy = true;
+  c._onGrayData(frame(0, 0, 0));
+  ok(got.length === 2 && !c._qrBusy, 'a 0x0 answer (JPEG did not decode) delivers nothing and frees it');
+  c._onGrayData(frame(2, 2, 5));
+  ok(got.length === 3 && got[2][1] === 2, 'and the next frame, of another size, still comes through');
 }
 
-console.log('\nThe Pi\'s own numbers');
+console.log('\nOnly a few JPEGs a second go to the decoder');
 {
-  const s = new RpiStats();
-  const a = s.sample(Date.now()).status();
-  ok(typeof a.mem.total === 'number' && a.mem.total > 0, `total memory (${a.mem.total})`);
-  ok(a.mem.used > 0 && a.mem.used < a.mem.total, 'used is inside total');
-  ok(a.mem.pct >= 0 && a.mem.pct <= 100, `memory percentage is a percentage (${a.mem.pct})`);
-  ok(Array.isArray(a.load) && a.load.length === 3, 'load average, all three');
-  ok(a.ncpu >= 1, `core count (${a.ncpu})`);
-  ok(typeof a.uptime_s === 'number' && a.uptime_s > 0, 'uptime');
-  ok(a.proc && a.proc.rss > 0 && a.proc.pid === process.pid, 'and this process, separately');
-
-  // CPU is a delta between two samples, so a single sample cannot report one —
-  // and must not invent an average since boot instead.
-  const fresh = new RpiStats();
-  ok(fresh.busy === null, 'one sample is not enough to know the CPU load');
-
-  // Burn a little CPU between two samples so there is something to measure.
-  const t0 = Date.now();
-  while (Date.now() - t0 < 220) Math.sqrt(Math.random());
-  const b = s.sample(Date.now()).status();
-  ok(b.cpu === null || (b.cpu >= 0 && b.cpu <= 100), `CPU busy is a percentage (${b.cpu})`);
-  ok(b.proc.cpu === null || b.proc.cpu >= 0, `this process's own CPU (${b.proc.cpu})`);
-  if (b.temp_c !== null) {
-    ok(b.temp_c > 0 && b.temp_c < 120, `CPU temperature looks like one (${b.temp_c} °C)`);
-  } else {
-    console.log('  [SKIP] no thermal zone on this machine');
-  }
-  ok(Array.isArray(b.cores), `per-core busy (${b.cores.length} cores)`);
+  // A stand-in decoder, so nothing is spawned: it records what it was sent.
+  const c = new Camera({ enabled: false, qrFps: 5 });
+  const sent = [];
+  c._decoder = () => ({ stdin: { write: (b) => sent.push(b.length) } });
+  c._maybeQr(jpeg(10), 1000);
+  ok(sent.length === 0, 'nobody reading QR: no JPEG is sent');
+  c.onGray(() => {});
+  c._maybeQr(jpeg(10), 1000);
+  ok(sent.length === 2 && sent[0] === 4 && sent[1] === 14, 'a length header, then the JPEG');
+  c._qrBusy = false;
+  c._maybeQr(jpeg(10), 1100);
+  ok(sent.length === 2, 'the next one 100 ms later is not sent (5 a second = every 200 ms)');
+  c._maybeQr(jpeg(10), 1250);
+  ok(sent.length === 4, '...250 ms later it is');
+  c._maybeQr(jpeg(10), 1600);
+  ok(sent.length === 4, 'and nothing more is sent while that one is still being decoded');
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

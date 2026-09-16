@@ -30,6 +30,28 @@
 // cached one is a frozen picture.
 function camStreamUrl() { return `/camera/stream.mjpg?t=${Date.now()}`; }
 
+/**
+ * The 4:3 view the detector was tuned on, out of whatever the camera sends.
+ *
+ * The Pi's webcam now runs at 1920x1080, because the 50 mm QR code is
+ * unreadable at 640x480 (see qr.js). Everything that finds the line was tuned
+ * on 640x480, and drawing a 16:9 frame into the 480x360 canvas would squash
+ * it sideways and move the line. So the pages cut the old framing back out.
+ * The webcam's 640x480 mode turned out to be its 1080p frame's centre
+ * 1440x1080, 20 px left of centre (best fit on 2026-09-15: zoom 1.00, shift
+ * −9 px at 640 wide) — the same picture, just with more pixels.
+ *
+ * A 4:3 (or taller) source is drawn whole; the shift is for the Pi's own
+ * webcam only — a laptop camera is not that lens.
+ */
+const CAM_RPI_SHIFT = -20 / 1920;
+function camCrop(w, h, rpi) {
+  if (!(w > 0 && h > 0) || w / h < 4 / 3 + 0.01) return [0, 0, w || 1, h || 1];
+  const sw = Math.round((h * 4) / 3);
+  const sx = Math.max(0, Math.min(w - sw, Math.round((w - sw) / 2 + (rpi ? CAM_RPI_SHIFT * w : 0))));
+  return [sx, 0, sw, h];
+}
+
 // The stream ends when the server restarts or ffmpeg is restarting after the
 // webcam was unplugged. Neither is fatal and both fix themselves, so reconnect
 // rather than leaving a page showing the last frame it happened to receive.
@@ -91,6 +113,12 @@ function camMount(opts = {}) {
     return el.tagName === 'IMG'
       ? { w: el.naturalWidth, h: el.naturalHeight }
       : { w: el.videoWidth, h: el.videoHeight };
+  };
+
+  /** The part of the frame to draw: [sx, sy, sw, sh] in source pixels. */
+  self.crop = () => {
+    const s = self.size();
+    return s ? camCrop(s.w, s.h, self.mode === 'rpi') : [0, 0, 1, 1];
   };
 
   const dropStream = () => {

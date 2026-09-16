@@ -1,22 +1,15 @@
 /**
- * Every page, in a real browser, against a real server — both machines.
+ * Every page, in a real browser, against a real server.
  *
- * The unit tests cover what each server puts on the wire. What they cannot see
+ * The unit tests cover what the server puts on the wire. What they cannot see
  * is a page that throws on load, and a page that throws on load looks exactly
  * like one that is fine until you try to drive with it. So: open every page,
  * fail on any console error, and assert on what actually left the browser.
  *
- * Two servers, because there are two boards and the pages differ:
- *
- *   · the ESP32 DAC bench, faked, on 8199 — the hub, /manual, /drive, /pins,
- *     /setup, /obstacle, /dashboard, and the shared wheel-trim strip
- *   · the Creality mainboard, with no port opened, on 8198 — /gcode and the
- *     road-following pages, with /api/marlin intercepted so nothing reaches a
- *     serial port. What that half tests is key -> vector -> request body.
- *
- * /vision, /follow and /tune are served by both and checked against both: they
- * are the same pages, and the whole point of them is that they do not care
- * which board is at the far end.
+ * One server: the Creality mainboard, with no port opened, on 8198 — /gcode
+ * and the road-following pages, with /api/marlin intercepted so nothing
+ * reaches a serial port. What most of this tests is key -> vector -> request
+ * body.
  */
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -55,130 +48,21 @@ function serve(argv) {
 
 const browser = await chromium.launch();
 
-// ══ the ESP32 DAC bench ══════════════════════════════════════════════
-const bench = serve(['--fake', '--esp', '127.0.0.1', '--http', '8199',
-                     '--host', '127.0.0.1', '--no-camera']);
-await sleep(1400);
-
-const PAGES = ['/', '/dashboard', '/setup', '/manual', '/drive', '/vision', '/follow',
-               '/tune', '/obstacle', '/pins'];
-
-console.log('\nHər səhifə səhvsiz açılır və zolağı göstərir');
-for (const path of PAGES) {
-  const page = await browser.newPage();
-  const errs = [];
-  page.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
-  page.on('pageerror', e => errs.push(String(e)));
-  await page.goto(`http://127.0.0.1:8199${path}`, { waitUntil: 'load' });
-  await page.waitForTimeout(700);
-  const strip = await page.$('.wtrim');
-  const txt = strip ? (await strip.innerText()).replace(/\s+/g, ' ') : '';
-  ok(errs.length === 0, `${path} — konsol səhvi yoxdur ${errs[0] || ''}`);
-  if (path !== '/follow' && path !== '/setup') {
-    ok(!!strip && /GPIO25/.test(txt) && /GPIO26/.test(txt),
-       `${path} — təkər zolağı görünür: ${txt.slice(0, 62)}`);
-  }
-  await page.close();
-}
-
-console.log('\nOxunan ayar hər səhifədə eynidir');
-{
-  // Change it once, then look at three pages that had no part in the change.
-  const setup = await browser.newPage();
-  await setup.goto('http://127.0.0.1:8199/setup', { waitUntil: 'load' });
-  await setup.waitForTimeout(600);
-  await setup.evaluate(() => {
-    const ws = new WebSocket(`ws://${location.host}/`);
-    return new Promise(res => {
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ cmd: 'follow_cfg',
-          cfg: { pilot: { stall25: 27, stall26: 19, gain25: 0.88, gain26: 1 } } }));
-        setTimeout(() => { ws.close(); res(); }, 300);
-      };
-    });
-  });
-  await setup.close();
-
-  for (const path of ['/manual', '/vision', '/pins']) {
-    const p = await browser.newPage();
-    await p.goto(`http://127.0.0.1:8199${path}`, { waitUntil: 'load' });
-    await p.waitForTimeout(800);
-    const txt = (await p.innerText('.wtrim')).replace(/\s+/g, ' ');
-    ok(/27 %/.test(txt) && /19 %/.test(txt) && /0\.88/.test(txt),
-       `${path} — /setup-da yazılan rəqəmlər burada da görünür: ${txt.slice(0, 62)}`);
-    ok(!/\*/.test(txt), `${path} — ölçülüb işarəsi, ulduz yoxdur`);
-    await p.close();
-  }
-
-  // And the raw pages must say so, or you will measure through a filter and
-  // record a threshold that is not the threshold.
-  const m = await browser.newPage();
-  await m.goto('http://127.0.0.1:8199/manual', { waitUntil: 'load' });
-  await m.waitForTimeout(500);
-  ok(/ham/i.test(await m.innerText('.wtrim')), '/manual «ham çıkış» yazır');
-  await m.close();
-
-  const f = await browser.newPage();
-  await f.goto('http://127.0.0.1:8199/follow', { waitUntil: 'load' });
-  await f.waitForTimeout(700);
-  ok((await f.$$('.i')).length >= 8,
-     `/follow-da ${(await f.$$('.i')).length} izah nişanı var`);
-  await f.hover('.i');
-  await f.waitForTimeout(200);
-  const tip = await f.$('.itip');
-  ok(!!tip, 'nişanın üstünə gələndə izah açılır');
-  if (tip) {
-    const t = await tip.innerText();
-    ok(t.length > 30, `izah mətni doludur: ${t.slice(0, 48).replace(/\n/g, ' · ')}`);
-    const box = await tip.boundingBox();
-    const vp = f.viewportSize();
-    ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= vp.width + 1,
-       'izah qutusu ekrandan çıxmır');
-  }
-  await f.close();
-}
-
-console.log('\n/setup addımları');
-{
-  const p = await browser.newPage();
-  await p.goto('http://127.0.0.1:8199/setup', { waitUntil: 'load' });
-  await p.waitForTimeout(700);
-  const steps = await p.$$('.step');
-  ok(steps.length === 6, `altı addım göstərilir  (${steps.length})`);
-  ok((await p.$$('.step.done')).length >= 2, 'ölçülmüş addımlar yaşıl işarələnib');
-  ok((await p.$$('.drive')).length === 2, 'iki təkər üçün ayrıca test düyməsi var');
-
-  // The tester must send one pin and zero the other, or "measure this wheel"
-  // quietly measures both and the robot drives off the table.
-  const sent = await p.evaluate(async () => {
-    const out = [];
-    const real = WebSocket.prototype.send;
-    WebSocket.prototype.send = function (d) { out.push(d); return real.call(this, d); };
-    const rng = document.querySelectorAll('.drive input[type=range]')[0];
-    rng.value = 31;
-    rng.dispatchEvent(new Event('input', { bubbles: true }));
-    const btn = document.querySelectorAll('.hold')[0];
-    btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
-    await new Promise(r => setTimeout(r, 120));
-    btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
-    await new Promise(r => setTimeout(r, 120));
-    WebSocket.prototype.send = real;
-    return out.map(x => JSON.parse(x));
-  });
-  const started = sent.find(x => x.cmd === 'start');
-  ok(!!started && started.p25 === 31 && started.p26 === 0,
-     `test yalnız bir pinə gedir, xam faizlə  (${JSON.stringify(started)})`);
-  ok(sent.some(x => x.cmd === 'idle'), 'buraxanda dayanır');
-  await p.close();
-}
-
-bench.proc.kill();
-
-// ══ the Creality mainboard ═══════════════════════════════════════════
 const BASE = 'http://127.0.0.1:8198';
-const marlin = serve(['--marlin', '--http', '8198', '--host', '127.0.0.1',
-                      '--no-connect', '--no-camera']);
-await sleep(1400);
+// --no-actuator / --no-lidar: this suite runs on the Pi, and pressing Q or
+// the lidar's START in a test must not run a real motor. --routes: nor may it
+// read or write the routes somebody actually taught.
+const ROUTES = path.join((await import('node:os')).tmpdir(), `routes-pages-${process.pid}.json`);
+const marlin = serve(['--http', '8198', '--host', '127.0.0.1',
+                      '--no-connect', '--no-camera', '--no-actuator', '--no-lidar', '--no-advertise',
+                      '--routes', ROUTES]);
+// Wait for the port rather than a fixed time. A fixed 1.4 s was sometimes not
+// enough on the Pi, and a suite that starts early dies on its first page —
+// leaving its server running with nobody reading its stdout, which the next
+// run then finds on 8198 and loses to EPIPE halfway through.
+for (let i = 0; i < 100 && marlin.out.dead === null; i++) {
+  try { await fetch(BASE + '/api/qr'); break; } catch { await sleep(100); }
+}
 
 /** A board that is plugged in, powered, and answering. */
 const boardStatus = (extra = {}) => ({
@@ -217,7 +101,7 @@ async function openPage(browser, statusExtra = {}) {
                           body: JSON.stringify(body) });
   });
 
-  await page.goto(BASE + '/', { waitUntil: 'load' });
+  await page.goto(BASE + '/gcode', { waitUntil: 'load' });
   await page.waitForTimeout(500);
   return { page, errs, sent };
 }
@@ -244,23 +128,36 @@ const { page, errs, sent } = await openPage(browser);
 
 console.log('\nThe four keys are labelled with the G-code they send');
 {
-  eq(await page.innerText('#gW'), 'X-5.00 Y5.00', 'W');
-  eq(await page.innerText('#gA'), 'X5.00 Y5.00',  'A');
-  eq(await page.innerText('#gS'), 'X5.00 Y-5.00', 'S');
-  eq(await page.innerText('#gD'), 'X-5.00 Y-5.00','D');
+  // W and S are the OPPOSITE of DIRECTIONS.forward/back on the wire, on
+  // purpose: the camera sits on the end DIRECTIONS calls the back, so the
+  // pilot drives the chassis that way round and a human at the keyboard is
+  // standing at the other end looking at what they call the front. See
+  // manualVec() in public/gcode.html. A and D are untouched — which way a
+  // thing spins does not depend on which end you call the front — but they are
+  // scaled by turnScale (0.1), because the same wheel distance spent turning
+  // on the spot reads as a much bigger movement than it does going forward.
+  eq(await page.innerText('#gW'), 'X80.00 Y-80.00', 'W is the camera\'s forward');
+  eq(await page.innerText('#gA'), 'X8.00 Y8.00',    'A spins, at a tenth of the step');
+  eq(await page.innerText('#gS'), 'X-80.00 Y80.00', 'S');
+  eq(await page.innerText('#gD'), 'X-8.00 Y-8.00',  'D');
 
-  // The chunk size is a stopping distance, and the page has to say so — the
-  // 100 mm default it shipped with was a 141 mm diagonal, eight and a half
-  // seconds of coasting after the key came up.
+  // The chunk size is most of the stopping distance, and the page has to say
+  // so — the 100 mm default it shipped with was a 141 mm diagonal, eight and
+  // a half seconds of coasting after the key came up.
   const hint = await page.innerText('#stopHint');
-  // X and Y are the two wheels, so a 5 mm chunk on each moves the rover 5 mm
-  // forward — not the 7.07 mm diagonal Marlin plans and times the move by.
-  ok(/stops within 5\.0 mm of travel/.test(hint),
-     `the stopping distance is ground travel, not Marlin's vector: ${hint}`);
-  ok(!/7\.1/.test(hint), 'the planned distance is not passed off as the real one');
+  // X and Y are the two wheels, so an 80 mm chunk on each moves the rover
+  // 80 mm forward — not the 113.1 mm diagonal Marlin plans and times the
+  // move by. The next chunk is on the board before the current one starts
+  // (HOLD_MARGIN_S, 0.15 s), so up to two chunks plus 0.15 s of travel are
+  // there when the key comes up: 113.1 mm at F16000 is 0.42 s, 188.6 mm/s of
+  // ground, so 2 × 80 + 0.15 × 188.6 = 188.3 mm. (The fixture's M204 T1000
+  // lets an 80 mm chunk reach F16000; the planner cap √(2·a·d) is 476 mm/s.)
+  ok(/stops within 188\.3 mm of travel/.test(hint),
+     `the stopping distance accounts for the two chunks on the board: ${hint}`);
+  ok(!/113\.1/.test(hint), 'the planned distance is not passed off as the real one');
   const secs = parseFloat(/every ([\d.]+) s/.exec(hint)?.[1]);
-  ok(secs > 0 && secs < 0.3, `and how often a chunk goes out (${secs} s)`);
-  ok(/each finishes before the next is sent/.test(hint),
+  ok(secs === 0.42, `and how often a chunk goes out — its cruise time (${secs} s)`);
+  ok(/always on the board before this one starts/.test(hint) && /never brakes/.test(hint),
      'plus why that is the stopping distance');
 
   // Spinning in place covers no ground, so quoting a distance would be a lie.
@@ -272,12 +169,17 @@ console.log('\nThe four keys are labelled with the G-code they send');
   await page.keyboard.up('a');
   await page.waitForTimeout(250);
 
-  await page.fill('#step', '100');
+  // 120 mm at F6000: a 169.7 mm diagonal, 1.70 s a chunk — past the 1.5 s
+  // warning. At the page's own F16000 the same chunk is 0.64 s and says
+  // nothing, so the slow feed is asked for here rather than assumed.
+  await page.fill('#feed', '6000');
+  await page.fill('#step', '120');
   await page.waitForTimeout(120);
   const big = await page.innerText('#stopHint');
-  ok(/100\.0 mm of travel/.test(big) && /lower the chunk size/.test(big),
+  ok(/250\.6 mm of travel/.test(big) && /lower the chunk size/.test(big),
      `a chunk that would coast is called out: ${big}`);
-  await page.fill('#step', '5');
+  await page.fill('#feed', '16000');
+  await page.fill('#step', '80');
   await page.locator('#step').blur();
   await page.waitForTimeout(120);
 }
@@ -290,13 +192,13 @@ console.log('\nHolding a key');
   ok(await page.$eval('.key[data-code="KeyW"]', (e) => e.classList.contains('on')),
      'the W tile lights up');
   eq(await page.innerText('#kbState'), 'forward', 'the state line names the direction');
-  eq(await page.innerText('#gline'), 'G1 X-5.00 Y5.00 F6000',
+  eq(await page.innerText('#gline'), 'G1 X80.00 Y-80.00 F16000',
      'the live line is the one the operator asked for');
 
   const run = sent.find((r) => r.name === 'run');
   ok(!!run, 'holding W posts a run');
-  eq(run?.body.axes, { X: -1, Y: 1 }, 'forward is X− Y+');
-  eq([run?.body.step, run?.body.feedrate], [5, 6000],
+  eq(run?.body.axes, { X: 1, Y: -1 }, 'the operator\'s forward is the camera end');
+  eq([run?.body.step, run?.body.feedrate], [80, 16000],
      'streamed in short chunks at the default speed');
 
   await page.keyboard.up('w');
@@ -312,16 +214,16 @@ console.log('\nTwo keys at once');
   await page.keyboard.down('a');
   await page.waitForTimeout(250);
   const runs = sent.filter((r) => r.name === 'run');
-  eq(runs.at(-1)?.body.axes, { X: 0, Y: 1 },
+  eq(runs.at(-1)?.body.axes, { X: 1, Y: 0 },
      'W+A sums to one motor — the CoreXY diagonal');
-  eq(await page.innerText('#gline'), 'G1 Y5.00 F6000',
+  eq(await page.innerText('#gline'), 'G1 X80.00 F16000',
      'and the line drops the motor that is not turning');
   ok((await page.innerText('#kbState')).includes('forward')
      && (await page.innerText('#kbState')).includes('left'), 'both are named');
 
   await page.keyboard.up('a');
   await page.waitForTimeout(250);
-  eq(sent.filter((r) => r.name === 'run').at(-1)?.body.axes, { X: -1, Y: 1 },
+  eq(sent.filter((r) => r.name === 'run').at(-1)?.body.axes, { X: 1, Y: -1 },
      'letting go of A re-aims to plain forward without stopping');
   await page.keyboard.up('w');
   await page.waitForTimeout(200);
@@ -332,7 +234,7 @@ console.log('\nTwo keys at once');
   await page.waitForTimeout(200);
   await page.keyboard.down('s');
   await page.waitForTimeout(250);
-  eq(await page.innerText('#gline'), 'G1 — F6000', 'W+S cancels to no move');
+  eq(await page.innerText('#gline'), 'G1 — F16000', 'W+S cancels to no move');
   ok(sent.filter((r) => r.name === 'halt').length >= 1, '...and stops the machine');
   await page.keyboard.up('w'); await page.keyboard.up('s');
   await page.waitForTimeout(200);
@@ -365,7 +267,7 @@ console.log('\nThe numbers are live');
   await page.fill('#feed', '3000');
   await page.fill('#step', '25');
   await page.waitForTimeout(100);
-  eq(await page.innerText('#gW'), 'X-25.00 Y25.00', 'the tiles follow the chunk size');
+  eq(await page.innerText('#gW'), 'X25.00 Y-25.00', 'the tiles follow the chunk size');
   // ...and then get out of the box, or the keys are correctly ignored as typing.
   await page.locator('#step').blur();
   sent.length = 0;
@@ -376,8 +278,8 @@ console.log('\nThe numbers are live');
   eq(run?.body.axes, DIRECTIONS.right, 'D is right');
   await page.keyboard.up('d');
   await page.waitForTimeout(200);
-  await page.fill('#feed', '6000');
-  await page.fill('#step', '5');
+  await page.fill('#feed', '16000');
+  await page.fill('#step', '80');
   await page.locator('#step').blur();
 }
 
@@ -385,21 +287,25 @@ console.log('\nThe page and the server agree about the pacing');
 {
   // The stopping distance the page promises is computed in the page; the
   // pacing that delivers it is computed in marlin.js. Two copies of one
-  // trapezoid, so they are checked against each other rather than trusted.
-  const link = { connected: true, settings: { M204: { T: 1000 } }, sign: () => 1,
-                 send: () => {} };
+  // chunk clock (Jogger.holdSeconds), so they are checked against each other
+  // rather than trusted — caps included: M203 per axis, and the planner's own
+  // v² ≤ 2·a·d for a tiny chunk at a high feed.
+  const settings = { M204: { T: 1000 }, M203: { X: 500, Y: 300 } };
+  const link = { connected: true, settings, sign: () => 1, send: () => {} };
   const jog = new Jogger(link);
-  for (const [dist, feed] of [[7.07, 1000], [141.4, 1000], [1.41, 6000], [50, 300]]) {
-    const theirs = await page.evaluate(([d, f]) => {
-      state.settings = { M204: { T: 1000 } };
-      return chunkSeconds(d, f);
-    }, [dist, feed]);
-    const ours = jog.chunkSeconds(dist, feed);
+  for (const [x, y, feed] of [[5, 5, 1000], [100, 100, 1000], [1, 1, 6000],
+                              [35, -35, 300], [0, 80, 30000], [2, 2, 30000]]) {
+    const theirs = await page.evaluate(([xc, yc, f, s]) => {
+      state.settings = s;
+      return holdSeconds(xc, yc, f);
+    }, [x, y, feed, settings]);
+    const ours = jog.holdSeconds({ X: x, Y: y }, feed);
     ok(Math.abs(theirs - ours) < 1e-9,
-       `${dist} mm at F${feed}: ${ours.toFixed(4)} s both sides`);
+       `X${x} Y${y} at F${feed}: ${ours.toFixed(4)} s both sides`);
   }
+  await page.evaluate(() => { state.settings = {}; });
   jog.stop();
-  await page.fill('#feed', '6000');
+  await page.fill('#feed', '16000');
   await page.locator('#feed').blur();
 }
 
@@ -452,7 +358,7 @@ console.log('\nChanging the speed reaches a hold already running');
   await page.keyboard.down('w');
   await page.waitForTimeout(200);
   const first = sent.filter((r) => r.name === 'run').at(-1);
-  eq(first?.body.feedrate, 6000, 'the hold starts at the current speed');
+  eq(first?.body.feedrate, 16000, 'the hold starts at the current speed');
 
   await page.fill('#feed', '9000');
   await page.waitForTimeout(250);
@@ -466,7 +372,7 @@ console.log('\nChanging the speed reaches a hold already running');
   await page.locator('#feed').blur();
   await page.keyboard.up('w');
   await page.waitForTimeout(200);
-  await page.fill('#feed', '6000');
+  await page.fill('#feed', '16000');
   await page.locator('#feed').blur();
   await page.waitForTimeout(120);
 }
@@ -501,20 +407,181 @@ console.log('\nTyping into a field is not driving');
   eq(await page.inputValue('#cmd'), 'was', 'they go in the box, which is the point');
   await page.fill('#cmd', '');
 }
+
+console.log('\nA slider or checkbox does not take the keyboard away from driving');
+{
+  // Every quick-tune slider and both invert boxes keep focus after use; they
+  // used to count as "typing" and leave W A S D dead until a click elsewhere.
+  for (const sel of ['#tuneAccel', '#invX']) {
+    sent.length = 0;
+    await page.focus(sel);
+    await page.keyboard.down('w');
+    await page.waitForTimeout(200);
+    ok(sent.some((r) => r.name === 'run'), `W drives with ${sel} focused`);
+    await page.keyboard.up('w');
+    await page.waitForTimeout(250);
+  }
+
+  // A number box still types, and Enter hands the keyboard back.
+  sent.length = 0;
+  await page.click('#step');
+  await page.keyboard.press('Enter');
+  await page.keyboard.down('w');
+  await page.waitForTimeout(200);
+  ok(sent.some((r) => r.name === 'run'), 'Enter in a number box returns the keys to driving');
+  await page.keyboard.up('w');
+  await page.waitForTimeout(250);
+}
+
+console.log('\nApply sends what was edited');
+{
+  // One untouched value outside the server's guard (M203 X at 150000, say)
+  // used to ride along with every Apply of that row and get it refused.
+  sent.length = 0;
+  await page.fill('input[data-code="M203"][data-letter="Y"]', '400');
+  await page.click('button[data-apply="M203"]');
+  await page.waitForTimeout(150);
+  eq(sent.find((r) => r.name === 'setting')?.body, { code: 'M203', params: { Y: 400 } },
+     'only Y, the field that was changed');
+  await page.waitForTimeout(900);
+  eq(await page.inputValue('input[data-code="M203"][data-letter="Y"]'), '400',
+     'and the poll does not paint the old value back before the board confirms');
+
+  sent.length = 0;
+  await page.click('#btnMatch');
+  await page.waitForTimeout(150);
+  ok(sent.some((r) => r.name === 'match'), 'Match Y to X asks the server to do it');
+}
+
+console.log('\nEvery other page is one click away');
+{
+  for (const href of ['/dashboard', '/vision', '/follow', '/map', '/tune']) {
+    ok(await page.$(`nav a[href="${href}"]`), `the main page links to ${href}`);
+  }
+}
+
+console.log('\nThe lift: Q starts and stops, E turns it round');
+{
+  const act = async () => (await fetch(BASE + '/api/actuator')).json();
+  sent.length = 0;
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
+  // textContent, not innerText: the heading is CSS-uppercased, and innerText
+  // reports the text as rendered.
+  ok(/Aktuator/.test(await page.textContent('#actCard')), 'the card is on the drive page');
+  await page.keyboard.press('q');
+  await page.waitForTimeout(250);
+  let a = await act();
+  ok(a.running && a.dry, 'Q starts it (dry here: --no-actuator, no pin touched)');
+  await page.keyboard.press('e');
+  await page.waitForTimeout(400);
+  a = await act();
+  ok(a.running && a.dir === 'down', 'E turns it round, still running');
+  await page.keyboard.press('q');
+  await page.waitForTimeout(250);
+  ok(!(await act()).running, 'Q again stops it');
+  await page.keyboard.press('q');
+  await page.waitForTimeout(700);          // the card has polled and knows it runs
+  await page.keyboard.press(' ');
+  await page.waitForTimeout(250);
+  ok(!(await act()).running, 'Space stops it, like everything else');
+  await page.click('#actCard [data-a="up"]');
+  await page.waitForTimeout(700);
+  ok((await act()).dir === 'up', 'the ▲ button sets it to go up');
+  const said = await page.innerText('#actCard [data-a="state"]');
+  ok(/dayanıb · yuxarı/.test(said), `and the card says what it is doing  (${said})`);
+  ok(!sent.some((r) => r.name === 'run'), 'none of it reached the wheels');
+}
+
+console.log('\nThe lidar: one START/STOP button and the voltage');
+{
+  const lid = async () => (await fetch(BASE + '/api/lidar-motor')).json();
+  ok(/Lidar/.test(await page.textContent('#lidarCard')), 'the Lidar card is on the drive page');
+  await page.click('#lidarCard [data-l="run"]');
+  await page.waitForTimeout(250);
+  let l = await lid();
+  ok(l.running && l.dry && l.volts === 1.6, 'START spins it at 1.6 V (dry here: --no-lidar)');
+  ok(/STOP/.test(await page.textContent('#lidarCard [data-l="run"]')), 'and the button now says STOP');
+  await page.keyboard.press(' ');
+  await page.waitForTimeout(250);
+  ok((await lid()).running, 'Space leaves it spinning — it turns through a whole run');
+  await page.fill('#lidarCard [data-l="volts"]', '2');
+  await page.press('#lidarCard [data-l="volts"]', 'Enter');
+  await page.locator('#lidarCard [data-l="volts"]').blur();
+  await page.waitForTimeout(250);
+  l = await lid();
+  ok(l.volts === 2 && l.writes.at(-1) === 'on 55.6', `the voltage field applies at once  (${l.writes.at(-1)})`);
+  await page.click('#lidarCard [data-l="run"]');
+  await page.waitForTimeout(250);
+  ok(!(await lid()).running, 'STOP stops it');
+}
+
+console.log('\nScenarios — the way to a load, taught one step at a time');
+{
+  const t = await page.textContent('#teachCard');
+  ok(/Ssenarilər/.test(t) && /öyrədilməyib/.test(t), 'the card is there, nothing taught yet');
+  await page.click('#teachCard [data-slot="2"]');
+  await page.click('#teachCard [data-t="recStep"]');
+  await page.waitForTimeout(400);
+  ok(await page.isVisible('#teachCard [data-t="rec"]'), '+ Addım öyrət puts up the recording banner');
+  const said = await page.innerText('#teachCard [data-t="recText"]');
+  ok(/A2/.test(said) && /addım 1 \(yeni\)/.test(said),
+     `for the slot that was picked, as its first step  (${said})`);
+  await page.click('#teachCard [data-t="cancel"]');
+  await page.waitForTimeout(400);
+  ok(!(await page.isVisible('#teachCard [data-t="rec"]')), 'and Ləğv et throws it away');
+  ok(await page.isDisabled('#teachCard [data-t="run"]'),
+     'there is nothing to carry until the scenario has a step');
+
+  await page.selectOption('#teachCard [data-t="key"]', 'W');
+  await page.fill('#teachCard [data-t="mm"]', '400');
+  await page.click('#teachCard [data-t="addStep"]');
+  await page.waitForTimeout(400);
+  const steps = await page.innerText('#teachCard [data-t="steps"]');
+  ok(/1\.\s*W 400/.test(steps) && /yazılıb/.test(steps), `a typed step is listed  (${steps.replace(/\s+/g, ' ')})`);
+  ok(!(await page.isDisabled('#teachCard [data-t="run"]')), 'one step is enough to send a run');
+  ok(/A2 YÜKÜNƏ GET/.test(await page.innerText('#teachCard [data-t="run"]')), 'named after the pickup point');
+  page.once('dialog', (d) => d.accept());
+  await page.click('#teachCard [data-t="steps"] [data-do="del"]');
+  await page.waitForTimeout(400);
+  ok(await page.isDisabled('#teachCard [data-t="run"]'), 'and deleting it leaves the scenario untaught');
+}
 await page.close();
 
-console.log('\nWhat is actually pacing the stream');
+console.log('\nWhat the board did not keep, and whether it is saved');
 {
+  const p = await openPage(browser, {
+    unsaved: true, save_pending: false,
+    rejected: { M205: { Y: { asked: 6, kept: 0.6 } } },
+    settings: { M92: { X: 80, Y: 80 }, M204: { T: 1000 }, M203: { X: 500, Y: 500 },
+                M205: { X: 6, Y: 0.6 }, M906: { X: 580, Y: 580 } },
+  });
+  const msg = await p.page.innerText('.rowmsg[data-msg="M205"]');
+  ok(/asked 6, the board kept 0\.6/.test(msg) && /caps it/.test(msg),
+     `a firmware cap is shown on its row: ${msg}`);
+  ok(/Press Save to EEPROM/.test(await p.page.innerText('#saveState')),
+     'unsaved settings with no save coming say to press Save');
+  eq(p.errs, [], 'no console errors');
+  await p.page.close();
+
+  const q = await openPage(browser, { unsaved: false });
+  ok(/saved in EEPROM/.test(await q.page.innerText('#saveState')), 'and saved says saved');
+  await q.page.close();
+}
+
+console.log('\nWhat the M400 button will actually do');
+{
+  // The held-key stream no longer relies on M400 either way (see marlin.js) —
+  // this is purely a readout of what pressing the M400 button below will do.
   const good = await openPage(browser, { m400_blocks: true, barrier_ms: 306 });
-  ok(/M400 confirms each move/.test(await good.page.innerText('#barrierNote')),
-     'a board where M400 blocks says so quietly');
+  ok(/M400 waits for the planner/.test(await good.page.innerText('#barrierNote')),
+     'a board where M400 blocks says so');
   await good.page.close();
 
   const bad = await openPage(browser, { m400_blocks: false, barrier_ms: 11 });
   const note = await bad.page.innerText('#barrierNote');
   ok(/answers M400 without waiting/.test(note), `and one where it does not: ${note}`);
-  ok(/11 ms/.test(note) && /clock/.test(note),
-     'with the measurement and what it fell back to');
+  ok(/11 ms/.test(note) && /will not actually block/.test(note),
+     'with the measurement and what pressing it would do');
   await bad.page.close();
 }
 
@@ -540,7 +607,7 @@ console.log('\nWith no board attached');
     seen.push(name);
     return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
   });
-  await p3.goto(BASE + '/', { waitUntil: 'load' });
+  await p3.goto(BASE + '/gcode', { waitUntil: 'load' });
   await p3.waitForTimeout(500);
 
   await p3.keyboard.down('w');
@@ -555,22 +622,23 @@ console.log('\nWith no board attached');
   await p3.close();
 }
 
-console.log('\n/gcode is still the same page');
+console.log('\n/ is the hub, /gcode the drive page');
 {
   const p4 = await browser.newPage();
   await p4.goto(BASE + '/gcode', { waitUntil: 'load' });
-  ok(/Hold W A S D/.test(await p4.content()), 'the old path still works');
+  ok(/Hold W A S D/.test(await p4.content()), '/gcode is the drive page');
   await p4.close();
+  const hub = await (await fetch(BASE + '/')).text();
+  ok(/Robot kontrol/.test(hub) && /api\/pages/.test(hub), '/ is the hub, built from /api/pages');
   const missing = await fetch(BASE + '/nope');
   ok(missing.status === 404, 'anything else is a 404');
 }
 
 console.log('\nThe road-following pages load and see the rover');
 {
-  // These came back from git after being removed with the ESP32 half. What
-  // matters is that they still open without throwing — a page that throws on
-  // load looks exactly like one that is fine until you try to drive with it.
-  for (const route of ['/vision', '/follow', '/tune']) {
+  // A page that throws on load looks exactly like one that is fine until you
+  // try to drive with it.
+  for (const route of ['/', '/vision', '/follow', '/tune', '/map', '/dashboard', '/lidar', '/plc', '/pins']) {
     const p = await browser.newPage();
     const errs = [];
     p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
@@ -578,30 +646,20 @@ console.log('\nThe road-following pages load and see the rover');
     await p.goto(BASE + route, { waitUntil: 'load' });
     await p.waitForTimeout(900);
     ok(errs.length === 0, `${route} — no console errors ${errs[0] || ''}`);
-    // /follow is the exception: it owns the trim controls rather than showing
-    // the read-only strip, because it is the page you adjust them from.
-    if (route !== '/follow') {
-      ok(!!(await p.$('.wtrim')), `${route} — the shared wheel-trim strip rendered`);
-    } else {
-      ok(!!(await p.$('#vFull')), `${route} — its own trim panel rendered`);
-    }
     await p.close();
   }
 
-  // /vision has no socket at all: it is the detector and its tuning, and it
-  // reads the shared trim over HTTP. That is why it survives the ESP32 going
-  // away completely unchanged.
+  // /vision has no socket at all: it is the detector and its tuning, sharing
+  // road.js with /follow rather than each page keeping its own copy.
   const v = await browser.newPage();
   const asked = [];
   v.on('request', (r) => asked.push(new URL(r.url()).pathname));
   await v.goto(BASE + '/vision', { waitUntil: 'load' });
   await v.waitForTimeout(700);
-  ok(asked.includes('/api/wheels'), '/vision reads the trim over HTTP');
-  ok(asked.includes('/road.js'), '...and shares the detector rather than copying it');
+  ok(asked.includes('/road.js'), '/vision shares the detector rather than copying it');
   await v.close();
 
-  // /follow does drive, so it gets a socket, and the status it receives has to
-  // be the rover's rather than the DAC bench's.
+  // /follow does drive, so it gets a socket.
   const f = await browser.newPage();
   await f.goto(BASE + '/follow', { waitUntil: 'load' });
   await f.waitForTimeout(900);
@@ -615,15 +673,129 @@ console.log('\nThe road-following pages load and see the rover');
      'in the shape the page was written against');
   ok(seen && seen.motion !== undefined && seen.max_feed !== undefined,
      'plus what the rover is doing, in mm rather than volts');
+  ok(seen && 'mission' in seen && 'want' in seen,
+     'and the run, so /map can draw it without a camera');
+  await f.close();
+}
+
+console.log('\nThe map page draws the field and picks a station');
+{
+  const p = await browser.newPage();
+  await p.goto(BASE + '/map', { waitUntil: 'load' });
+  await p.waitForTimeout(900);
+
+  // The map is the field, not a picture of one: every station in FIELD has to
+  // have a button, or a station exists that nobody can send the rover to.
+  const got = await p.evaluate(() =>
+    [...document.querySelectorAll('[data-go]')].map((b) => b.dataset.go).sort().join(' '));
+  ok(got === 'A1 A2 A3 B1 B2 B3', `all six stations are pickable  (${got})`);
+
+  // Picking one has to reach the server, because /follow is what acts on it
+  // and it is a different page — possibly on a different machine.
+  await p.click('[data-go="A2"]');
+  await p.waitForTimeout(400);
+  const want = await p.evaluate(() => new Promise((resolve) => {
+    const ws = new WebSocket(`ws://${location.host}/`);
+    ws.onmessage = (e) => { ws.close(); resolve(JSON.parse(e.data).want); };
+    setTimeout(() => resolve('timeout'), 3000);
+  }));
+  ok(want === 'A2', `the choice reaches the server  (${want})`);
+
+  // And the plan it shows has to be the plan the rover will drive: two
+  // junctions to A2, right then left. If this list and mission.js ever
+  // disagree, the page is lying about what is about to happen.
+  const steps = await p.evaluate(() => $('steps').textContent.replace(/\s+/g, ' ').trim());
+  ok(/J1.*sağa.*J2.*sola.*A2/.test(steps), `and reads as the route  (${steps})`);
+
+  // …and as the moves, which is the half a person cannot check against the
+  // field by eye: a 180° at the station is not visible on a map.
+  ok(/körlemesine.*çizgiyi ara.*çizgiyi takip.*180° dön.*geri gir/s.test(steps),
+     'and lists the blind moves either side of it');
+
+  // Tapping the field itself must pick the same way the buttons do.
+  const tapped = await p.evaluate(() => {
+    const v = fieldView(cv.width, cv.height);
+    const n = fieldNode('A3');
+    const [px, py] = v.px(n.x, n.y);
+    const r = cv.getBoundingClientRect();
+    cv.dispatchEvent(new MouseEvent('click', { bubbles: true,
+      clientX: r.left + px * (r.width / cv.width),
+      clientY: r.top + py * (r.height / cv.height) }));
+    return $('rTarget').textContent;
+  });
+  ok(tapped === 'A3', `tapping the map picks a station too  (${tapped})`);
+  await p.close();
+}
+
+console.log('\n/vision shows what the QR reader read');
+{
+  const v = await browser.newPage();
+  await v.goto(BASE + '/vision', { waitUntil: 'load' });
+  await v.waitForTimeout(900);
+  const st = await v.innerText('#qrState');
+  ok(st === 'gözləyir', `the card asks the server, which has read nothing yet  (${st})`);
+  ok(/kadra baxıldı/.test(await v.innerText('#qrMeta')),
+     'and says how many frames it has looked at');
+  await v.close();
+}
+
+console.log('\n/follow offers the cargo run, and refuses one never taught');
+{
+  const f = await browser.newPage();
+  const errs = [];
+  f.on('pageerror', (e) => errs.push(String(e)));
+  await f.goto(BASE + '/follow', { waitUntil: 'load' });
+  await f.waitForTimeout(900);
+  const got = await f.evaluate(() =>
+    [...document.querySelectorAll('[data-cargo]')].map((b) => b.dataset.cargo).join(' '));
+  ok(got === '1 2 3', `three slots  (${got})`);
+  await f.click('[data-cargo="2"]');
+  await f.waitForTimeout(300);
+  const why = await f.innerText('#mWhy');
+  ok(/öyrədilməyib/.test(why), `says the way there has not been taught  (${why})`);
+  // The QR reader's answer is on the driving page too, not only on /vision.
+  const qrMeta = await f.innerText('#qrMeta');
+  ok(/kadra baxıldı/.test(qrMeta) && (await f.innerText('#qrState')) !== '–',
+     `and shows what the QR reader sees while it drives  (${qrMeta})`);
+  eq(errs, [], 'no page errors');
+  await f.close();
+}
+
+console.log('\n/follow ignores a stale "not running" that arrives just after arming');
+{
+  // Every cargo run on 2026-09-14 died 10–150 ms after SÜRMƏYƏ BAŞLA: a status
+  // the server sent before our START arrived late, still said running: false,
+  // and was taken for the server stopping the run. Its STOP then cancelled the
+  // taught leg. Driven here by handing ws.onmessage the statuses directly, in
+  // one synchronous evaluate, so no real status can land in between.
+  const f = await browser.newPage();
+  const errs = [];
+  f.on('pageerror', (e) => errs.push(String(e)));
+  await f.goto(BASE + '/follow', { waitUntil: 'load' });
+  await f.waitForTimeout(900);
+  const stale = await f.evaluate(() => {
+    src.ready = () => true;               // no camera on this server
+    const feed = (running) => ws.onmessage({ data: JSON.stringify({ type: 'status', running }) });
+    arm();
+    feed(false);                          // sent before START reached the server
+    const afterStale = armed;
+    feed(true);                           // START confirmed
+    feed(false);                          // and now a real stop
+    return { afterStale, afterStop: armed, why: $('why').textContent };
+  });
+  ok(stale.afterStale, 'a running: false from before START does not disarm');
+  ok(!stale.afterStop && stale.why === 'sunucu durdurdu',
+     `one after the server said running: true does  (${stale.why})`);
+  eq(errs, [], 'no page errors');
   await f.close();
 }
 
 
 await browser.close();
 marlin.proc.kill();
+try { (await import('node:fs')).unlinkSync(ROUTES); } catch { /* never written */ }
 if (fail) {
-  console.log('\nbench server output:\n' + bench.out.boot);
-  console.log('\nmarlin server output:\n' + marlin.out.boot);
+  console.log('\nserver output:\n' + marlin.out.boot);
 }
 console.log(fail ? `\nFAILED — ${pass} ok, ${fail} fail`
                  : `\nALL CHECKS PASSED — ${pass} ok, 0 fail`);

@@ -15,15 +15,11 @@ const src = readFileSync(join(here, '..', 'public', 'pilot.js'), 'utf8');
 // public/pilot.js is a plain browser script. Rather than adding module
 // plumbing to it just for the tests, evaluate it and take the globals out —
 // the file under test is then exactly the file the browser loads.
-const { PILOT_DEFAULTS, pilotState, pilotStep, metresPerSecond, lift,
+const { PILOT_DEFAULTS, pilotState, pilotStep, metresPerSecond,
         SPEED_DEFAULTS, speedState, speedStep } =
   new Function(`${src}
-    return { PILOT_DEFAULTS, pilotState, pilotStep, metresPerSecond, lift,
+    return { PILOT_DEFAULTS, pilotState, pilotStep, metresPerSecond,
              SPEED_DEFAULTS, speedState, speedStep };`)();
-
-// Most of the checks below are about the control law, not about the motor's
-// dead band, so they run with it switched off and read demands directly.
-const NOSTALL = { stall: 0 };
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { c ? pass++ : fail++; console.log(`  [${c ? 'PASS' : 'FAIL'}] ${m}`); };
@@ -36,9 +32,8 @@ const lost = { near: null, far: null, bands: 0, want: 8 };
 /** Run `n` steps of the same observation and return the last output. */
 function run(obs, cfg = {}, n = 40, st = null, t0 = 0) {
   const s = st || pilotState(t0);
-  const c = { ...NOSTALL, ...cfg };
   let out = null, t = s.t;
-  for (let i = 0; i < n; i++) { t += DT; out = pilotStep(s, typeof obs === 'function' ? obs(i) : obs, c, t); }
+  for (let i = 0; i < n; i++) { t += DT; out = pilotStep(s, typeof obs === 'function' ? obs(i) : obs, cfg, t); }
   return { out, st: s, t };
 }
 
@@ -59,14 +54,6 @@ console.log('\nSükan doğru tərəfə dönür');
   const l = run(road(-0.5)).out;
   ok(l.p25 < l.p26, `yol solda → GPIO25 yavaşlayır  (${l.p25} / ${l.p26})`);
   ok(Math.abs(l.steer + r.steer) < 1e-9, 'simmetrik');
-}
-
-console.log('\n«swap» yalnız iki pini dəyişir');
-{
-  const a = run(road(0.5)).out;
-  const b = run(road(0.5), { swap: true }).out;
-  ok(a.p25 === b.p26 && a.p26 === b.p25,
-     `sütunlar yer dəyişir  (${a.p25}/${a.p26} → ${b.p25}/${b.p26})`);
 }
 
 console.log('\nSürət həddi — döngədə yavaşlayır');
@@ -103,13 +90,13 @@ console.log('\nTavan və döşəmə');
 console.log('\nSürətlənmə pillə-pillə, tormoz sərt');
 {
   const s = pilotState(0);
-  const first = pilotStep(s, road(0), NOSTALL, DT);
+  const first = pilotStep(s, road(0), {}, DT);
   ok(first.speed < PILOT_DEFAULTS.base / 2,
      `ilk kadrda birdən tam qaza basmır  (${first.speed} %)`);
   near(first.speed, PILOT_DEFAULTS.accel * DT / 1000, 0.01, 'sürətlənmə «accel» ilə məhdud');
   // A stalled tab must not turn into a jump when it comes back.
   const s2 = pilotState(0);
-  const jump = pilotStep(s2, road(0), NOSTALL, 5000);
+  const jump = pilotStep(s2, road(0), {}, 5000);
   ok(jump.speed <= PILOT_DEFAULTS.accel * 0.25 + 0.01,
      `5 s donmuş tab-dan sonra da sıçrayış yoxdur  (${jump.speed} %)`);
 }
@@ -119,22 +106,33 @@ console.log('\nYol itəndə: son istiqamətlə yavaş, sonra dayanır');
   const { st, t } = run(road(0.5));  // steady on a right-hand bend
   const before = st.speed, steer = st.steer;
 
-  const a = pilotStep(st, lost, NOSTALL, t + DT);
+  const a = pilotStep(st, lost, {}, t + DT);
+  const lostAt = t + DT;
   ok(a.lost, 'itki qeyd olunur');
   ok(Math.abs(a.steer - steer) < 1e-9, `sükan saxlanılır  (${a.steer})`);
   ok(a.speed < before, `sürət azalır  (${before} → ${a.speed})`);
   ok(!a.stop, 'hələ ENABLE düşmür');
+  near(a.speed, before * PILOT_DEFAULTS.holdCut / 100, before * 0.05,
+       `itki anındakı sürətin ${PILOT_DEFAULTS.holdCut} %-inə düşür`);
 
-  // ... through the hold window ...
-  let out = a, tt = t + DT;
-  for (let i = 0; i < 12; i++) { tt += DT; out = pilotStep(st, lost, NOSTALL, tt); }
-  ok(tt - t > PILOT_DEFAULTS.hold, `${tt - t} ms sonra hold pəncərəsi bitib`);
+  // It has to HOLD there, not keep cutting 55 % of an already-falling number
+  // every frame — that used to compound to zero well inside the window, and
+  // the wheel then jumped back to speed the instant the road reappeared.
+  // That silent, fast-then-slam cycle was the "impulse".
+  let out = a, tt = lostAt;
+  for (let i = 0; i < 8; i++) { tt += DT; out = pilotStep(st, lost, {}, tt); }
+  ok(tt - lostAt < PILOT_DEFAULTS.hold, `hələ hold pəncərəsindəyik  (${tt - lostAt} ms)`);
+  near(out.speed, a.speed, 0.5, `pəncərə boyu sürət sabit qalır, sönmür  (${out.speed} %)`);
+
+  // ... and only past the window does it actually brake to a stop.
+  for (let i = 0; i < 6; i++) { tt += DT; out = pilotStep(st, lost, {}, tt); }
+  ok(tt - lostAt > PILOT_DEFAULTS.hold, `${tt - lostAt} ms sonra hold pəncərəsi bitib`);
   ok(out.speed === 0, `dayanıb  (${out.speed} %)`);
   ok(!out.stop, 'amma hələ ENABLE saxlanır — yol qayıda bilər');
 
   // ... and past the grace period it gives up.
-  for (let i = 0; i < 40; i++) { tt += DT; out = pilotStep(st, lost, NOSTALL, tt); }
-  ok(out.stop, `${tt - t} ms sonra ENABLE-nin düşməsini istəyir`);
+  for (let i = 0; i < 40; i++) { tt += DT; out = pilotStep(st, lost, {}, tt); }
+  ok(out.stop, `${tt - lostAt} ms sonra ENABLE-nin düşməsini istəyir`);
   ok(out.reason === 'yol yok — durdu', `səbəb: ${out.reason}`);
 }
 
@@ -142,9 +140,9 @@ console.log('\nYol qayıdanda özü davam edir');
 {
   const { st, t } = run(road(0));
   let tt = t, out = null;
-  for (let i = 0; i < 8; i++) { tt += DT; out = pilotStep(st, lost, NOSTALL, tt); }
+  for (let i = 0; i < 8; i++) { tt += DT; out = pilotStep(st, lost, {}, tt); }
   const dip = out.speed;
-  for (let i = 0; i < 30; i++) { tt += DT; out = pilotStep(st, road(0), NOSTALL, tt); }
+  for (let i = 0; i < 30; i++) { tt += DT; out = pilotStep(st, road(0), {}, tt); }
   ok(out.speed > dip, `sürət geri qalxır  (${dip} → ${out.speed})`);
   ok(!out.stop && !out.lost, 'normal rejimə qayıdır');
 }
@@ -155,65 +153,9 @@ console.log('\nBir zolaq yol sayılmır');
   ok(out.lost, 'tək zolaq təsadüfi ləkədir — yol kimi qəbul edilmir');
 }
 
-console.log('\nÖlü zona: 1.5 V-dən aşağı təkər dönmür');
-{
-  // 22 % of a 3.3 V ceiling is 1.5 V. Below it the wheel is not slow, it is off.
-  const st = { stall: 22 };
-  ok(lift(0, 22) === 0, 'sıfır sıfır qalır — təkəri dayandırmaq mümkün olmalıdır');
-  near(lift(100, 22), 100, 1e-9, 'tam qaz tam qaz qalır');
-  near(lift(50, 22), 61, 1e-9, 'ortadakı tələb istifadə olunan aralığa yayılır');
-  ok(lift(0.1, 22) > 22, 'ən kiçik müsbət tələb belə dönmə həddinin üstündədir');
-
-  const { out } = run(road(0), { ...st, base: 20 });
-  ok(out.p25 >= 22, `düz yolda hər iki təkər həddin üstündədir  (${out.p25} %)`);
-  near(out.p25, 22 + 20 * 0.78, 0.2, 'tələb [22,100] aralığına köçürülür');
-
-  // The failure in the logs: a modest steer used to drop the inner wheel into
-  // the dead band, so it did not slow down — it stopped.
-  const turn = run(road(0.3), { ...st, base: 20, hard: 2 }).out;
-  ok(turn.p26 >= 22, `yumşaq döngədə daxili təkər hələ də dönür  (${turn.p26} %)`);
-  ok(turn.p26 < turn.p25, `amma xaricidən yavaşdır  (${turn.p26} < ${turn.p25})`);
-
-  // Full steer must still be able to stop the inner wheel outright — that is
-  // what makes the tightest turn.
-  const hardTurn = run(road(0.95), { ...st, base: 20 }).out;
-  ok(hardTurn.p26 === 0, `tam sükanda daxili təkər tam dayanır  (${hardTurn.p26} %)`);
-
-  // And the old numbers explain themselves: base 25 with a 0.2 error put the
-  // inner wheel at 25 × (1 − 0.17) = 20.8 %, under the threshold.
-  const old = run(road(0.2), { stall: 0, base: 25, hard: 2 }).out;
-  ok(old.p26 < 22,
-     `ölü zona nəzərə alınmasa köhnə davranış geri qayıdır  (${old.p26} % < 22 %)`);
-}
-
-console.log('\nHər təkərin öz ölü zonası və öz düzəlişi');
-{
-  // Two motors are never the same motor: one starts at 1.5 V, the other at
-  // 1.6 V. One shared number cannot be right for both.
-  const r = run(road(0), { stall: 22, stall25: 22, stall26: 29, base: 20 }).out;
-  ok(r.p26 > r.p25, `ağır təkərə daha çox verilir  (${r.p25} / ${r.p26})`);
-  ok(r.p25 >= 22 && r.p26 >= 29, 'hər ikisi öz həddinin üstündədir');
-
-  // Fall back to the shared number when a wheel has none of its own.
-  const d = run(road(0), { stall: 25, base: 20 }).out;
-  ok(d.p25 === d.p26, `ayrıca verilməyibsə ümumi hədd işləyir  (${d.p25})`);
-  const half = run(road(0), { stall: 25, stall25: 40, base: 20 }).out;
-  ok(half.p25 > half.p26, `yalnız biri verilsə, yalnız o dəyişir  (${half.p25} / ${half.p26})`);
-
-  // Gain is the last trim: same volts, still faster, so take it down.
-  const g = run(road(0), { stall: 0, base: 40, gain26: 0.8 }).out;
-  near(g.p26, g.p25 * 0.8, 0.2, 'gain tələbi miqyaslayır');
-  const g0 = run(road(0), { stall: 0, base: 40 }).out;
-  ok(g0.p25 === g0.p26, 'düzəliş verilməyibsə heç nə dəyişmir');
-
-  // A stopped wheel must stay stopped whatever the trim says.
-  const stop = run(road(0.95), { stall: 22, stall26: 30, base: 20 }).out;
-  ok(stop.p26 === 0, `tam sükanda daxili təkər yenə tam dayanır  (${stop.p26})`);
-}
-
 console.log('\nYoldan çox uzaqda: sürət minimuma, üzü yola');
 {
-  const cfg = { stall: 0, hard: 0.6, crawl: 10, base: 40 };
+  const cfg = { hard: 0.6, crawl: 10, base: 40 };
   const r = run(road(0.9), cfg).out;
   ok(r.recover, 'geri qayıtma rejimi işə düşür');
   ok(r.steer === 1, `sükan tam sağa  (${r.steer})`);
@@ -233,7 +175,7 @@ console.log('\nYoldan çox uzaqda: sürət minimuma, üzü yola');
 
 console.log('\nGeri qayıtma rejimi titrəmir');
 {
-  const cfg = { stall: 0, hard: 0.6, crawl: 10, base: 40 };
+  const cfg = { hard: 0.6, crawl: 10, base: 40 };
   // Enter at 0.6…
   const { st, t } = run(road(0.65), cfg);
   ok(st.recover, 'daxil oldu');
@@ -243,6 +185,193 @@ console.log('\nGeri qayıtma rejimi titrəmir');
   ok(out.recover, `0.50-də hələ çevrilir (histerezis)  (${out.reason})`);
   for (let i = 0; i < 30; i++) { tt += DT; out = pilotStep(st, road(0.3), cfg, tt); }
   ok(!out.recover, `0.30-da normal sürməyə qayıdır  (${out.reason})`);
+}
+
+console.log('\n90° döngə: uzaqdakı köşe hələ döngə deyil');
+{
+  // The L is in the picture but at the top of it — half a metre of road still
+  // to drive before it matters. Committing here would turn in the middle of a
+  // straight.
+  const obs = { ...road(0), corner: { dir: 1, dist: 0.35 } };
+  const { out } = run(obs);
+  ok(out.turn === 0, 'döngəyə keçmir');
+  ok(out.corner === 1, `köşeni görür və istiqamətini bilir  (${out.corner})`);
+  ok(out.reason === 'düz yol', `düz sürməyə davam edir  (${out.reason})`);
+}
+
+console.log('\n90° döngə: yaxınlaşanda əvvəl sürünür, sonra yerində çevrilir');
+{
+  const cfg = { base: 40, crawl: 10 };
+  const obs = { ...road(0), corner: { dir: 1, dist: 0.9 } };   // right at the wheels
+  // First the creep: still straight, but already down to crawl speed.
+  const { st, t } = run(obs, cfg, 3);
+  ok(st.turn !== null, 'döngəyə keçdi');
+  const creep = pilotStep(st, obs, cfg, t + DT);
+  ok(creep.turn === 1, `sağa döngə  (${creep.turn})`);
+  ok(creep.steer === 0, `hələ düz gedir — kamera təkərlərdən qabağa baxır  (${creep.steer})`);
+  ok(creep.reason === 'köşe — yaklaşıyor', `səbəb: ${creep.reason}`);
+
+  // Then the pivot, once `creepMs` of that has been driven.
+  let tt = t + DT, out = creep;
+  for (let i = 0; i < 12; i++) { tt += DT; out = pilotStep(st, { ...lost, corner: { dir: 1, dist: 0.95 } }, cfg, tt); }
+  ok(out.steer === 1, `sükan tam sağa  (${out.steer})`);
+  ok(out.p26 === 0 && out.p25 > 0, `daxili təkər dayanır, yerində çevrilir  (${out.p25}/${out.p26})`);
+  near(out.speed, cfg.crawl, 0.5, 'sürət «crawl»-dadır');
+  ok(out.reason === 'köşe — sağa dönüyor', `səbəb: ${out.reason}`);
+
+  // The mirror image.
+  const lobs = { ...road(0), corner: { dir: -1, dist: 0.9 } };
+  const l = run({ ...lost, corner: { dir: -1, dist: 0.95 } }, cfg, 16,
+                run(lobs, cfg, 3).st, 0).out;
+  ok(l.steer === -1 && l.p25 === 0 && l.p26 > 0, `sola simmetrikdir  (${l.p25}/${l.p26})`);
+}
+
+console.log('\n90° döngə: dönmədən əvvəl santimetr gedir, saniyə yox');
+{
+  // The camera is on the FRONT of the rover, so when the corner reaches the
+  // bottom of the picture the axle is still a camera-to-axle offset short of
+  // it. That offset is a distance — the same 15 cm at any speed — so the creep
+  // is driven in cm, not ms. A timed creep turns early, and turns earlier the
+  // slower the robot happens to be going.
+  //
+  // 0.5 m/s at 50 %, no dead band: at `crawl` 10 % that is 0.1 m/s, so 15 cm
+  // is 1.5 s — six times the 250 ms fallback.
+  const calib = { pct: 50, metres: 3, seconds: 6 };
+  const cfg = { base: 40, crawl: 10, creepCm: 15, calib };
+  const obs = { ...road(0), corner: { dir: 1, dist: 0.9 } };
+  const { st, t } = run(obs, cfg, 3);
+  ok(st.turn !== null, 'döngəyə keçdi');
+
+  let tt = t, out = null, pivotAt = 0, cm = null;
+  for (let i = 0; i < 60; i++) {
+    tt += DT;
+    out = pilotStep(st, obs, cfg, tt);
+    if (out.turn && out.creep === null && !pivotAt) { pivotAt = tt; cm = st.turn.cm; }
+  }
+  ok(pivotAt, 'nə vaxtsa çevrilməyə başlayır');
+  ok(pivotAt - t > 1000,
+     `250 ms-dən çox əvvəl dönmür — ${Math.round(pivotAt - t)} ms sürünür`);
+  near(cm, 15, 1.5, 'və təxminən 15 sm gedir');
+
+  // The same 15 cm, driven twice as fast, has to take half as long — that is
+  // the whole difference between a distance and a duration.
+  const fast = { ...cfg, crawl: 20 };
+  const r2 = run(obs, fast, 3);
+  let t2 = r2.t, pivot2 = 0;
+  for (let i = 0; i < 60; i++) {
+    t2 += DT;
+    const o = pilotStep(r2.st, obs, fast, t2);
+    if (o.turn && o.creep === null && !pivot2) pivot2 = t2;
+  }
+  ok(pivot2 && pivot2 - r2.t < (pivotAt - t) * 0.75,
+     `iki dəfə sürətli getsə yarı vaxtda çatır  (${Math.round(pivot2 - r2.t)} ms `
+   + `< ${Math.round(pivotAt - t)} ms)`);
+}
+
+console.log('\n90° döngə: kalibrasiya yoxdursa vaxta düşür');
+{
+  // No calibration means no cm to measure, and a creep that never ends is
+  // worse than one that ends early. Same for a `crawl` inside the motor's dead
+  // band: the wheel is not turning, so no distance is accumulating either.
+  for (const [name, cfg] of [
+    ['kalibrasiya yoxdur', { base: 40, crawl: 10, creepCm: 15 }],
+    ['ölü zonada sürünür', { base: 40, crawl: 10, creepCm: 15,
+                             calib: { pct: 50, metres: 3, seconds: 6, dead: 20 } }],
+  ]) {
+    const obs = { ...road(0), corner: { dir: 1, dist: 0.9 } };
+    const { st, t } = run(obs, cfg, 3);
+    let tt = t, pivotAt = 0;
+    for (let i = 0; i < 40; i++) {
+      tt += DT;
+      const o = pilotStep(st, obs, cfg, tt);
+      if (o.turn && o.creep === null && !pivotAt) pivotAt = tt;
+    }
+    ok(pivotAt && pivotAt - t <= PILOT_DEFAULTS.creepMs + DT,
+       `${name}: ${PILOT_DEFAULTS.creepMs} ms sonra yenə çevrilir `
+     + `(${pivotAt ? Math.round(pivotAt - t) : 'heç vaxt'} ms)`);
+  }
+}
+
+console.log('\n90° döngə: zəncir yoxa çıxanda dayanmır, çevrilir');
+{
+  // This is the case the whole thing exists for. The corner takes the chain
+  // with it a frame or two before the robot reaches it, and the old code then
+  // ran the lost-road timers: 0.6 s of blind rolling, then a stop, then
+  // ENABLE dropped — in the middle of a corner it could have taken.
+  // `turnMs` is raised out of the way here: what is being asserted is that the
+  // lost-road timers do not run during a turn, not how long a turn may last —
+  // that is the next check's job.
+  const cfg = { base: 40, crawl: 10, turnMs: 6000 };
+  const { st, t } = run({ ...road(0), corner: { dir: 1, dist: 0.9 } }, cfg, 3);
+  let tt = t, out = null;
+  const n = Math.ceil((PILOT_DEFAULTS.hold + PILOT_DEFAULTS.give + 500) / DT);
+  for (let i = 0; i < n; i++) { tt += DT; out = pilotStep(st, lost, cfg, tt); }
+  ok(tt - t > PILOT_DEFAULTS.hold + PILOT_DEFAULTS.give,
+     `${tt - t} ms — köhnə məntiqlə çoxdan ENABLE düşərdi`);
+  ok(!out.stop, 'ENABLE düşmür');
+  ok(out.turn === 1, `hələ döngədədir  (${out.reason})`);
+  ok(out.speed > 0, `hərəkət davam edir  (${out.speed} %)`);
+}
+
+console.log('\n90° döngə: yol qabağa çıxanda bitir');
+{
+  const cfg = { base: 40, crawl: 10 };
+  const { st, t } = run({ ...road(0), corner: { dir: 1, dist: 0.9 } }, cfg, 3);
+  let tt = t, out = null;
+  // Pivoting: the road is not in front yet, so the L is still reported.
+  for (let i = 0; i < 12; i++) { tt += DT; out = pilotStep(st, { ...lost, corner: { dir: 1, dist: 0.95 } }, cfg, tt); }
+  ok(out.turn === 1, 'çevrilir');
+  // Now the arm is dead ahead and there is no L left in the picture.
+  for (let i = 0; i < 20; i++) { tt += DT; out = pilotStep(st, road(0.05), cfg, tt); }
+  ok(out.turn === 0, 'döngə bitdi');
+  ok(out.reason === 'düz yol', `adi sürməyə qayıtdı  (${out.reason})`);
+  ok(out.speed > cfg.crawl, `sürət yenidən qalxır  (${out.speed} %)`);
+}
+
+console.log('\n90° döngə: dönüşü bitirən kimi geri dönmür');
+{
+  // Mid-pivot the camera sweeps across the junction it is already turning at,
+  // and the same L comes back pointing at the road the robot has just left.
+  // Acting on that means finishing a right turn and immediately committing to
+  // a left one — back the way it came, for ever.
+  const cfg = { base: 40, crawl: 10 };
+  const { st, t } = run({ ...road(0), corner: { dir: 1, dist: 0.9 } }, cfg, 3);
+  let tt = t, out = null;
+  // Pivoting, and now the L appears to point back to the left.
+  for (let i = 0; i < 12; i++) { tt += DT; out = pilotStep(st, { ...lost, corner: { dir: -1, dist: 0.95 } }, cfg, tt); }
+  ok(out.turn === 1, `başladığı istiqamətdə qalır  (${out.turn})`);
+  // The road turns up in front — and the L, still in the picture for a moment
+  // as the camera clears the junction, now points back the way it came. The
+  // turn has to end (an L pointing the other way is not a reason to keep
+  // pivoting) and no new one may start while the robot is still on that
+  // junction.
+  let ended = 0;
+  for (let i = 0; i < 12; i++) {
+    tt += DT;
+    out = pilotStep(st, { ...road(0.05), corner: { dir: -1, dist: 0.95 } }, cfg, tt);
+    if (!out.turn && !ended) ended = tt;
+  }
+  ok(ended, 'əks tərəfə baxan köşe dönüşü uzatmır — dönüş bitir');
+  ok(out.turn === 0, `və yenidən sola dönməyə başlamır  (${out.reason})`);
+  ok(out.reason === 'düz yol', `adi sürməyə qayıdır  (${out.reason})`);
+  // Clear road afterwards: still following, still not turning.
+  for (let i = 0; i < 10; i++) { tt += DT; out = pilotStep(st, road(0.05), cfg, tt); }
+  ok(out.turn === 0 && out.reason === 'düz yol', 'sonra da düz sürür');
+}
+
+console.log('\n90° döngə: yol tapılmasa əbədi fırlanmır');
+{
+  const cfg = { base: 40, crawl: 10 };
+  const { st, t } = run({ ...road(0), corner: { dir: 1, dist: 0.9 } }, cfg, 3);
+  let tt = t, out = null;
+  // Nothing ever comes back — a corner that was a shadow, or a robot that
+  // pivoted past the road. It must give the turn up and let the ordinary lost
+  // handling stop the robot, rather than spin on the spot for ever.
+  const n = Math.ceil((PILOT_DEFAULTS.turnMs + PILOT_DEFAULTS.creepMs
+                     + PILOT_DEFAULTS.hold + PILOT_DEFAULTS.give + 500) / DT);
+  for (let i = 0; i < n; i++) { tt += DT; out = pilotStep(st, lost, cfg, tt); }
+  ok(out.turn === 0, 'döngədən çıxdı');
+  ok(out.stop, `ENABLE-nin düşməsini istəyir  (${out.reason})`);
 }
 
 console.log('\nSürət dövrəsi: gərginlik nə olursa olsun, sürət eynidir');

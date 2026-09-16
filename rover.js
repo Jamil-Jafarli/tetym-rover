@@ -1,9 +1,10 @@
 /**
  * The rover, as the road-following pages understand it.
  *
- * /follow was written against an ESP32 that took two analog throttle levels,
- * so what it sends is a 20 Hz stream of per-wheel demand in percent. The rover
- * now runs on stepper drivers taking Marlin G-code, which is a position
+ * /follow was originally written against an ESP32 that took two analog
+ * throttle levels, so what it sends is a 20 Hz stream of per-wheel demand in
+ * percent — p25/p26, after the two GPIO pins that used to receive them. The
+ * rover now runs on stepper drivers taking Marlin G-code, which is a position
  * language, not a throttle one. This is the translation between them, and it
  * is deliberately the only place that knows both.
  *
@@ -11,19 +12,15 @@
  *      20 Hz          percent per wheel         mm per chunk        G1 X… Y…
  *
  * The two rates are not the same and are not meant to be. A chunk takes a
- * couple of hundred milliseconds to run and the next one is not sent until it
- * has finished (see Jogger), so demand arrives four or five times faster than
- * it can be acted on. Each chunk simply uses the newest demand — which is what
- * you want from a control loop, and why setAuto only ever stores a number.
+ * couple of hundred milliseconds to run, and the Jogger queues the next one
+ * before this one finishes rather than waiting it out (see STREAM_LEAD in
+ * marlin.js), so demand still arrives several times faster than a chunk can
+ * be acted on. Each chunk simply uses the newest demand — which is what you
+ * want from a control loop, and why setAuto only ever stores a number.
  *
- * What does NOT carry over from the ESP32:
- *
- *   · Volts. There is no analog level any more; /follow's voltage readouts are
- *     vestigial and the page falls back to placeholder numbers for them.
- *   · The dead band. A brushed motor below its stall voltage sits still and
- *     hums, which is what `stall` in the wheel trim compensates for. A stepper
- *     has no such threshold — it moves at whatever rate it is told — so that
- *     calibration is a no-op here and can be left at its defaults.
+ * Volts do not carry over: there is no analog level any more, so /follow's
+ * voltage readouts are vestigial and the page falls back to placeholder
+ * numbers for them.
  */
 
 import { DEFAULT_FEED } from './marlin.js';
@@ -87,9 +84,13 @@ export class Rover {
    * @param {import('./marlin.js').Jogger} opts.jog
    * @param {number} [opts.maxFeed]  mm/min a wheel runs at 100 % demand
    */
-  constructor({ link, jog, maxFeed = DEFAULT_FEED }) {
+  constructor({ link, jog, maxFeed = DEFAULT_FEED, replayer = null }) {
     this.link = link;
     this.jog = jog;
+    // Drives a taught route (routes.js). While it does, it owns the wheels
+    // outright: /follow keeps streaming demand at 20 Hz — zeroes, during a
+    // route — and none of it may reach the jogger underneath a replay.
+    this.replayer = replayer;
     this.maxFeed = maxFeed;
     this.chunkMs = CHUNK_MS;
 
@@ -169,7 +170,8 @@ export class Rover {
    * for is a stopped stream, not a stream of zeroes.
    */
   _push() {
-    if (!this.link.connected) return;
+    // A taught route being replayed owns the jogger outright (see replay()).
+    if (!this.link.connected || (this.replayer && this.replayer.active)) return;
     const [left, right] = this.demand;
     const wheels = this.running && !this.holdReason
       && (Math.abs(left) >= DEADBAND_PCT || Math.abs(right) >= DEADBAND_PCT);
@@ -183,7 +185,24 @@ export class Rover {
     // Marlin times the move by the length of the whole XYZ vector, so the feed
     // that keeps the chunk at chunkMs is the speeds combined the same way.
     const feed = Math.max(1, Math.hypot(vLeft, vRight, vLift));
-    this.jog.startWheels(dLeft, dRight, feed, vLift * minutes);
+    // The camera is bolted to the end of the chassis that DIRECTIONS calls the
+    // BACK (see manualVec() in public/gcode.html, which flips W/S for the same
+    // reason). The pilot steers in the camera's frame — its "left wheel" is the
+    // wheel on the left of the picture — so driving the rover that way round is
+    // a 180° turn of the chassis.
+    //
+    // A 180° turn is two things, not one: every wheel travels the other way AND
+    // the wheels swap sides. Only the first half used to be applied here, which
+    // drove the right way but steered exactly backwards — the correction meant
+    // for the outer wheel reached the inner one, so the rover turned away from
+    // the road it was trying to reach, and every correction made the error it
+    // was correcting bigger.
+    //
+    // /follow's W A S D come through here too, so W is the camera's forward,
+    // the way the pilot drives. jog.start() (/gcode's held keys) is unaffected:
+    // /gcode swaps the ends itself for W/S, and a spin reads the same from
+    // either end.
+    this.jog.startWheels(-dRight, -dLeft, feed, vLift * minutes);
   }
 
   close() { clearInterval(this._timer); }
@@ -198,6 +217,14 @@ export class Rover {
     this.holdAll = !!(this.holdReason && all);
     if (this.holdAll) this.lift = 0;
     if (this.holdReason) this.jog.stop();
+    // A taught route drives the board by itself (routes.js), so stopping the
+    // jogger is not enough. An emergency stop ends it; any other hold — the
+    // PLC's bekle, the door — pauses it where it is, and releasing the hold
+    // carries it on from that point rather than from the top.
+    if (this.replayer) {
+      if (this.holdAll) this.replayer.cancel(this.holdReason);
+      else this.replayer.hold(this.holdReason);
+    }
   }
 
   clientJoined() { this.clients += 1; }
@@ -223,6 +250,26 @@ export class Rover {
     // comes back on its next 20 Hz repeat, which is what a held key should do.
     this.lift = 0;
     this.jog.stop();
+    // DAYAN, a closed tab, a lost socket: a route being replayed stops with
+    // everything else. It is the one kind of driving that would otherwise
+    // carry on by itself.
+    if (this.replayer) this.replayer.cancel(reason);
+  }
+
+  /**
+   * Drive a taught route (routes.js) under /follow's cargo run.
+   *
+   * Only while armed. The page arms, and DAYAN disarms — so a replay that
+   * could start without the rover being armed would be driving with no stop
+   * button attached to it.
+   */
+  replay(id, segs, route = null) {
+    if (!this.replayer) return null;
+    if (!this.running) return this.replayer.fail(id, 'rover dayanıb — əvvəlcə SÜRMƏYƏ BAŞLA', route);
+    if (!segs) return this.replayer.fail(id, `${route || 'yol'} öyrədilməyib`, route);
+    this.jog.stop();
+    this.reason = `yaddaşdan: ${route || id}`;
+    return this.replayer.run(id, segs, route);
   }
 
   /**
@@ -311,6 +358,7 @@ export class Rover {
       keys: this.keys,
       lift: { dir: this.lift, feed: this.liftFeed, invert: this.liftInvert },
       jogging: this.jog.active,
+      replay: this.replayer ? this.replayer.status() : null,
       // What the rover is physically doing with the current demand, in units
       // that mean something on wheels rather than on a DAC pin.
       motion: this.motionFor(...this.demand),
