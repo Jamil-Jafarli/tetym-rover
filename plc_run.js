@@ -23,7 +23,7 @@ import { loadShared } from './shared.js';
 
 const P = loadShared('plc.js', ['plcMission', 'plcMissionRx', 'plcMissionFix',
   'plcMissionEvent', 'plcMissionTick', 'plcMissionHold', 'plcMissionCode',
-  'plcTxFields', 'plcMissionStatus', 'PLC_CODE_LABEL', 'PLC_ROBOT_IP']);
+  'plcTxFields', 'plcMissionStatus', 'plcLog', 'PLC_CODE_LABEL', 'PLC_ROBOT_IP']);
 
 const SIM_PORT = 1515;
 
@@ -95,6 +95,19 @@ export function startCompetition(args, robot) {
     onFix(fix) {
       P.plcMissionFix(ms, fix, Date.now());
       apply(null);
+    },
+
+    /** Something the robot itself reports — a taught leg ended at the door, say. */
+    event(name) {
+      const changed = P.plcMissionEvent(ms, name, Date.now());
+      apply(null);
+      return changed;
+    },
+
+    /** A line in the mission's log, from something driving the mission. */
+    log(text) {
+      P.plcLog(ms, Date.now(), text);
+      flushLog();
     },
 
     /** A {cmd: 'plc', ...} message from a page. Returns true if it was one. */

@@ -58,7 +58,7 @@ import { startCompetition } from './plc_run.js';
 import { Gpio } from './gpio.js';
 import { Buzzer } from './buzzer.js';
 import { PinLog } from './pinlog.js';
-import { ScenarioRunner } from './scenario_run.js';
+import { ScenarioRunner, ScenarioRecorder, LapDriver } from './scenario_run.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Where the saved tuning lives. TETYM_FOLLOW_FILE moves it, which is how the
@@ -770,8 +770,13 @@ async function main() {
   // Scenarios: the team's own G-code for each leg of a lap, started from /plc.
   // Not to be confused with the taught routes (routes.js, /gcode's Ssenarilər):
   // only one of the two may drive at a time.
+  // Teaching one by driving it: the wire is recorded while a person drives, so
+  // nothing else may write to it meanwhile.
+  const scRecorder = new ScenarioRecorder({ link });
   const scenarios = new ScenarioRunner({ link, jog,
     blocked: () => (rover.holdAll ? 'acil stop basılı'
+      : scRecorder.active ? `senaryo öğretiliyor: ${scRecorder.status().label}`
+      : recorder.active ? '/gcode-da yol yazılıyor'
       : replayer.active ? `yaddaşdan yol sürülür: ${replayer.st.route || ''}` : null) });
 
   // The Pi's own pins: the reversing buzzer first of all. Driven from the
@@ -794,6 +799,20 @@ async function main() {
     fault: () => (link.connected ? null : 'motor kartı bağlı değil'),
     estop: () => { scenarios.stop('acil stop'); rover.stop('acil stop'); },
   });
+
+  // The PLC's task, driven from the scenarios by itself: Başlangıç → A, A →
+  // kapı, the door, kapı → B, and back. See LapDriver. On unless /plc turns it
+  // off (follow.json → scenario_auto).
+  const lap = new LapDriver({
+    runner: scenarios,
+    texts: () => followCfg.scenarios || {},
+    mission: () => competition.status().mission,
+    event: (name) => competition.event(name),
+    log: (text) => competition.log(text),
+    enabled: () => followCfg.scenario_auto !== false,
+  });
+  const lapTimer = setInterval(() => lap.tick(), 200);
+  lapTimer.unref?.();
 
   // Every path but /ws, which is the LiDAR relay — see lidar_relay.js.
   const wss = new WebSocketServer({ noServer: true });
@@ -825,7 +844,7 @@ async function main() {
         radar: radar.status(),
         plc: competition.status(),
         buzzer: buzzer.status(),
-        scenario: scenarios.status(),
+        scenario: { ...scenarios.status(), rec: scRecorder.status(), auto: lap.status() },
       }));
     };
     const pusher = setInterval(send, 100);
@@ -865,8 +884,55 @@ async function main() {
           break;
         }
         case 'scenario_stop':
+          if (lap.abandon('DUR düğmesi')) console.log('lap abandoned');
           if (scenarios.stop('DUR düğmesi')) console.log('scenario stopped');
           break;
+
+        // Teaching a leg: record the wire while it is driven by hand, then
+        // save what was driven as that leg's scenario.
+        case 'scenario_rec_start':
+          try {
+            if (scenarios.running) throw new Error(`senaryo çalışıyor: ${scenarios.run.label}`);
+            if (recorder.active) throw new Error('/gcode-da yol yazılıyor');
+            if (replayer.active) throw new Error('yaddaşdan yol sürülür');
+            scRecorder.start(msg.id);
+            scRecorder.error = null;
+            console.log(`scenario ${msg.id}: teaching`);
+          } catch (e) {
+            scRecorder.error = e.message;
+            console.log(`scenario teach refused: ${e.message}`);
+          }
+          break;
+        case 'scenario_rec_save': {
+          if (!scRecorder.active) break;
+          jog.stop();
+          const r = scRecorder.stop();
+          if (!r.moves) {
+            scRecorder.error = 'hiç hareket yazılmadı — senaryo kaydedilmedi';
+            console.log(`scenario ${r.id}: nothing driven, not saved`);
+            break;
+          }
+          scRecorder.error = r.skipped ? `${r.skipped} mutlak (G90) hareket yazılamadı` : null;
+          followCfg = saveFollowCfg({ ...followCfg, scenarios: { ...(followCfg.scenarios || {}), [r.id]: r.text } });
+          console.log(`scenario ${r.id}: taught, ${r.moves} moves`);
+          break;
+        }
+        case 'scenario_rec_cancel':
+          scRecorder.cancel();
+          scRecorder.error = null;
+          break;
+
+        // The PLC task driven from the scenarios: on/off, and after a leg
+        // failed, drive it again from where the robot is.
+        case 'scenario_auto':
+          followCfg = saveFollowCfg({ ...followCfg, scenario_auto: msg.on !== false });
+          console.log(`scenario auto: ${followCfg.scenario_auto ? 'on' : 'off'}`);
+          break;
+        case 'lap_retry': {
+          const r = lap.retry();
+          console.log(r.ok ? 'lap: retrying leg' : `lap retry refused: ${r.why}`);
+          break;
+        }
 
         case 'follow_cfg':
           followCfg = saveFollowCfg({ ...followCfg, ...(msg.cfg || {}) });
@@ -1121,6 +1187,8 @@ async function main() {
     closing = true;
     console.log('\nshutting down — letting the last move finish');
     competition.close();
+    clearInterval(lapTimer);
+    scRecorder.cancel();
     scenarios.stop('sunucu kapanıyor');
     rover.close();
     clearInterval(buzzerTimer);

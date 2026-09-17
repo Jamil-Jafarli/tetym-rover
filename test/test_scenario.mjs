@@ -16,10 +16,13 @@ import path from 'node:path';
 import WebSocket from 'ws';
 
 import { loadShared } from '../shared.js';
-import { ScenarioRunner } from '../scenario_run.js';
+import { ScenarioRunner, ScenarioRecorder, LapDriver } from '../scenario_run.js';
 
 const S = loadShared('scenario.js', ['SCENARIO_SLOTS', 'scenarioSlot', 'scenarioParse',
-                                     'scenarioProgram', 'scenarioAxisMm', 'scenarioLine']);
+                                     'scenarioProgram', 'scenarioAxisMm', 'scenarioLine',
+                                     'scenarioFromWire', 'scenarioLap']);
+const P = loadShared('plc.js', ['plcMission', 'plcMissionRx', 'plcMissionEvent', 'plcMissionHold',
+                                'plcMissionStatus', 'plcMissionCode', 'plcLog']);
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -35,7 +38,8 @@ console.log('\nSenaryo yerleri');
   }
   ok(['B1_KAPI', 'B2_KAPI', 'B3_KAPI', 'KAPI_DON', 'KAPI_BASLA'].every((id) => ids.includes(id)),
      'dönüş yolu da var: B → kapı, kapıdan geri geçiş, kapı → başlangıç');
-  ok(new Set(ids).size === ids.length && ids.length === 12, '12 yer, hepsi farklı');
+  ok(['BASLA_A1', 'BASLA_A2', 'BASLA_A3'].every((id) => ids.includes(id)), 'başlangıçtan A1, A2, A3\'e de var');
+  ok(new Set(ids).size === ids.length && ids.length === 15, '15 yer, hepsi farklı');
 }
 
 console.log('\nMetin → komutlar');
@@ -77,6 +81,46 @@ console.log('\nSatır hesaplayıcı');
   ok(S.scenarioLine('lift', 60, { liftFeed: 240 }) === 'G1 Z60.00 F240', 'fork yukarı 60 mm');
   ok(S.scenarioLine('lift', 60, { liftInvert: true }) === 'G1 Z-60.00 F240', 'fork yönü ters ayarlıysa işaret dönüyor');
   ok(S.scenarioLine('wait', 1.5, {}) === 'G4 P1500', 'bekle 1.5 s');
+}
+
+console.log('\nSürerek öğretme: karta gidenler → senaryo');
+{
+  // A held W: two half chunks, then full ones; a pivot; the fork; W again at another speed.
+  const wire = ['G91', 'G1 X-20.00 Y20.00 F3000', 'G1 X-20.00 Y20.00 F3000', 'G1 X-40.00 Y40.00 F3000',
+                'M400', 'G1 X-40.00 Y40.00 F3000', 'G1 X-15.00 Y-15.00 F2000', 'G1 X-15.00 Y-15.00 F2000',
+                'G1 Z0.60 F240', 'G1 Z0.60 F240', 'G1 X-10.00 Y10.00 F1500', 'G90', 'G1 X5 Y5', 'G91'];
+  const w = S.scenarioFromWire(wire, { title: 'deneme' });
+  const cmds = S.scenarioParse(w.text).commands;
+  ok(cmds.join(' | ') === 'G91 | G1 X-120.00 Y120.00 F3000 | G1 X-30.00 Y-30.00 F2000 | G1 Z1.20 F240 | G1 X-10.00 Y10.00 F1500',
+     `aynı yöne aynı hızdaki parçalar tek satır, dönüş / fork / başka hız ayrı  (${cmds.join(' | ')})`);
+  ok(w.moves === 4 && w.skipped === 1, 'mutlak (G90) hareket yazılmıyor, sayılıyor');
+  ok(S.scenarioParse(w.text).ok && w.text.startsWith('; deneme'), 'çıkan metin geçerli bir senaryo');
+  ok(S.scenarioFromWire(['G91', 'M400']).moves === 0, 'hareket yoksa satır da yok');
+
+  const taps = new Set();
+  const link = { onWrite(fn) { taps.add(fn); return () => taps.delete(fn); } };
+  const rec = new ScenarioRecorder({ link });
+  rec.start('BASLA_A2');
+  for (const c of ['G1 X-40.00 Y40.00 F3000', 'G1 X-40.00 Y40.00 F3000']) for (const fn of taps) fn(c);
+  ok(rec.status().active && rec.status().moves === 1, 'kayıt sırasında canlı: 1 hareket');
+  const out = rec.stop();
+  ok(out.id === 'BASLA_A2' && /G1 X-80.00 Y80.00 F3000/.test(out.text) && taps.size === 0,
+     'bitince metin elde, telden ayrıldı');
+}
+
+console.log('\nGörev → etaplar');
+{
+  const all = Object.fromEntries(S.SCENARIO_SLOTS.map((sl) => [sl.id, 'G1 X-10 Y10 F3000']));
+  const lap = S.scenarioLap({ a: 2, b: 3 }, all);
+  ok(lap.ok && lap.home && lap.legs.map((l) => l.id).join(' ') === 'BASLA_A2 A2_KAPI KAPI_GIT B3_BIRAK B3_KAPI KAPI_DON KAPI_BASLA',
+     `A2 → B3: ${lap.legs.map((l) => l.id).join(' › ')}`);
+  ok(lap.legs.map((l) => l.then).join(',') === 'picked,gate,,dropped,gate,,home', 'her etabın sonunda göreve bildirilen');
+  const noBack = { ...all }; delete noBack.KAPI_DON;
+  const nb = S.scenarioLap({ a: 1, b: 1 }, noBack);
+  ok(nb.ok && !nb.home && nb.legs.length === 4, 'dönüş eksikse tur yük bırakmada biter');
+  const noA = { ...all, BASLA_A3: '; boş' };
+  const na = S.scenarioLap({ a: 3, b: 1 }, noA);
+  ok(!na.ok && na.missing.join() === 'Başlangıç → A3 · yük al', `gidiş eksikse başlamıyor  (${na.missing})`);
 }
 
 /** A link that answers each command after a short "move". */
@@ -148,6 +192,62 @@ console.log('\nÇalıştırıcı');
      'bilinmeyen yer ve boş senaryo reddediliyor');
 }
 
+console.log('\nOtomatik tur: PLC görevi → senaryolar, kapıda PLC beklenir');
+{
+  const texts = Object.fromEntries(S.SCENARIO_SLOTS.map((sl) => [sl.id, `; ${sl.id}\nG1 X-10 Y10 F3000`]));
+  const link = stubLink({ moveMs: 10 });
+  const runner = new ScenarioRunner({ link, jog: stubJog() });
+  const ms = P.plcMission();
+  let enabled = true;
+  const apply = () => runner.hold(P.plcMissionHold(ms));
+  const lap = new LapDriver({
+    runner, texts: () => texts, mission: () => P.plcMissionStatus(ms, Date.now()),
+    event: (e) => { P.plcMissionEvent(ms, e, Date.now()); apply(); },
+    log: (t) => P.plcLog(ms, Date.now(), t), enabled: () => enabled,
+  });
+  const rx = (a, b, control, replyTo) => { P.plcMissionRx(ms, { ok: true, a, b, control, replyTo }, Date.now()); apply(); };
+  const until = async (fn, n = 200) => { for (let i = 0; i < n && !fn(); i++) { lap.tick(); await sleep(10); } return fn(); };
+
+  rx(1, 2, 1, 1);
+  lap.tick();
+  ok(ms.phase === 'accepted' && !runner.running, 'görev geldi ama PLC başla demeden sürülmüyor');
+  rx(1, 2, 2, 2);
+  lap.tick();
+  ok(runner.running && runner.run.id === 'BASLA_A1', 'PLC başla dedi → Başlangıç → A1 kendiliğinden başladı');
+  ok(await until(() => ms.phase === 'gate'), 'A1 → kapı bitince robot kapıda, PLC komutu bekleniyor (5)');
+  ok(P.plcMissionCode(ms) === 5 && runner.running && runner.run.id === 'KAPI_GIT', 'kapıdan geçiş sırada');
+  const atGate = link.sent.length;
+  await sleep(120);
+  ok(link.sent.length === atGate && runner.status().running.step === 0, 'PLC devam demeden kapıdan geçişin ilk komutu bile gitmiyor');
+  rx(1, 2, 2, 5);
+  ok(await until(() => runner.running && runner.run.id === 'B2_BIRAK') , 'devam → kapıdan geçildi, B2 etabı başladı');
+  ok(await until(() => ms.phase === 'gate' && ms.resume === 'returning'), 'yük bırakıldı (6), dönüşte kapıda yine bekleniyor');
+  rx(0, 0, 2, 5);
+  ok(await until(() => ms.phase === 'ready'), 'dönüş bitti: başlangıçta, göreve hazır (1)');
+  ok(lap.status().lap.state === 'done' && lap.status().lap.legs.every((l) => l.state === 'bitti'), 'yedi etabın hepsi bitti');
+
+  // A leg with nothing taught: the lap does not start at all.
+  delete texts.BASLA_A3;
+  rx(3, 1, 2, 1);          // a new task (the previous one is released by kontrol 1 below)
+  rx(3, 1, 1, 1); rx(3, 1, 1, 1);
+  rx(3, 1, 2, 2);
+  lap.tick();
+  ok(ms.phase === 'to_pick' && !runner.running && lap.status().lap.state === 'failed'
+     && /A3/.test(lap.status().lap.why), `öğretilmemiş etap: sürülmüyor, sebebi yazılı  (${lap.status().lap.why})`);
+  texts.BASLA_A3 = 'G1 X-10 Y10';
+  ok(lap.retry().ok && runner.running && runner.run.id === 'BASLA_A3', 'öğretildikten sonra «yeniden dene» sürüyor');
+  runner.stop('DUR düğmesi');
+  ok(lap.status().lap.state === 'failed' && /DUR/.test(lap.status().lap.why), 'yolda durdurulan tur kendiliğinden devam etmiyor');
+  P.plcMissionEvent(ms, 'reset', Date.now());
+  lap.tick();
+  ok(lap.status().lap.state === 'stopped', 'görev sıfırlanınca tur bırakıldı');
+
+  enabled = false;
+  rx(2, 2, 1, 1); rx(2, 2, 2, 2);
+  lap.tick();
+  ok(ms.phase === 'to_pick' && !runner.running, 'otomatik kapalıyken PLC görevi robotu sürmüyor');
+}
+
 console.log('\nSunucuda: kaydediliyor, kart yokken sebebiyle reddediliyor');
 {
   const dir = mkdtempSync(path.join(tmpdir(), 'tetym-scn-'));
@@ -180,8 +280,22 @@ console.log('\nSunucuda: kaydediliyor, kart yokken sebebiyle reddediliyor');
     ok(st.scenario.refused && st.scenario.refused.why === 'Ender kartı bağlı değil',
        `kart yokken çalışmıyor ve sayfa sebebini görüyor  (${st.scenario.refused && st.scenario.refused.why})`);
     ok(/scenario A2_KAPI: refused/.test(out), 'konsola da yazıldı');
+    ok(st.scenario.auto && st.scenario.auto.enabled === true, 'otomatik görev sürüşü varsayılan açık');
+    ws.send(JSON.stringify({ cmd: 'scenario_auto', on: false }));
+    await sleep(250);
+    ok(st.scenario.auto.enabled === false && st.follow_cfg.scenario_auto === false, 'kapatılınca kaydediliyor');
+    ws.send(JSON.stringify({ cmd: 'scenario_rec_start', id: 'BASLA_A1' }));
+    await sleep(250);
+    ok(st.scenario.rec.active && st.scenario.rec.id === 'BASLA_A1', 'sürerek öğretme başladı');
+    ws.send(JSON.stringify({ cmd: 'scenario_run', id: 'A2_KAPI' }));
+    await sleep(250);
+    ws.send(JSON.stringify({ cmd: 'scenario_rec_save' }));
+    await sleep(250);
+    ok(!st.scenario.rec.active && /hareket yazılmadı/.test(st.scenario.rec.error || '')
+       && !st.follow_cfg.scenarios.BASLA_A1, 'hiç sürülmeden bitirilen öğretme kaydedilmiyor, sebebi yazılı');
     ws.close();
     const plc = await (await fetch('http://127.0.0.1:18207/plc')).text();
+    ok(/id="autoCard"/.test(plc) && /scenario_rec_start/.test(plc), '/plc sayfasında otomatik görev kartı ve öğretme var');
     ok(/id="scCard"/.test(plc) && /scenario_run/.test(plc), '/plc sayfasında senaryo kartı var');
     ok((await fetch('http://127.0.0.1:18207/scenario.js')).ok, '/scenario.js sunuluyor');
   } finally {

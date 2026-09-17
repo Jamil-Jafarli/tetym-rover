@@ -339,6 +339,17 @@ function plcMissionEvent(ms, ev, now = 0) {
       if (ms.phase !== 'to_drop') return false;
       plcGo(ms, 'returning', now, 'yük bırakıldı — başlangıca dönülüyor');
       return true;
+    // At the door by a taught scenario rather than by reading KAPI1/KAPI2: the
+    // same wait. Once per approach — a door already waited at on this approach
+    // (the camera read its code on the way) is not waited at again.
+    case 'gate': {
+      if (ms.phase !== 'to_drop' && ms.phase !== 'returning') return false;
+      if (ms.gateKey && ms.gateKey.startsWith(`${ms.phase}:`)) return false;
+      ms.gateKey = `${ms.phase}:senaryo`;
+      ms.resume = ms.phase;
+      plcGo(ms, 'gate', now, 'kapıya varıldı — fabrika komutu bekleniyor');
+      return true;
+    }
     case 'home':
       if (ms.phase !== 'returning') return false;
       plcFinish(ms, now);
@@ -430,6 +441,6 @@ if (typeof module !== 'undefined' && module.exports) {
     PLC_TX_LEN, PLC_RX_LEN, PLC_CODE_LABEL, PLC_CONTROL_LABEL, PLC_PHASE_CODE,
     plcCm, plcEncodeTx, plcDecodeTx, plcEncodeRx, plcDecodeRx, plcHex,
     plcMission, plcMissionCode, plcMissionHold, plcTaskStops, plcMissionRx,
-    plcMissionFix, plcMissionEvent, plcMissionTick, plcTxFields, plcMissionStatus,
+    plcMissionFix, plcMissionEvent, plcMissionTick, plcTxFields, plcMissionStatus, plcLog,
   };
 }

@@ -75,6 +75,21 @@
   .helper input{width:78px;font:500 13px inherit;border:1px solid var(--line);border-radius:8px;padding:7px 8px}
   .scerr{color:var(--stop);font-size:13px;margin-top:6px}
   .scrun{margin-top:8px;padding:8px 10px;border-radius:8px;background:#dafbe1;font-weight:600}
+  .teach{margin-top:10px;padding:12px;border:2px solid var(--warn);border-radius:10px;background:#fffbe6}
+  .teach .keys{display:grid;grid-template-columns:repeat(3,52px);gap:6px}
+  .teach kbd{display:flex;align-items:center;justify-content:center;height:44px;border:1px solid var(--line);
+    border-radius:8px;background:#fff;font:700 15px ui-monospace,Menlo,Consolas,monospace;user-select:none;touch-action:none;cursor:pointer}
+  .teach kbd.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .teach pre{margin:8px 0 0;max-height:140px;overflow:auto;font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;
+    background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+  .matrix{border-collapse:collapse;width:auto}
+  .matrix td,.matrix th{text-align:center;padding:6px 10px;border:1px solid var(--line)}
+  .matrix td.y{background:#dafbe1;color:var(--accent);font-weight:700}
+  .matrix td.n{background:#ffebe9;color:var(--stop)}
+  .legs{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
+  .legs li{padding:5px 9px;border-radius:7px;background:var(--soft)}
+  .legs li.bitti{background:#dafbe1} .legs li.sürülüyor{background:#fff8c5;font-weight:700} .legs li.durdu{background:#ffebe9}
+  .switch{display:flex;align-items:center;gap:8px;font-weight:600}
 </style>
 </head>
 <body>
@@ -144,6 +159,34 @@
     <div class="log" id="events"><div class="muted">henüz olay yok</div></div>
   </section>
 
+  <!-- ══ the task, driven from the scenarios ══ -->
+  <section class="card c12" id="autoCard">
+    <h2>Otomatik görev — PLC verisiyle öğretilmiş senaryolardan sürüş</h2>
+    <div class="scgrid" style="grid-template-columns:auto 1fr">
+      <div>
+        <label class="switch"><input type="checkbox" id="autoOn"> PLC görev verip «başla» deyince kendisi sürsün</label>
+        <p class="note">Sıra: <b>Başlangıç → Ax</b> (yük al) › <b>Ax → kapı</b> (PLC devam komutu beklenir) ›
+          <b>kapıdan geçiş</b> › <b>kapı → By</b> (yük bırak) › dönüş öğretildiyse başlangıca.</p>
+        <table class="matrix" style="margin-top:10px">
+          <tr><th></th><th>B1</th><th>B2</th><th>B3</th></tr>
+          <tr><th>A1</th><td id="mx11"></td><td id="mx12"></td><td id="mx13"></td></tr>
+          <tr><th>A2</th><td id="mx21"></td><td id="mx22"></td><td id="mx23"></td></tr>
+          <tr><th>A3</th><td id="mx31"></td><td id="mx32"></td><td id="mx33"></td></tr>
+        </table>
+        <p class="note" id="autoHome">–</p>
+      </div>
+      <div style="min-width:0">
+        <b id="autoTitle">Henüz otomatik tur yok</b>
+        <div class="muted" id="autoWhy"></div>
+        <ul class="legs" id="autoLegs"></ul>
+        <div class="btns">
+          <button id="autoRetry" hidden>Duran etabı buradan yeniden dene</button>
+          <button id="autoStop" hidden>Otomatik turu bırak</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- ══ scenarios ══ -->
   <section class="card c12" id="scCard">
     <h2>Senaryolar — her etap için G-code</h2>
@@ -164,10 +207,31 @@ G1 X-40 Y-40 F2000  ; sağa dön
 G4 P500             ; yarım saniye bekle"></textarea>
         <div class="scerr" id="scErr"></div>
         <div class="btns" style="margin-top:8px">
+          <button id="scTeach" title="Robotu W A S D / Q E ile sürün; karta giden hareketler bu etabın senaryosu olur">Sürerek öğret</button>
           <button id="scSave">Kaydet</button>
           <button id="scRun" class="danger" style="background:var(--accent);border-color:var(--accent)">Kaydet ve çalıştır</button>
           <button id="scStop">DUR</button>
         </div>
+        <div class="teach" id="teach" hidden>
+          <b id="teachTitle">–</b>
+          <p class="note" style="margin-top:4px">Robotu etabın başladığı yere koyun, sonra sürün: <b>W A S D</b> sürüş,
+            <b>Q / E</b> fork aşağı / yukarı (klavye ya da aşağıdaki tuşlar). Bitince «Bitir ve kaydet».</p>
+          <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-top:8px">
+            <div class="keys">
+              <kbd data-lift="-1">Q</kbd><kbd data-key="w">W</kbd><kbd data-lift="1">E</kbd>
+              <kbd data-key="a">A</kbd><kbd data-key="s">S</kbd><kbd data-key="d">D</kbd>
+            </div>
+            <label class="muted">Hız <input type="range" id="tPct" min="5" max="100" step="5" value="30">
+              <b id="tPctV">30</b> %</label>
+          </div>
+          <div class="muted" id="teachInfo" style="margin-top:6px">–</div>
+          <pre id="teachText"></pre>
+          <div class="btns">
+            <button id="teachSave" style="background:var(--accent);border-color:var(--accent);color:#fff">Bitir ve kaydet</button>
+            <button id="teachCancel">İptal</button>
+          </div>
+        </div>
+        <div class="scerr" id="teachErr"></div>
         <div class="scrun" id="scRunning" hidden>–</div>
         <p class="note" id="scLast">–</p>
 
@@ -548,6 +612,8 @@ function paintScenario(s) {
       + `${sc.running.label} · ${sc.running.step}/${sc.running.total}`
       + ` · ${sc.running.current || ''} · ${fmt(sc.running.seconds, 1)} s`;
   }
+  paintTeach(sc.rec || {});
+  paintAuto(sc.auto || {}, s.plc && s.plc.mission, saved);
   const l = sc.last, r = sc.refused;
   $('scLast').innerHTML = !supported
     ? 'Bu kart (ESP32) G-code bilmez — senaryolar Ender kartıyla çalışır.'
@@ -556,6 +622,131 @@ function paintScenario(s) {
     : l ? `Son: ${esc(l.label)} — ${esc(l.result)}${l.why ? ' (' + esc(l.why) + ')' : ''}, `
         + `${l.step}/${l.total} komut, ${fmt(l.seconds, 1)} s`
     : 'henüz çalıştırılmadı';
+}
+
+// ── teaching a leg by driving it ─────────────────────────────────────
+let teaching = false;         // the server is recording, for some page
+const HAND = new Set();
+let liftDir = 0;
+let handDriving = false;
+const tPct = () => Number($('tPct').value) || 30;
+
+$('scTeach').onclick = () => {
+  if (scDirty && !confirm('Kaydedilmemiş değişiklikler silinsin mi? Öğretilen hareketler bu metnin yerine geçecek.')) return;
+  if (scSaved(scSel).trim() && !confirm(`«${scenarioSlot(scSel).label}» zaten yazılı. Sürerek öğretilen yenisi onun yerine geçsin mi?`)) return;
+  scDirty = false;
+  sendWs({ cmd: 'scenario_rec_start', id: scSel });
+};
+$('teachSave').onclick = () => { releaseHand(); setTimeout(() => sendWs({ cmd: 'scenario_rec_save' }), 250); };
+$('teachCancel').onclick = () => { releaseHand(); sendWs({ cmd: 'scenario_rec_cancel' }); };
+$('tPct').addEventListener('input', () => { $('tPctV').textContent = $('tPct').value; });
+
+function pumpHand() {
+  if (!teaching) return;
+  const swap = !!(scLastStatus && scLastStatus.follow_cfg && scLastStatus.follow_cfg.pilot
+                  && scLastStatus.follow_cfg.pilot.swap);
+  if (HAND.size) sendWs({ cmd: 'keys', keys: [...HAND], pct: tPct(), swap });
+  if (liftDir) sendWs({ cmd: 'lift', dir: liftDir });
+}
+setInterval(pumpHand, 50);
+function handDown(k) {
+  if (!teaching || HAND.has(k)) return;
+  HAND.add(k);
+  if (!handDriving) { handDriving = true; sendWs({ cmd: 'start' }); }
+  pumpHand(); paintKeys();
+}
+function handUp(k) {
+  if (!HAND.delete(k)) return;
+  if (!HAND.size) {
+    sendWs({ cmd: 'keys', keys: [], pct: tPct() });
+    if (handDriving) sendWs({ cmd: 'stop' });
+    handDriving = false;
+  } else pumpHand();
+  paintKeys();
+}
+function liftSet(dir) {
+  if (liftDir === dir || (dir && !teaching)) return;
+  liftDir = dir;
+  sendWs({ cmd: 'lift', dir });
+  paintKeys();
+}
+function releaseHand() { for (const k of [...HAND]) handUp(k); liftSet(0); }
+function paintKeys() {
+  for (const el of document.querySelectorAll('#teach kbd')) {
+    el.classList.toggle('on', el.dataset.key ? HAND.has(el.dataset.key) : Number(el.dataset.lift) === liftDir);
+  }
+}
+const driveKeys = { KeyW: 'w', KeyA: 'a', KeyS: 's', KeyD: 'd' };
+const liftKeys = { KeyQ: -1, KeyE: 1 };
+addEventListener('keydown', (e) => {
+  if (!teaching || /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (driveKeys[e.code]) { e.preventDefault(); if (!e.repeat) handDown(driveKeys[e.code]); }
+  if (liftKeys[e.code]) { e.preventDefault(); if (!e.repeat) liftSet(liftKeys[e.code]); }
+});
+addEventListener('keyup', (e) => {
+  if (driveKeys[e.code]) handUp(driveKeys[e.code]);
+  if (liftKeys[e.code] && liftDir === liftKeys[e.code]) liftSet(0);
+});
+addEventListener('blur', releaseHand);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseHand(); });
+for (const el of document.querySelectorAll('#teach kbd')) {
+  el.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    el.setPointerCapture?.(e.pointerId);
+    if (el.dataset.key) handDown(el.dataset.key); else liftSet(Number(el.dataset.lift));
+  });
+  const up = () => { if (el.dataset.key) handUp(el.dataset.key); else if (liftDir === Number(el.dataset.lift)) liftSet(0); };
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((ev) => el.addEventListener(ev, up));
+}
+
+function paintTeach(rec) {
+  const was = teaching;
+  teaching = !!rec.active;
+  if (was && !teaching) releaseHand();
+  $('teach').hidden = !teaching;
+  $('scTeach').disabled = teaching;
+  $('teachErr').textContent = rec.error || '';
+  if (!teaching) return;
+  $('teachTitle').textContent = `Öğretiliyor: ${rec.label}`;
+  $('teachInfo').textContent = `${rec.moves} hareket · ${rec.secs} s`
+    + (rec.skipped ? ` · ${rec.skipped} mutlak hareket yazılamadı` : '');
+  $('teachText').textContent = rec.text || '';
+  if (rec.id !== scSel && !scDirty) { scSel = rec.id; $('scText').value = scSaved(scSel); drawScList(); checkSc(); }
+}
+
+// ── the task, driven from the scenarios ──────────────────────────────
+$('autoOn').onchange = () => sendWs({ cmd: 'scenario_auto', on: $('autoOn').checked });
+$('autoRetry').onclick = () => sendWs({ cmd: 'lap_retry' });
+$('autoStop').onclick = () => { if (confirm('Otomatik tur bırakılsın mı? Robot mevcut hareketten sonra durur.')) sendWs({ cmd: 'scenario_stop' }); };
+
+function paintAuto(auto, m, saved) {
+  if (document.activeElement !== $('autoOn')) $('autoOn').checked = auto.enabled !== false;
+  for (const a of [1, 2, 3]) {
+    for (const b of [1, 2, 3]) {
+      const plan = scenarioLap({ a, b }, saved);
+      const td = $(`mx${a}${b}`);
+      td.className = plan.ok ? 'y' : 'n';
+      td.textContent = plan.ok ? '✓' : '✗';
+      td.title = plan.ok ? `A${a} → B${b} hazır` : `Eksik: ${plan.missing.join(', ')}`;
+    }
+  }
+  const homeReady = [1, 2, 3].filter((b) => scenarioLap({ a: 1, b }, saved).home);
+  $('autoHome').textContent = homeReady.length
+    ? `Dönüş öğretilmiş: B${homeReady.join(', B')} → başlangıç.`
+    : 'Dönüş öğretilmemiş — yük bırakıldıktan sonra robot başlangıca elle getirilir.';
+
+  const lap = auto.lap;
+  const STATE = { driving: 'sürülüyor', failed: 'DURDU', done: 'tamamlandı', stopped: 'bırakıldı' };
+  $('autoTitle').textContent = lap
+    ? `A${lap.task.a} → B${lap.task.b} · ${STATE[lap.state] || lap.state}`
+    : (auto.enabled === false ? 'Otomatik sürüş kapalı' : 'PLC görevi bekleniyor');
+  $('autoWhy').textContent = lap && lap.why ? lap.why
+    : lap && lap.state === 'driving' && m && m.hold ? `bekliyor: ${m.hold}` : '';
+  $('autoWhy').className = lap && lap.state === 'failed' ? 'bad' : 'muted';
+  $('autoLegs').innerHTML = lap ? lap.legs.map((l) =>
+    `<li class="${esc(l.state)}">${l.state === 'bitti' ? '✓' : l.state === 'sürülüyor' ? '▶' : l.state === 'durdu' ? '✗' : '·'} ${esc(l.label)}</li>`).join('') : '';
+  $('autoRetry').hidden = !(lap && lap.state === 'failed');
+  $('autoStop').hidden = !(lap && (lap.state === 'driving' || lap.state === 'failed'));
 }
 
 // The helper: board geometry from the board itself, so a line is right for
