@@ -22,7 +22,7 @@ const S = loadShared('scenario.js', ['SCENARIO_SLOTS', 'scenarioSlot', 'scenario
                                      'scenarioProgram', 'scenarioAxisMm', 'scenarioLine',
                                      'scenarioFromWire', 'scenarioLap']);
 const P = loadShared('plc.js', ['plcMission', 'plcMissionRx', 'plcMissionEvent', 'plcMissionHold',
-                                'plcMissionStatus', 'plcMissionCode', 'plcLog']);
+                                'plcMissionStatus', 'plcMissionCode', 'plcMissionTick', 'plcLog']);
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -197,7 +197,10 @@ console.log('\nOtomatik tur: PLC görevi → senaryolar, kapıda PLC beklenir');
   const texts = Object.fromEntries(S.SCENARIO_SLOTS.map((sl) => [sl.id, `; ${sl.id}\nG1 X-10 Y10 F3000`]));
   const link = stubLink({ moveMs: 10 });
   const runner = new ScenarioRunner({ link, jog: stubJog() });
-  const ms = P.plcMission();
+  // A door that opens after 60 ms rather than twenty seconds: the wait itself
+  // is checked in test_plc.mjs, and what is being checked here is that the lap
+  // goes on driving once it is over.
+  const ms = P.plcMission({ gateWaitMs: 60 });
   let enabled = true;
   const apply = () => runner.hold(P.plcMissionHold(ms));
   const lap = new LapDriver({
@@ -206,7 +209,17 @@ console.log('\nOtomatik tur: PLC görevi → senaryolar, kapıda PLC beklenir');
     log: (t) => P.plcLog(ms, Date.now(), t), enabled: () => enabled,
   });
   const rx = (a, b, control, replyTo) => { P.plcMissionRx(ms, { ok: true, a, b, control, replyTo }, Date.now()); apply(); };
-  const until = async (fn, n = 200) => { for (let i = 0; i < n && !fn(); i++) { lap.tick(); await sleep(10); } return fn(); };
+  // The mission's own clock, which on the server is plc_run.js's 200 ms timer:
+  // it is what lets the door's wait run out.
+  const until = async (fn, n = 200) => {
+    for (let i = 0; i < n && !fn(); i++) {
+      P.plcMissionTick(ms, {}, Date.now());
+      apply();
+      lap.tick();
+      await sleep(10);
+    }
+    return fn();
+  };
 
   rx(1, 2, 1, 1);
   lap.tick();
@@ -217,12 +230,13 @@ console.log('\nOtomatik tur: PLC görevi → senaryolar, kapıda PLC beklenir');
   ok(await until(() => ms.phase === 'gate'), 'A1 → kapı bitince robot kapıda, PLC komutu bekleniyor (5)');
   ok(P.plcMissionCode(ms) === 5 && runner.running && runner.run.id === 'KAPI_GIT', 'kapıdan geçiş sırada');
   const atGate = link.sent.length;
-  await sleep(120);
-  ok(link.sent.length === atGate && runner.status().running.step === 0, 'PLC devam demeden kapıdan geçişin ilk komutu bile gitmiyor');
+  await sleep(40);
+  ok(link.sent.length === atGate && runner.status().running.step === 0,
+     'bekleme süresi dolmadan kapıdan geçişin ilk komutu bile gitmiyor');
   rx(1, 2, 2, 5);
-  ok(await until(() => runner.running && runner.run.id === 'B2_BIRAK') , 'devam → kapıdan geçildi, B2 etabı başladı');
+  ok(await until(() => runner.running && runner.run.id === 'B2_BIRAK'),
+     'süre doldu → kapıdan geçildi, B2 etabı başladı');
   ok(await until(() => ms.phase === 'gate' && ms.resume === 'returning'), 'yük bırakıldı (6), dönüşte kapıda yine bekleniyor');
-  rx(0, 0, 2, 5);
   ok(await until(() => ms.phase === 'ready'), 'dönüş bitti: başlangıçta, göreve hazır (1)');
   ok(lap.status().lap.state === 'done' && lap.status().lap.legs.every((l) => l.state === 'bitti'), 'yedi etabın hepsi bitti');
 

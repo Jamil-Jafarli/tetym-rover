@@ -89,6 +89,7 @@
   .legs{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
   .legs li{padding:5px 9px;border-radius:7px;background:var(--soft)}
   .legs li.bitti{background:#dafbe1} .legs li.sürülüyor{background:#fff8c5;font-weight:700} .legs li.durdu{background:#ffebe9}
+  .legs li.manevra{background:#ddf4ff;font-weight:700}
   .switch{display:flex;align-items:center;gap:8px;font-weight:600}
 </style>
 </head>
@@ -183,6 +184,57 @@
           <button id="autoRetry" hidden>Duran etabı buradan yeniden dene</button>
           <button id="autoStop" hidden>Otomatik turu bırak</button>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ the pallet manoeuvre ══ -->
+  <section class="card c12" id="apCard">
+    <h2>Palet manevrası — istasyondaki son iki metre</h2>
+    <p class="note" style="margin-top:-4px">Öğretilmiş etap robotu istasyona getirir; paleti çengele almak
+      öğretilemez, çünkü palet provadaki yerinde değildir. Sıra: <b>xətti tap</b> › <b>xəttə nizamlan</b> ›
+      <b>xətt üzrə irəli</b> › <b>gəldiyi qədər düz geri</b> › <b>180° dön</b> › <b>gəldiyi qədər irəli</b> ›
+      <b>aktuator 15 s</b>. Geri ve ileri mesafeler ölçülür: robot ne kadar geldiyse o kadar.</p>
+    <div class="scgrid" style="grid-template-columns:auto 1fr">
+      <div>
+        <label class="switch"><input type="checkbox" id="apOn"> Otomatik turda manevra çalışsın</label>
+        <div class="helper" style="margin-top:10px">
+          <span class="muted">Robot boyu</span><input type="number" id="apRover" min="1" step="10" placeholder="1300"><span class="muted">mm</span>
+          <span class="muted">Xətt üzrə</span><input type="number" id="apAlong" min="0" step="10" placeholder="robot boyu"><span class="muted">mm</span>
+        </div>
+        <div class="helper">
+          <span class="muted">Geri</span><input type="number" id="apBack" min="0" step="10" placeholder="ölçülen"><span class="muted">mm</span>
+          <span class="muted">Dönüş</span><input type="number" id="apTurn" step="5" placeholder="180"><span class="muted">°</span>
+        </div>
+        <div class="helper">
+          <span class="muted">Çəngəllə irəli</span><input type="number" id="apIn" min="0" step="10" placeholder="ölçülen"><span class="muted">mm</span>
+          <span class="muted">Aktuator</span><input type="number" id="apLift" min="1" step="1" placeholder="15"><span class="muted">s</span>
+        </div>
+        <div class="helper">
+          <span class="muted">Manevra hızı</span><input type="number" id="apSpeed" min="4" max="60" step="1" placeholder="16"><span class="muted">%</span>
+          <label class="muted"><input type="checkbox" id="apCamFront"> Kamera ön tarafta</label>
+        </div>
+        <div class="helper" style="margin-top:10px">
+          <span class="muted">Kapıda bekleme</span><input type="number" id="apGate" min="0" step="1" placeholder="20"><span class="muted">s</span>
+          <label class="muted" title="Kapalıyken byte1/byte2 ancak istasyonun QR'ı okununca dolar"><input type="checkbox" id="apEcho"> byte1/2 görev gelir gelmez</label>
+        </div>
+        <p class="note" id="apPlan">–</p>
+      </div>
+      <div style="min-width:0">
+        <div class="kv" style="margin-top:0;grid-template-columns:repeat(3,1fr)">
+          <div><span>Sunucunun gördüğü xətt</span><b id="apEye">–</b></div>
+          <div><span>Sapma (yakın / uzak)</span><b id="apErr">–</b></div>
+          <div><span>Gedilen məsafə</span><b id="apDrove">–</b></div>
+        </div>
+        <b id="apTitle" style="display:block;margin-top:10px">Manevra çalışmıyor</b>
+        <div class="muted" id="apWhy"></div>
+        <ul class="legs" id="apSteps"></ul>
+        <div class="btns">
+          <button id="apPick">Yük alma manevrasını dene</button>
+          <button id="apDrop">Yük bırakma manevrasını dene</button>
+          <button id="apStop" class="danger">DUR</button>
+        </div>
+        <div class="scerr" id="apErrBox"></div>
       </div>
     </div>
   </section>
@@ -288,6 +340,7 @@ G4 P500             ; yarım saniye bekle"></textarea>
 <script src="/qrnav.js"></script>
 <script src="/plc.js"></script>
 <script src="/scenario.js"></script>
+<script src="/approach.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -614,6 +667,7 @@ function paintScenario(s) {
   }
   paintTeach(sc.rec || {});
   paintAuto(sc.auto || {}, s.plc && s.plc.mission, saved);
+  paintApproach(s, cfg);
   const l = sc.last, r = sc.refused;
   $('scLast').innerHTML = !supported
     ? 'Bu kart (ESP32) G-code bilmez — senaryolar Ender kartıyla çalışır.'
@@ -736,17 +790,104 @@ function paintAuto(auto, m, saved) {
     : 'Dönüş öğretilmemiş — yük bırakıldıktan sonra robot başlangıca elle getirilir.';
 
   const lap = auto.lap;
-  const STATE = { driving: 'sürülüyor', failed: 'DURDU', done: 'tamamlandı', stopped: 'bırakıldı' };
+  const STATE = { driving: 'sürülüyor', manoeuvre: 'palet manevrası', failed: 'DURDU',
+                  done: 'tamamlandı', stopped: 'bırakıldı' };
   $('autoTitle').textContent = lap
     ? `A${lap.task.a} → B${lap.task.b} · ${STATE[lap.state] || lap.state}`
     : (auto.enabled === false ? 'Otomatik sürüş kapalı' : 'PLC görevi bekleniyor');
   $('autoWhy').textContent = lap && lap.why ? lap.why
     : lap && lap.state === 'driving' && m && m.hold ? `bekliyor: ${m.hold}` : '';
   $('autoWhy').className = lap && lap.state === 'failed' ? 'bad' : 'muted';
+  const MARK = { bitti: '✓', sürülüyor: '▶', manevra: '⇄', durdu: '✗' };
   $('autoLegs').innerHTML = lap ? lap.legs.map((l) =>
-    `<li class="${esc(l.state)}">${l.state === 'bitti' ? '✓' : l.state === 'sürülüyor' ? '▶' : l.state === 'durdu' ? '✗' : '·'} ${esc(l.label)}</li>`).join('') : '';
+    `<li class="${esc(l.state)}">${MARK[l.state] || '·'} ${esc(l.label)}`
+    + `${l.state === 'manevra' ? ' <span class="muted">— palet manevrası</span>' : ''}</li>`).join('') : '';
   $('autoRetry').hidden = !(lap && lap.state === 'failed');
-  $('autoStop').hidden = !(lap && (lap.state === 'driving' || lap.state === 'failed'));
+  $('autoStop').hidden = !(lap && (lap.state === 'driving' || lap.state === 'manoeuvre' || lap.state === 'failed'));
+}
+
+// ── the pallet manoeuvre ────────────────────────────────────────────
+// The numbers are saved the moment a box changes, like the helper's geometry
+// below: a manoeuvre measured on the field is a setting, not a session.
+
+const AP_BOXES = { apRover: 'rover_mm', apAlong: 'along_mm', apBack: 'back_mm',
+                   apTurn: 'turn_deg', apIn: 'in_mm', apLift: 'lift_s', apSpeed: 'speed' };
+let apSeeded = false;
+
+function apCfg() {
+  const out = {};
+  for (const [id, key] of Object.entries(AP_BOXES)) {
+    const v = $(id).value.trim();
+    out[key] = v === '' ? null : Number(v);
+  }
+  out.cam_front = $('apCamFront').checked;
+  out.off = !$('apOn').checked;
+  return out;
+}
+
+// Nothing is saved before the first status frame has filled the boxes in:
+// an empty form written back would turn the manoeuvre off by itself.
+const apSave = () => { if (apSeeded) sendWs({ cmd: 'follow_cfg', cfg: { approach: apCfg() } }); };
+const apSavePlc = () => { if (!apSeeded) return; sendWs({ cmd: 'follow_cfg', cfg: { plc: {
+  gate_wait_s: $('apGate').value.trim() === '' ? 20 : Number($('apGate').value),
+  echo: $('apEcho').checked } } }); };
+
+for (const id of [...Object.keys(AP_BOXES), 'apCamFront', 'apOn']) {
+  $(id).addEventListener('change', apSave);
+}
+$('apGate').addEventListener('change', apSavePlc);
+$('apEcho').addEventListener('change', apSavePlc);
+$('apPick').onclick = () => sendWs({ cmd: 'approach_run', kind: 'pick' });
+$('apDrop').onclick = () => sendWs({ cmd: 'approach_run', kind: 'drop' });
+$('apStop').onclick = () => sendWs({ cmd: 'approach_stop' });
+
+function paintApproach(s, cfg) {
+  const ap = cfg.approach || {};
+  if (!apSeeded) {
+    apSeeded = true;
+    for (const [id, key] of Object.entries(AP_BOXES)) {
+      $(id).value = ap[key] == null ? '' : ap[key];
+    }
+    $('apCamFront').checked = ap.cam_front === true;
+    $('apOn').checked = ap.off !== true;
+    const p = cfg.plc || {};
+    $('apGate').value = p.gate_wait_s == null ? 20 : p.gate_wait_s;
+    $('apEcho').checked = p.echo === true;
+  }
+
+  const mm = approachMm(ap);
+  $('apPlan').textContent = `Sıra: xətt üzrə ${(mm.along / 1000).toFixed(2)} m · geri `
+    + `${ap.back_mm > 0 ? (mm.back / 1000).toFixed(2) + ' m' : 'gəldiyi qədər'} · `
+    + `${Math.round(Math.abs(mm.turn))}° · ileri `
+    + `${ap.in_mm > 0 ? (mm.in / 1000).toFixed(2) + ' m' : 'gəldiyi qədər'} · `
+    + `aktuator ${ap.lift_s || 15} s.`;
+
+  const eye = s.eye || {};
+  $('apEye').textContent = !eye.on ? 'kapalı — manevra açılınca okunur'
+    : eye.err ? eye.err
+    : !eye.reading ? 'kameradan renkli kare gelmedi'
+    : eye.seeing ? `görünür · ${eye.bands} şerit · ${eye.mode}`
+    : `yok · ${eye.bands || 0} şerit${eye.mode ? ` · ${eye.mode}` : ''}`;
+  $('apEye').className = eye.seeing ? 'ok' : 'muted';
+  $('apErr').textContent = eye.near == null ? '–' : `${fmt(eye.near)} / ${fmt(eye.far)}`;
+
+  const a = s.approach || {};
+  const run = a.running;
+  $('apDrove').textContent = run ? `${(run.drove_mm / 1000).toFixed(2)} m`
+    : a.last ? `${(a.last.drove_mm / 1000).toFixed(2)} m (son)` : '–';
+  $('apTitle').textContent = run
+    ? `${run.label} · adım ${run.step}/${run.total} — ${run.current || ''}`
+    : a.last ? `Son manevra: ${a.last.label} — ${a.last.result} (${a.last.seconds} s)`
+    : 'Manevra çalışmıyor';
+  $('apWhy').textContent = run ? (run.paused ? `fasilə: ${run.paused}` : run.note || '')
+    : a.last && a.last.why ? a.last.why : '';
+  $('apWhy').className = !run && a.last && a.last.result !== 'bitti' ? 'bad' : 'muted';
+  $('apSteps').innerHTML = run ? run.steps.map((st) =>
+    `<li class="${st.n < run.step ? 'bitti' : st.n === run.step ? 'sürülüyor' : ''}">`
+    + `${st.n < run.step ? '✓' : st.n === run.step ? '▶' : '·'} ${esc(st.label)}</li>`).join('') : '';
+  $('apPick').disabled = !!run;
+  $('apDrop').disabled = !!run;
+  $('apErrBox').textContent = a.refused ? a.refused.why : '';
 }
 
 // The helper: board geometry from the board itself, so a line is right for

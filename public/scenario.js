@@ -244,9 +244,16 @@ function scenarioFromWire(lines, o = {}) {
  * mission when each one ends.
  *
  *   then: 'picked'   the load is on the fork        (durum 3 → 4)
- *         'gate'     at the door: wait for the PLC  (→ 5, until kontrol 2)
+ *         'gate'     at the door: wait there        (→ 5, twenty seconds)
  *         'dropped'  the load is down               (4 → 6)
  *         'home'     back in the start area         (6 → 1)
+ *
+ * `approach` is the pallet manoeuvre that runs AFTER the leg and BEFORE the
+ * event — public/approach.js. A taught leg can bring the robot to a station;
+ * it cannot put the forks into a pallet, because the forks are on the end the
+ * camera is not on and the pallet is not where it was in practice. So the two
+ * station legs hand over to the camera for their last two metres, and only say
+ * "yük alındı" once that has actually happened.
  *
  * The way there must be taught whole — starting a task the robot can only
  * drive half of leaves it somewhere in the field with a load on the fork. The
@@ -255,17 +262,20 @@ function scenarioFromWire(lines, o = {}) {
  *
  * @param {{a:number, b:number}} task
  * @param {object} texts  follow.json's scenarios, id → text
- * @returns {{ok: boolean, legs: {id, label, then}[], missing: string[], home: boolean}}
+ * @returns {{ok: boolean, legs: {id, label, then, approach}[], missing: string[],
+ *            home: boolean}}
  */
 function scenarioLap(task, texts = {}) {
   const a = Number(task && task.a), b = Number(task && task.b);
   if (![1, 2, 3].includes(a) || ![1, 2, 3].includes(b)) {
     return { ok: false, legs: [], missing: ['görev geçersiz'], home: false };
   }
-  const there = [[`BASLA_A${a}`, 'picked'], [`A${a}_KAPI`, 'gate'], ['KAPI_GIT', null], [`B${b}_BIRAK`, 'dropped']];
+  const there = [[`BASLA_A${a}`, 'picked', 'pick'], [`A${a}_KAPI`, 'gate'],
+                 ['KAPI_GIT', null], [`B${b}_BIRAK`, 'dropped', 'drop']];
   const back = [[`B${b}_KAPI`, 'gate'], ['KAPI_DON', null], ['KAPI_BASLA', 'home']];
   const taught = (id) => scenarioParse((texts || {})[id]).ok;
-  const leg = ([id, then]) => ({ id, label: scenarioSlot(id).label, then });
+  const leg = ([id, then, approach = null]) =>
+    ({ id, label: scenarioSlot(id).label, then, approach });
   const missing = there.filter(([id]) => !taught(id)).map(([id]) => scenarioSlot(id).label);
   const home = back.every(([id]) => taught(id));
   const legs = [...there, ...(home ? back : [])].map(leg);

@@ -1466,12 +1466,69 @@ How it runs (`scenario_run.js`), and why:
 - **not two at once**: a /plc scenario and a taught route (/gcode's
   *Ssenarilər*, routes.js) refuse to start while the other is driving.
 
+The two **station** legs — `Başlangıç → Ax` and `kapıdan Bx` — do not end in
+their event. They end in the pallet manoeuvre above, and only when that has
+finished does the mission hear *yük alındı* / *yük bırakıldı*. A manoeuvre that
+fails stops the lap exactly as a failed leg does.
+
 **Satır hesaplayıcı** writes the lines: type the wheel circumference and the
 distance between the wheels once (saved as `scenario_geom`), then *İleri /
 Geri* by mm, *Sola / Sağa dön* by degrees, *Fork yukarı / aşağı* by mm, *Bekle*
 by seconds. It uses the board's own mm per revolution and /gcode's direction
 swaps, so `İleri 500` on a 200 mm wheel with 40 mm/tur is
 `G1 X-100.00 Y100.00 F3000`.
+
+### The pallet manoeuvre — the last two metres at a station (`/plc`)
+
+A taught leg brings the robot to a station. It cannot put the forks into a
+pallet, for two reasons that do not go away with more practice: the forks are
+on the end of the robot the **camera is not on**, so it arrives pointing the
+wrong way round; and the pallet is not exactly where it was when the leg was
+taught. So the last two metres are measured rather than remembered.
+
+Seven steps — `public/approach.js` says what they are, `approach_run.js` drives
+them, and the **Palet manevrası** card on /plc shows and tunes them:
+
+| | step | driven by |
+|---|---|---|
+| 1 | **xətti tap** — the line is in front of the camera | nothing moves |
+| 2 | **xəttə nizamlan** — square up on it | the pilot, at a crawl |
+| 3 | **xətt üzrə irəli** — follow it forward, past the pallet | the pilot |
+| 4 | **düz geri** — straight back, into clear space | one `G1` |
+| 5 | **180° dön** — on the spot | one `G1` |
+| 6 | **çəngəllərlə irəli** — the same distance again, forks first | one `G1` |
+| 7 | **aktuator 15 s** — up at a pick, down at a drop | the lift |
+
+Steps 3 and 6 cover the same ground in opposite directions, so the robot ends
+step 6 where it ended step 3 with its forks where its camera was. Step 4 exists
+because the 180° has to happen in the space the robot just drove through, not
+on top of the pallet.
+
+**How far is "as far as it came".** The distance for steps 4 and 6 is not a
+setting: the odometer counts steps 2 and 3, and the two `G1`s are built from
+that count when they are sent. Squaring up moves the robot along the line too,
+and that distance has to be given back as well. The only number that has to be
+guessed is step 3's, and its default is the robot's own length — 130 cm — which
+is how far past the pallet it has to be before turning round leaves the forks
+able to reach it. Every distance can be pinned in the card if the field says
+otherwise.
+
+**Which way is forward.** The camera is on the end `DIRECTIONS` calls the back
+(see *The four directions*), so the manoeuvre is written in the camera's frame
+and every straight line of G-code in it is `scenarioLine()`'s opposite one.
+*Kamera ön tarafta* turns that off if the camera is ever moved.
+
+The line comes from the server, not from a page: `road_eye.js` runs the same
+`public/road.js` /vision tunes and /follow flies, over small colour frames the
+camera decodes a few times a second (`jpeg_gray.py --rgb 480x360`, at `roadFps`,
+and only while something is reading them). A competition lap is driven with no
+browser open, so the line cannot be something only a tab can see.
+
+The PLC's **bekle** pauses a manoeuvre where it is — wheels to zero, the
+actuator stopped, its fifteen seconds paused rather than running down — and
+devam carries on. W A S D, DUR, an emergency stop and the last browser closing
+all end it. The two rehearsal buttons run one against a line and a pallet
+without waiting for a PLC task.
 
 ### The reversing buzzer, and the Pi's own pins — `/pins`
 
@@ -1588,12 +1645,28 @@ the control byte "Byte3"; the packet is three bytes, so it is byte 2.)
 |---|---|
 | 1 hazır | no task |
 | 2 görev alındı | a task arrived; the robot is **held** until the PLC answers that packet with kontrol 2 |
-| 3 yüksüz | driving to Ax |
-| 4 yüklü | leaving Ax (ALIMx read on the way out, or **Yük alındı** on /plc) |
-| 5 fabrika komutu | **KAPI1** read heading for the door (or **KAPI2** on the way back): **held** until the PLC answers a durum-5 packet with kontrol 2 |
-| 6 dönüş | leaving Bx (BIRAKx on the way out, or **Yük bırakıldı**) |
+| 3 yüksüz | driving to Ax — and never again once the load is on the forks |
+| 4 yüklü | the pallet manoeuvre at Ax finished (or ALIMx read on the way out, or **Yük alındı** on /plc) |
+| 5 fabrika komutu | **KAPI1** read heading for the door (or **KAPI2** on the way back): **held** for twenty seconds |
+| 6 dönüş | the manoeuvre at Bx finished (or BIRAKx on the way out, or **Yük bırakıldı**) |
 | 7 hata | the motor board cannot be reached |
 | 8 acil stop | /plc's button or Space |
+
+**Bytes 1 and 2 are what the robot has confirmed**, not what it was told. They
+stay 0 from the moment a task arrives until the camera reads that station's
+code — **ALIM**x puts x in byte 1, **BIRAK**x puts x in byte 2 — so the packet
+says "I am at A2" only once the robot has actually seen A2. A station the robot
+reaches with no code read (the camera missed it) still fills the byte, from the
+manoeuvre starting there. The *byte1/2 görev gelir gelmez* box on /plc
+(`follow.json` → `plc.echo`) reports the task's own numbers from the moment it
+is taken instead, for a factory that expects them straight back.
+
+**The door is timed.** The robot reports durum 5 at the door and waits twenty
+seconds, then goes — whatever the PLC has said. A devam that arrives inside
+that window is logged (the factory did open the door) but does not shorten it:
+the wait is the robot's, not the PLC's. *Kapıda bekleme* on /plc sets it
+(`follow.json` → `plc.gate_wait_s`); **0** gives the old behaviour back, where
+only a kontrol 2 in reply to a durum-5 packet releases it.
 
 The route is planned the moment a task arrives — `START → Ax → Bx → START`
 through the door both ways — and shown on /plc and /dashboard. The lap
@@ -1618,13 +1691,14 @@ PLC says bekle starts paused. /gcode's scenario card and /follow both show
 `FASİLƏ` / `fasilə`. An emergency stop still ends the scenario outright.
 
 Two things the specification leaves open are decided in `public/plc.js` and
-written down there: a station byte of 0 in PAKET_TX means "no task yet", and
+written down there: a station byte of 0 in PAKET_TX means "not there yet", and
 until the first QR the robot reports the start area's coordinates (/plc marks
 them as an assumption).
 
-What this does **not** do is steer. The mission knows the route, the turn at the
-next junction and when to wait, and it stops the wheels when it must; following
-the line and taking the turn is still the pilot's job on /follow.
+What the mission does **not** do is steer. It knows the route, the turn at the
+next junction and when to wait, and it stops the wheels when it must. Between
+stations the driving is the taught scenarios' (*Scenarios*, above) or the
+pilot's on /follow; at a station it is the pallet manoeuvre's.
 
 ```
 node server.js --plc                                    the competition: Ender board, real PLC
@@ -3718,8 +3792,9 @@ printer's, and the third is what both machines run.
 | `esp.js` | USB wire format — port of `rpi/esp.py` |
 | `esp32ws_sim.js` | mirror of `ws_dac.ino`; powers `--fake` |
 | `esp32sim.js` | mirror of `throttle_dac_2ch.ino` (USB path) |
-| `camera.js` | the Pi's webcam: one ffmpeg, 1080p MJPEG copied out to viewers; a few JPEGs a second to `jpeg_gray.py` for QR |
-| `jpeg_gray.py` | JPEG in, full-resolution grey out, on a pipe (PIL) — the QR reader's decoder |
+| `camera.js` | the Pi's webcam: one ffmpeg, 1080p MJPEG copied out to viewers; a few JPEGs a second to `jpeg_gray.py` for QR, and a few small colour ones for the line |
+| `jpeg_gray.py` | JPEG in, pixels out, on a pipe (PIL): full-resolution grey for the QR reader, or `--rgb 480x360` for the line detector |
+| `road_eye.js` | the line as the SERVER sees it: `public/road.js` over those colour frames, so a lap needs no browser |
 | `qr.js` | counting QR readings honestly; `QrLooker` feeds the worker thread |
 | `qr_worker.js` | one QR look per frame, off the main thread |
 | `qrwarp.js` | locate the code, cut it tight, magnify, straighten (tilt / corners warps), jsQR — and a CLI for stills |
@@ -3732,8 +3807,10 @@ printer's, and the third is what both machines run.
 | `public/obstacle.html` | forward sonar: drive, stop, wait, carry on |
 | `public/dashboard.html` | everything at once: speed, volts, ESP32 + Pi, camera, obstacle, QR, the field map and the next turn |
 | `public/route.js` | dead reckoning: two wheel percentages → a path. Pure |
-| `public/scenario.js` | scenarios: the 12 legs, checking the text, what goes to the board, the helper's lines. Pure |
-| `scenario_run.js` | running a scenario on the Ender board, a command at a time, and stopping it |
+| `public/scenario.js` | scenarios: the 15 legs, checking the text, what goes to the board, the helper's lines, and which legs a task drives. Pure |
+| `scenario_run.js` | running a scenario on the Ender board, a command at a time, stopping it, and driving a PLC task from the taught legs |
+| `public/approach.js` | the pallet manoeuvre: find, align, along, back, 180°, in, lift — as steps and G-code. Pure |
+| `approach_run.js` | driving that manoeuvre: the pilot on the server's line, three `G1`s built from what was measured, and the fork |
 | `gpio.js` | the Pi's output pins: sysfs, pinctrl, or an honest "this machine has none" |
 | `buzzer.js` | the reversing buzzer: the beep pattern and which pins it drives |
 | `public/pins_pi.html` | /pins: the buzzer's settings and the pin notes |
@@ -3811,6 +3888,7 @@ npm test             # everything, both machines
 npm run test:bench   # server + firmware + follow path
 npm run test:route   # dead reckoning — the map's arithmetic
 npm run test:camera  # JPEG framing, QR counting, and the Pi's own numbers
+npm run test:approach # the pallet manoeuvre: its steps, the server's line, a whole run
 npm run test:lidar   # SCN1 against webscan's golden bytes, the grid, the relay on both machines
 
 # the printer
@@ -3853,7 +3931,8 @@ worth running without them.
 | `test/test_lidar_motor.mjs` | the lidar motor: volts → duty (1.6 V → 44.4 %), the clamp, the lines that would reach `lidar_pwm.py`, and the real server's `/api/lidar-motor` with `--no-lidar` |
 | `test/test_scenario.mjs` | the text, the M400s and G91, the helper's lines, the runner stopping, pausing on the PLC's bekle and refusing, and the server saving and reporting |
 | `test/test_buzzer.mjs` | the beep pattern, which pins go high, what counts as reversing, and the server (dry, `--no-gpio`) refusing a pin nobody wrote down — 37 checks |
-| `test/test_plc.mjs` | PAKET_TX / PAKET_RX byte for byte, a full lap through the real field with the door both ways, the link against the simulator over UDP, and the rover server holding their wheels — 99 checks |
+| `test/test_plc.mjs` | PAKET_TX / PAKET_RX byte for byte, a full lap through the real field with the door both ways and its twenty seconds, bytes 1 and 2 filling only once the station's code is read, the link against the simulator over UDP, and the rover server holding their wheels — 89 checks |
+| `test/test_approach.mjs` | the pallet manoeuvre: the seven steps and their G-code in the camera's frame, `road_eye.js` against painted frames, a whole run through the runner (find, align, measure, back up by what it measured, turn, drive in, lift) with the PLC's bekle and DUR, and the lap not calling a station leg done until it has happened — 68 checks |
 | `test/test_lidar.mjs` | the SCN1 encoder byte-for-byte against the vector webscan's Swift test pins, the grid and motion gate, the simulator's map against its true walls, the relay end to end on both machines, ARKit's tracking flags, and the mDNS announcement appearing and withdrawing — 94 checks |
 | `test/test_radar.mjs` | the radar: LD06 packets (CRC, split across writes, junk before), every JSON shape and the text lines, units and radians guessed, offset / ccw / expiry / nearest / sweep rate, then the real server's radar port over UDP, TCP, HTTP, ws, TLS and wss — 61 checks, no browser |
 | `test/fake_lidar.mjs` | not a test: a room swept 10×/s, sent to :8443 over any transport in any format, for watching the radar card move |

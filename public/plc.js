@@ -61,6 +61,23 @@
  * the reply to a packet that said 2 (for "start") or 5 (for "the door"). A PLC
  * that was already saying 2 before the robot reached the door has not opened
  * it for the robot; it was still answering the previous question.
+ *
+ * ── The door is timed ────────────────────────────────────────────────
+ *
+ * The robot reports durum 5 at the door and waits PLC_GATE_WAIT_MS — twenty
+ * seconds — and then goes, whatever the PLC has said. A devam that arrives
+ * inside that window is logged (the factory did open the door) but does not
+ * shorten it: the wait is the robot's, not the PLC's. `gate_wait_s: 0` in the
+ * settings gives the old behaviour back, where only a kontrol 2 in reply to a
+ * durum-5 packet releases it.
+ *
+ * ── Which station the robot says it is at ────────────────────────────
+ *
+ * Bytes 1 and 2 are what the ROBOT has confirmed, not what it was told. They
+ * stay 0 from the moment a task arrives until the camera reads that station's
+ * code — ALIMx puts x in byte 1, BIRAKx puts x in byte 2 — so the packet says
+ * "I am at A2" only once the robot has seen A2. `echo: true` reports the task
+ * as soon as it is taken, for a factory that expects its own numbers back.
  */
 
 const PLC_HOST = '192.168.100.100';
@@ -69,6 +86,8 @@ const PLC_ROBOT_IP = '192.168.100.10';
 const PLC_LAPTOP_IP = '192.168.100.20';
 const PLC_GATEWAY = '192.168.100.1';
 const PLC_PERIOD_MS = 1000;
+/** How long the robot stands at the door reporting durum 5. See the header. */
+const PLC_GATE_WAIT_MS = 20000;
 const PLC_TX_LEN = 7;
 const PLC_RX_LEN = 3;
 
@@ -168,13 +187,25 @@ function plcHex(bytes) {
 
 // ── the mission ──────────────────────────────────────────────────────
 
-/** A fresh mission: no task, waiting for one. */
-function plcMission() {
+/**
+ * A fresh mission: no task, waiting for one.
+ *
+ * @param {{gateWaitMs?: number, echo?: boolean}} [o]
+ *   gateWaitMs: the door's own wait, 0 to wait for the PLC alone.
+ *   echo: report the task's stations in bytes 1 and 2 as soon as it is taken,
+ *         rather than once the camera has confirmed each one.
+ */
+function plcMission(o = {}) {
   return {
     phase: 'ready',
     task: null,         // {a, b} while there is one
+    alim: 0,            // byte 1: the pick station the ROBOT has confirmed
+    birakma: 0,         // byte 2: the drop station, likewise
+    loaded: false,      // the load is on the forks — durum is never 3 again
     resume: null,       // the phase to go back to once the door opens
     gateKey: null,      // which approach to the door has already been waited at
+    gateUntil: 0,       // when the door's own wait runs out
+    gateOpen: false,    // the PLC said devam while the robot stood there
     homing: false,      // BASLA has been read on the way back
     done: null,         // the task just finished — see plcMissionRx
     estop: false,
@@ -183,6 +214,9 @@ function plcMission() {
     since: 0,           // when the phase last changed
     pose: { x: 0, y: 0, known: false },   // the last position worth reporting
     events: [],         // [{at, text}] newest last
+    gateWaitMs: Number.isFinite(Number(o.gateWaitMs)) && Number(o.gateWaitMs) >= 0
+      ? Number(o.gateWaitMs) : PLC_GATE_WAIT_MS,
+    echo: o.echo === true,
   };
 }
 
@@ -190,6 +224,10 @@ function plcMission() {
 function plcMissionCode(ms) {
   if (ms.estop) return 8;
   if (ms.fault) return 7;
+  // Once the forks are under a pallet the robot is a loaded robot, and durum 3
+  // — "görev alındı, yüksüz hareket" — is not something it may say again on
+  // this task, whatever phase a retry or a re-plan puts it back into.
+  if (ms.loaded && ms.phase === 'to_pick') return 4;
   return PLC_PHASE_CODE[ms.phase] || 7;
 }
 
@@ -197,7 +235,9 @@ function plcMissionCode(ms) {
 function plcMissionHold(ms) {
   if (ms.estop) return 'acil stop';
   if (ms.phase === 'accepted') return 'PLC başlat komutu bekleniyor';
-  if (ms.phase === 'gate') return 'kapı: PLC devam komutu bekleniyor';
+  if (ms.phase === 'gate') {
+    return ms.gateWaitMs > 0 ? 'kapı: bekleme süresi' : 'kapı: PLC devam komutu bekleniyor';
+  }
   if (ms.wait) return 'PLC bekle dedi — devam komutu bekleniyor';
   return null;
 }
@@ -211,6 +251,29 @@ function plcGo(ms, phase, now, text) {
   ms.phase = phase;
   ms.since = now;
   if (text) plcLog(ms, now, text);
+}
+
+/**
+ * Stand at the door: durum 5, and the clock the robot leaves on.
+ *
+ * `key` is which approach this is, so the same sign read twice — or a taught
+ * leg ending where the camera already stopped the robot — does not start the
+ * wait over.
+ */
+function plcGate(ms, key, now, text) {
+  ms.gateKey = key;
+  ms.resume = ms.phase;
+  ms.gateUntil = ms.gateWaitMs > 0 ? now + ms.gateWaitMs : 0;
+  ms.gateOpen = false;
+  plcGo(ms, 'gate', now, text);
+}
+
+/** Leave the door and carry on with whatever the robot was doing. */
+function plcLeaveGate(ms, now, text) {
+  const back = ms.resume || 'to_drop';
+  ms.resume = null;
+  ms.gateUntil = 0;
+  plcGo(ms, back, now, text);
 }
 
 /** The stops a task means, in order, for fieldMission(). */
@@ -258,7 +321,11 @@ function plcMissionRx(ms, rx, now = 0) {
 
   if (ms.phase === 'ready' && hasTask && !ms.done) {
     ms.task = { a: rx.a, b: rx.b };
+    ms.alim = ms.echo ? rx.a : 0;
+    ms.birakma = ms.echo ? rx.b : 0;
+    ms.loaded = false;
     ms.gateKey = null;
+    ms.gateUntil = 0;
     ms.homing = false;
     plcGo(ms, 'accepted', now, `görev alındı: A${rx.a} → B${rx.b}`);
     out.plan = plcTaskStops(ms.task);
@@ -269,6 +336,7 @@ function plcMissionRx(ms, rx, now = 0) {
     // The PLC changed its mind before saying go: take the new task.
     if (hasTask && (rx.a !== ms.task.a || rx.b !== ms.task.b)) {
       ms.task = { a: rx.a, b: rx.b };
+      if (ms.echo) { ms.alim = rx.a; ms.birakma = rx.b; }
       plcLog(ms, now, `görev değişti: A${rx.a} → B${rx.b}`);
       out.plan = plcTaskStops(ms.task);
       return out;
@@ -280,9 +348,17 @@ function plcMissionRx(ms, rx, now = 0) {
   }
 
   if (ms.phase === 'gate' && rx.control === 2 && rx.replyTo === 5) {
-    const back = ms.resume || 'to_drop';
-    ms.resume = null;
-    plcGo(ms, back, now, 'PLC devam dedi — kapıdan geçiliyor');
+    // The factory has opened the door. With a wait of its own the robot still
+    // stands there until it runs out (see the header); without one, this is
+    // what releases it.
+    if (ms.gateWaitMs > 0) {
+      if (!ms.gateOpen) {
+        ms.gateOpen = true;
+        plcLog(ms, now, 'PLC devam dedi — bekleme süresi dolunca geçilecek');
+      }
+    } else {
+      plcLeaveGate(ms, now, 'PLC devam dedi — kapıdan geçiliyor');
+    }
   }
   return out;
 }
@@ -299,9 +375,24 @@ function plcMissionFix(ms, fix, now = 0) {
   if (!fix || !fix.ok || !ms.task) return;
   const A = `A${ms.task.a}`, B = `B${ms.task.b}`;
 
+  // Bytes 1 and 2: the station the robot has SEEN. ALIMx is read on the leg
+  // into A{a} — fix.to is the station it is heading for — and again on the way
+  // out, when it is the one behind. Either read is the robot confirming it got
+  // there, and it is the moment the packet starts naming the station.
+  if (!ms.alim && (fix.to === A || fix.from === A)) {
+    ms.alim = ms.task.a;
+    plcLog(ms, now, `${fix.text || fix.qr} okundu — PAKET_TX byte1 = ${ms.alim}`);
+  }
+  if (!ms.birakma && (fix.to === B || fix.from === B)) {
+    ms.birakma = ms.task.b;
+    plcLog(ms, now, `${fix.text || fix.qr} okundu — PAKET_TX byte2 = ${ms.birakma}`);
+  }
+
   if (ms.phase === 'to_pick' && fix.from === A) {
+    ms.loaded = true;
     plcGo(ms, 'to_drop', now, `${A}'den yüklü çıkıldı`);
   } else if (ms.phase === 'to_drop' && fix.from === B) {
+    ms.loaded = false;
     plcGo(ms, 'returning', now, `${B}'den yüksüz çıkıldı — başlangıca dönülüyor`);
   }
 
@@ -313,9 +404,9 @@ function plcMissionFix(ms, fix, now = 0) {
   if ((ms.phase === 'to_drop' || ms.phase === 'returning') && (fix.to === 'KAPI' || fix.to === 'GATE')) {
     const key = `${ms.phase}:${fix.from}`;
     if (ms.gateKey !== key) {
-      ms.gateKey = key;
-      ms.resume = ms.phase;
-      plcGo(ms, 'gate', now, `${fix.text || fix.qr} okundu — kapıda fabrika komutu bekleniyor`);
+      plcGate(ms, key, now, `${fix.text || fix.qr} okundu — kapıda`
+        + (ms.gateWaitMs > 0 ? ` ${Math.round(ms.gateWaitMs / 1000)} s bekleniyor`
+                             : ' fabrika komutu bekleniyor'));
     }
   }
 
@@ -333,11 +424,28 @@ function plcMissionEvent(ms, ev, now = 0) {
   switch (ev) {
     case 'picked':
       if (ms.phase !== 'to_pick') return false;
+      ms.loaded = true;
       plcGo(ms, 'to_drop', now, 'yük alındı');
       return true;
     case 'dropped':
       if (ms.phase !== 'to_drop') return false;
+      ms.loaded = false;
       plcGo(ms, 'returning', now, 'yük bırakıldı — başlangıca dönülüyor');
+      return true;
+
+    // At the station by a taught scenario, with no code read on the way in —
+    // a QR the camera missed must not leave byte 1 or byte 2 at zero for the
+    // whole lap. The station is the one the PLC named; the robot is standing
+    // at it, which is the thing the byte is reporting.
+    case 'at_pick':
+      if (!ms.task || ms.alim) return false;
+      ms.alim = ms.task.a;
+      plcLog(ms, now, `A${ms.alim}'e varıldı — PAKET_TX byte1 = ${ms.alim}`);
+      return true;
+    case 'at_drop':
+      if (!ms.task || ms.birakma) return false;
+      ms.birakma = ms.task.b;
+      plcLog(ms, now, `B${ms.birakma}'e varıldı — PAKET_TX byte2 = ${ms.birakma}`);
       return true;
     // At the door by a taught scenario rather than by reading KAPI1/KAPI2: the
     // same wait. Once per approach — a door already waited at on this approach
@@ -345,9 +453,9 @@ function plcMissionEvent(ms, ev, now = 0) {
     case 'gate': {
       if (ms.phase !== 'to_drop' && ms.phase !== 'returning') return false;
       if (ms.gateKey && ms.gateKey.startsWith(`${ms.phase}:`)) return false;
-      ms.gateKey = `${ms.phase}:senaryo`;
-      ms.resume = ms.phase;
-      plcGo(ms, 'gate', now, 'kapıya varıldı — fabrika komutu bekleniyor');
+      plcGate(ms, `${ms.phase}:senaryo`, now, 'kapıya varıldı — '
+        + (ms.gateWaitMs > 0 ? `${Math.round(ms.gateWaitMs / 1000)} s bekleniyor`
+                             : 'fabrika komutu bekleniyor'));
       return true;
     }
     case 'home':
@@ -369,6 +477,7 @@ function plcMissionEvent(ms, ev, now = 0) {
       // not hand it straight back before anyone has looked at why.
       if (ms.task) ms.done = ms.task;
       ms.task = null; ms.resume = null; ms.gateKey = null; ms.homing = false; ms.wait = false;
+      ms.alim = 0; ms.birakma = 0; ms.loaded = false; ms.gateUntil = 0;
       plcGo(ms, 'ready', now, 'görev sıfırlandı');
       return true;
     }
@@ -381,6 +490,7 @@ function plcFinish(ms, now) {
   ms.done = ms.task;
   const t = ms.task;
   ms.task = null; ms.resume = null; ms.gateKey = null; ms.homing = false; ms.wait = false;
+  ms.alim = 0; ms.birakma = 0; ms.loaded = false; ms.gateUntil = 0;
   plcGo(ms, 'ready', now, t ? `görev tamamlandı: A${t.a} → B${t.b}` : 'başlangıçta');
 }
 
@@ -399,16 +509,29 @@ function plcMissionTick(ms, robot = {}, now = 0) {
   }
   const p = robot.pose;
   if (p && p.known) ms.pose = { x: p.x, y: p.y, known: true };
+  // The door. Twenty seconds of durum 5 and the robot goes, whether or not the
+  // factory ever answered — see the header.
+  if (ms.phase === 'gate' && ms.gateUntil && now >= ms.gateUntil) {
+    plcLeaveGate(ms, now, ms.gateOpen
+      ? 'bekleme süresi doldu — kapıdan geçiliyor (PLC devam demişti)'
+      : 'bekleme süresi doldu — kapıdan geçiliyor');
+  }
   // Back in the start area and stopped: the lap is over.
   if (ms.phase === 'returning' && ms.homing && robot.armed === false) plcFinish(ms, now);
 }
 
-/** What goes into the next PAKET_TX. */
+/**
+ * What goes into the next PAKET_TX.
+ *
+ * Bytes 1 and 2 are what the robot has confirmed, not what it was told — see
+ * the header. `echo` puts the task's own numbers there from the moment it is
+ * taken, for a factory that wants them back straight away.
+ */
 function plcTxFields(ms) {
   return {
     code: plcMissionCode(ms),
-    a: ms.task ? ms.task.a : 0,
-    b: ms.task ? ms.task.b : 0,
+    a: ms.echo ? (ms.task ? ms.task.a : 0) : ms.alim,
+    b: ms.echo ? (ms.task ? ms.task.b : 0) : ms.birakma,
     x: ms.pose.x,
     y: ms.pose.y,
   };
@@ -424,6 +547,15 @@ function plcMissionStatus(ms, now = 0) {
     hold: plcMissionHold(ms),
     wait: ms.wait,
     task: ms.task,
+    // What bytes 1 and 2 of the next packet will actually say.
+    alim: ms.echo ? (ms.task ? ms.task.a : 0) : ms.alim,
+    birakma: ms.echo ? (ms.task ? ms.task.b : 0) : ms.birakma,
+    echo: ms.echo,
+    loaded: ms.loaded,
+    gate_wait_s: Math.round(ms.gateWaitMs / 100) / 10,
+    gate_left_s: ms.phase === 'gate' && ms.gateUntil
+      ? Math.max(0, Math.round((ms.gateUntil - now) / 100) / 10) : null,
+    gate_open: ms.gateOpen,
     stops: plcTaskStops(ms.task),
     estop: ms.estop,
     fault: ms.fault,
@@ -438,7 +570,8 @@ function plcMissionStatus(ms, now = 0) {
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     PLC_HOST, PLC_PORT, PLC_ROBOT_IP, PLC_LAPTOP_IP, PLC_GATEWAY, PLC_PERIOD_MS,
-    PLC_TX_LEN, PLC_RX_LEN, PLC_CODE_LABEL, PLC_CONTROL_LABEL, PLC_PHASE_CODE,
+    PLC_TX_LEN, PLC_RX_LEN, PLC_GATE_WAIT_MS, PLC_CODE_LABEL, PLC_CONTROL_LABEL,
+    PLC_PHASE_CODE,
     plcCm, plcEncodeTx, plcDecodeTx, plcEncodeRx, plcDecodeRx, plcHex,
     plcMission, plcMissionCode, plcMissionHold, plcTaskStops, plcMissionRx,
     plcMissionFix, plcMissionEvent, plcMissionTick, plcTxFields, plcMissionStatus, plcLog,

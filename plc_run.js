@@ -30,9 +30,13 @@ const SIM_PORT = 1515;
 /**
  * @param {object} args   parsed server arguments: plc, plcBind, plcSim, plcSimPort
  * @param {object} robot  see the header
+ * @param {{gateWaitMs?: number, echo?: boolean}} [opts]  the two mission
+ *        settings /plc can change: how long the robot stands at the door, and
+ *        whether bytes 1 and 2 echo the task before the camera has confirmed
+ *        the station. See public/plc.js.
  */
-export function startCompetition(args, robot) {
-  const ms = P.plcMission();
+export function startCompetition(args, robot, opts = {}) {
+  const ms = P.plcMission(opts);
   // Until the first QR the robot has no measured position, but PAKET_TX has no
   // way to say "unknown" — so it reports the start area, where a run begins,
   // and /plc marks the number as an assumption rather than a measurement.
@@ -102,6 +106,18 @@ export function startCompetition(args, robot) {
       const changed = P.plcMissionEvent(ms, name, Date.now());
       apply(null);
       return changed;
+    },
+
+    /**
+     * The two settings, changed while it runs — /plc's boxes. A door already
+     * being stood at keeps the deadline it was given; the next one uses the
+     * new number.
+     */
+    setCfg(o = {}) {
+      if (Number.isFinite(Number(o.gateWaitMs)) && Number(o.gateWaitMs) >= 0) {
+        ms.gateWaitMs = Number(o.gateWaitMs);
+      }
+      if (typeof o.echo === 'boolean') ms.echo = o.echo;
     },
 
     /** A line in the mission's log, from something driving the mission. */

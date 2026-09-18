@@ -59,6 +59,9 @@ import { Gpio } from './gpio.js';
 import { Buzzer } from './buzzer.js';
 import { PinLog } from './pinlog.js';
 import { ScenarioRunner, ScenarioRecorder, LapDriver } from './scenario_run.js';
+import { loadShared } from './shared.js';
+import { RoadEye } from './road_eye.js';
+import { ApproachRunner } from './approach_run.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Where the saved tuning lives. TETYM_FOLLOW_FILE moves it, which is how the
@@ -84,6 +87,20 @@ function saveFollowCfg(cfg) {
   try { fs.writeFileSync(FOLLOW_FILE, JSON.stringify(cfg, null, 2)); }
   catch (err) { console.warn('could not save follow.json:', err.message); }
   return cfg;
+}
+
+/**
+ * The two mission settings that live in follow.json rather than in plc.js:
+ * how long the robot stands at the door, and whether bytes 1 and 2 of
+ * PAKET_TX echo the task before the camera has confirmed the station.
+ */
+function plcCfg(cfg = {}) {
+  const p = cfg.plc || {};
+  const out = { echo: p.echo === true };
+  if (Number.isFinite(Number(p.gate_wait_s)) && Number(p.gate_wait_s) >= 0) {
+    out.gateWaitMs = Math.round(Number(p.gate_wait_s) * 1000);
+  }
+  return out;
 }
 
 function parseArgs(argv) {
@@ -527,6 +544,7 @@ async function main() {
                     '/teach.js': 'teach.js', '/qrview.js': 'qrview.js',
                     '/lidarmotor.js': 'lidarmotor.js', '/qrnav.js': 'qrnav.js',
                     '/radar.js': 'radar.js', '/plc.js': 'plc.js', '/scenario.js': 'scenario.js',
+                    '/approach.js': 'approach.js',
                     // The LiDAR map's decoder and drawing, for /lidar and /dashboard.
                     '/lidar.js': 'lidar.js', '/lidarmap.js': 'lidarmap.js' };
 
@@ -612,6 +630,16 @@ async function main() {
     qr.error = 'QR oxuma söndürülüb (--no-qr)';
   }
 
+  // ── the line, seen by the server ──────────────────────────────────
+  // The same detector /vision tunes and /follow flies (public/road.js), fed
+  // from small colour frames off the same camera. It is what the pallet
+  // manoeuvre steers on: a competition lap is driven with no browser open, so
+  // the line cannot be something only a page can see. See road_eye.js.
+  // Not subscribed at all when the manoeuvre is off: the colour frames cost a
+  // second JPEG decode a few times a second, and nothing else reads them.
+  const eye = new RoadEye({ camera, on: (followCfg.approach || {}).off !== true });
+  eye.setCfg(followCfg);
+
   // Every pin failure — buzzer and noted pins, lift, lidar motor — kept for
   // /pins, where the modules' own "last error" would have cleared it by the
   // time anybody looked. See pinlog.js.
@@ -695,7 +723,12 @@ async function main() {
       } });
       return;
     }
-    if (url === '/api/plc') { reply(res, 200, competition.status()); return; }
+    if (url === '/api/plc') {
+      reply(res, 200, { ...competition.status(), eye: eye.status(),
+                        approach: approach.status(),
+                        scenario: { ...scenarios.status(), auto: lap.status() } });
+      return;
+    }
 
     // The whole trail, once. The status frame carries only where the rover is
     // now; a page fetches this on load and appends from the stream after.
@@ -779,11 +812,37 @@ async function main() {
       : recorder.active ? '/gcode-da yol yazılıyor'
       : replayer.active ? `yaddaşdan yol sürülür: ${replayer.st.route || ''}` : null) });
 
+  // The pallet manoeuvre: the last two metres at a station, which cannot be
+  // taught because the pallet is not where it was in practice. It steers on
+  // the line the server can see (eye, above), measures how far it came with
+  // the odometer, and works the fork. See approach_run.js.
+  const approach = new ApproachRunner({
+    link, jog, rover, eye, act,
+    metres: () => nav.odo.dist,
+    cfg: () => followCfg.approach || {},
+    // The same geometry /plc's helper buttons build their G-code from: the
+    // wheel and the board, plus which end the camera is on.
+    geom: () => ({ ...(followCfg.scenario_geom || {}),
+                   mmPerRev: link.mmPerRev().X, invert: link.invert,
+                   feed: (followCfg.scenario_geom || {}).feed || 3000,
+                   camFront: (followCfg.approach || {}).cam_front === true }),
+    pilot: () => followCfg.pilot || {},
+    blocked: () => (rover.holdAll ? 'acil stop basılı'
+      : scenarios.running ? `senaryo çalışıyor: ${scenarios.run.label}`
+      : scRecorder.active ? 'senaryo öğretiliyor'
+      : recorder.active ? '/gcode-da yol yazılıyor'
+      : replayer.active ? 'yaddaşdan yol sürülür' : null),
+    log: (text) => competition.log(text),
+  });
+
   // The Pi's own pins: the reversing buzzer first of all. Driven from the
   // demand rather than from a page, so it sounds with no browser open.
   const gpio = new Gpio({ enabled: args.gpio, log: pinLog });
   const buzzer = new Buzzer({ gpio, cfg: followCfg });
-  const buzzerTimer = setInterval(() => buzzer.setReversing(rover.reversing), 100);
+  // The manoeuvre's own reverse leg is G-code, not wheel demand, so the rover
+  // cannot see it — see ApproachRunner.reversing.
+  const buzzerTimer = setInterval(
+    () => buzzer.setReversing(rover.reversing || approach.reversing), 100);
   buzzerTimer.unref?.();
 
   // The competition: the PLC mission holds the rover's wheels, plans the task's
@@ -794,11 +853,15 @@ async function main() {
     setMission: (stops) => nav.setMission(stops, 'START'),
     // Bekle / the door pause a /plc scenario after the command in progress,
     // the same way they pause a taught route; e-stop ends it (estop below).
-    hold: (reason, all) => { rover.hold(reason, all); scenarios.hold(all ? null : reason); },
+    hold: (reason, all) => {
+      rover.hold(reason, all);
+      scenarios.hold(all ? null : reason);
+      approach.hold(all ? null : reason);
+    },
     armed: () => rover.running,
     fault: () => (link.connected ? null : 'motor kartı bağlı değil'),
-    estop: () => { scenarios.stop('acil stop'); rover.stop('acil stop'); },
-  });
+    estop: () => { approach.stop('acil stop'); scenarios.stop('acil stop'); rover.stop('acil stop'); },
+  }, plcCfg(followCfg));
 
   // The PLC's task, driven from the scenarios by itself: Başlangıç → A, A →
   // kapı, the door, kapı → B, and back. See LapDriver. On unless /plc turns it
@@ -810,6 +873,9 @@ async function main() {
     event: (name) => competition.event(name),
     log: (text) => competition.log(text),
     enabled: () => followCfg.scenario_auto !== false,
+    // …and the manoeuvre the two station legs end in, unless it is turned off
+    // (follow.json → approach.off) for a rehearsal with no pallet in the room.
+    approach: (followCfg.approach || {}).off === true ? null : approach,
   });
   const lapTimer = setInterval(() => lap.tick(), 200);
   lapTimer.unref?.();
@@ -845,6 +911,9 @@ async function main() {
         plc: competition.status(),
         buzzer: buzzer.status(),
         scenario: { ...scenarios.status(), rec: scRecorder.status(), auto: lap.status() },
+        // The line as the SERVER sees it, and the pallet manoeuvre it steers.
+        eye: eye.status(),
+        approach: approach.status(),
       }));
     };
     const pusher = setInterval(send, 100);
@@ -856,12 +925,15 @@ async function main() {
       switch (msg.cmd) {
         case 'start':
           if (scenarios.stop('sürüş başladı')) console.log('scenario stopped: driving started');
+          if (approach.stop('sürüş başladı')) console.log('approach stopped: driving started');
           rover.start();
           console.log('START — following');
           break;
         case 'stop':
         case 'idle':
           if (scenarios.stop('DUR')) console.log('scenario stopped');
+          if (lap.abandon('DUR')) console.log('lap abandoned');
+          if (approach.stop('DUR')) console.log('approach stopped');
           rover.stop(msg.cmd === 'idle' ? 'idle' : 'stopped');
           console.log('STOP');
           break;
@@ -870,6 +942,9 @@ async function main() {
         // server does not steer; it clamps, paces and stops.
         case 'follow':
           if (scenarios.running) break;       // START above already ended it
+          // A manoeuvre is steering from the server, on the server's own view
+          // of the line. Two pilots in one planner is neither of them.
+          if (approach.running) break;
           rover.setAuto(msg.p25, msg.p26, msg.reason);
           break;
 
@@ -886,6 +961,20 @@ async function main() {
         case 'scenario_stop':
           if (lap.abandon('DUR düğmesi')) console.log('lap abandoned');
           if (scenarios.stop('DUR düğmesi')) console.log('scenario stopped');
+          if (approach.stop('DUR düğmesi')) console.log('approach stopped');
+          break;
+
+        // The pallet manoeuvre on its own, from /plc: how it is rehearsed
+        // against a line and a pallet without waiting for a PLC task.
+        case 'approach_run': {
+          const res = approach.start(msg.kind === 'drop' ? 'drop' : 'pick');
+          console.log(res.ok ? `approach ${msg.kind || 'pick'}: started`
+                             : `approach refused — ${res.why}`);
+          break;
+        }
+        case 'approach_stop':
+          if (lap.abandon('manevra durduruldu')) console.log('lap abandoned');
+          if (approach.stop('DUR düğmesi')) console.log('approach stopped');
           break;
 
         // Teaching a leg: record the wire while it is driven by hand, then
@@ -939,6 +1028,10 @@ async function main() {
           nav.setCfg(followCfg);          // route.track, if a page sets it
           rover.setCfg(followCfg);        // the fork's speed and direction
           buzzer.setCfg(followCfg);
+          eye.setCfg(followCfg);          // the detector's own sliders
+          eye.want((followCfg.approach || {}).off !== true);
+          lap.approach = (followCfg.approach || {}).off === true ? null : approach;
+          competition.setCfg(plcCfg(followCfg));   // the door's wait, byte 1/2
           break;
 
         // The buzzer, sounded on purpose: the only way to check the wiring
@@ -969,6 +1062,10 @@ async function main() {
         // held and let go by the rover's own 400 ms dead-man when they stop.
         case 'keys': {
           if (scenarios.running && (msg.keys || []).length) scenarios.stop('elle sürüş (W A S D)');
+          if (approach.running && (msg.keys || []).length) {
+            lap.abandon('elle sürüş (W A S D)');
+            approach.stop('elle sürüş (W A S D)');
+          }
           const had = rover.keys.join('');
           rover.setKeys(msg.keys, msg.pct, msg.swap === true);
           if (rover.keys.join('') !== had) {
@@ -1092,6 +1189,7 @@ async function main() {
       if (rover.clients === 0 && act.running) act.stop();
       // Nothing keeps driving once nobody is watching — a scenario included.
       if (rover.clients === 0) scenarios.stop('tarayıcı kapandı');
+      if (rover.clients === 0) approach.stop('tarayıcı kapandı');
       if (rover.clients === 0 && runLog.active) {
         const done = runLog.stop();
         if (done) console.log(`saved on disconnect: ${path.basename(done.file)}`);
@@ -1127,6 +1225,15 @@ async function main() {
     : qr.available ? 'qr: reading from the camera' : `qr: ${qr.error}`);
   console.log(`lift: GPIO${act.cfg.enPin} enable, GPIO${act.cfg.dirPin} direction`
     + (act.enabled ? '' : '  (dry — --no-actuator)'));
+  {
+    const ap = followCfg.approach || {};
+    const mm = loadShared(['scenario.js', 'approach.js'], ['approachMm']).approachMm(ap);
+    console.log(ap.off === true
+      ? 'palet manevrası: kapalı (follow.json → approach.off)'
+      : `palet manevrası: xətt üzrə ${(mm.along / 1000).toFixed(2)} m, geri, `
+        + `${Math.round(Math.abs(mm.turn))}°, ${(mm.in / 1000).toFixed(2)} m, `
+        + `aktuator ${ap.lift_s || 15} s  —  kamera ${camera.cfg.roadWidth}x${camera.cfg.roadHeight}`);
+  }
   console.log(`lidar: GPIO${lidar.cfg.pwmPin} ENA (PWM), GPIO${lidar.cfg.in1Pin} IN1, `
     + `GPIO${lidar.cfg.in2Pin} IN2 — ${lidar.volts} V = ${lidar.duty()} % of `
     + `${lidar.cfg.supplyV} V less ${lidar.cfg.dropV} V drop`

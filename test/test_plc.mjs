@@ -87,8 +87,8 @@ console.log('\nAdres ayarları');
 
 // ══ the mission, against the real field ══════════════════════════════
 /** A robot on paper: the mission, the field it plans on, and a read. */
-function paperRobot(map = F.FIELD) {
-  const ms = P.plcMission();
+function paperRobot(map = F.FIELD, opts = {}) {
+  const ms = P.plcMission(opts);
   const st = F.navState();
   const rx = (a, b, control, replyTo) => {
     const out = P.plcMissionRx(ms, { ok: true, a, b, control, replyTo }, 0);
@@ -100,7 +100,14 @@ function paperRobot(map = F.FIELD) {
     P.plcMissionFix(ms, fix, 0);
     return fix;
   };
-  return { ms, st, rx, see, code: () => P.plcMissionCode(ms), hold: () => P.plcMissionHold(ms) };
+  /**
+   * Stand at the door until its own wait runs out. Everything above happens at
+   * now = 0, so the deadline the mission set is the clock to tick it at.
+   */
+  const wait = (robot = {}) => P.plcMissionTick(ms, robot, ms.gateUntil || 0);
+  return { ms, st, rx, see, wait,
+           tx: () => P.plcTxFields(ms),
+           code: () => P.plcMissionCode(ms), hold: () => P.plcMissionHold(ms) };
 }
 
 console.log('\nGörev: PLC görevi verir, robot başlat komutunu bekler');
@@ -115,7 +122,8 @@ console.log('\nGörev: PLC görevi verir, robot başlat komutunu bekler');
   ok(r.st.plan.join('>') === 'START>J1>J2>A2>J2>J3>KAPI>J4>B3>J4>KAPI>J3>J2>J1>START',
      `rota sahada: ${r.st.plan.join('>')}`);
   const tx = P.plcTxFields(r.ms);
-  ok(tx.code === 2 && tx.a === 2 && tx.b === 3, 'PAKET_TX görevi geri bildiriyor');
+  ok(tx.code === 2 && tx.a === 0 && tx.b === 0,
+     'PAKET_TX durumu bildiriyor; istasyon baytları robot oraya varana kadar 0');
 
   r.rx(2, 3, 2, 1);
   ok(r.code() === 2, "hazır (1) paketine gelen kontrol 2 başlat sayılmıyor — soru 'görev alındı' değildi");
@@ -152,7 +160,9 @@ console.log('\nGörev: tam tur, kapıda iki yönde bekleme');
   r.rx(2, 3, 1, 5);
   ok(r.code() === 5, 'kapı sorusuna kontrol 1 → beklemeye devam');
   r.rx(2, 3, 2, 5);
-  ok(r.code() === 4 && !r.hold(), 'kapı sorusuna kontrol 2 → yüklü harekete devam');
+  ok(r.code() === 5 && r.ms.gateOpen, 'kapı sorusuna kontrol 2 → kapı açıldı, süre hâlâ işliyor');
+  r.wait();
+  ok(r.code() === 4 && !r.hold(), 'bekleme süresi dolunca yüklü harekete devam');
   r.see('KAPI1');
   ok(r.code() === 4, 'geçerken KAPI1 yeniden okunsa da ikinci kez durmuyor');
   r.see('KAPI2');
@@ -166,8 +176,8 @@ console.log('\nGörev: tam tur, kapıda iki yönde bekleme');
 
   const k2 = r.see('KAPI2');
   ok(k2.to === 'KAPI' && r.code() === 5, 'dönüşte KAPI2 kapıya doğru → yine bekleme (5)');
-  r.rx(2, 3, 2, 5);
-  ok(r.code() === 6, 'kontrol 2 → dönüşe devam');
+  r.wait();
+  ok(r.code() === 6, 'yirmi saniye sonra dönüşe devam');
   r.see('KAPI1');
   r.see('BASLA');
   ok(r.ms.homing && r.code() === 6, 'BASLA başlangıca doğru okundu — hâlâ dönüşte');
@@ -319,9 +329,13 @@ console.log('\nRover sunucusu: kart yokken hata, tutulurken klavye de reddediliy
     await c.open;
     ok(await until(() => c.got.last && c.got.last.plc && c.got.last.plc.link.rx_count > 0, 3000),
        'PLC bağlantısı çalışıyor');
-    const s = c.got.last;
-    ok(s.plc.mission.code === 7 && /motor kartı/.test(s.plc.mission.fault || ''),
+    // The fault is noticed on the mission's own 200 ms clock, which can be a
+    // tick behind the first reply — so this waits for it rather than reading
+    // whichever frame happened to arrive first.
+    ok(await until(() => c.got.last.plc.mission.code === 7
+                      && /motor kartı/.test(c.got.last.plc.mission.fault || ''), 1500),
        'motor kartı bağlı değil → hata (7)');
+    const s = c.got.last;
     ok(s.plc.mission.pose.x === 1.9 && s.plc.mission.pose.known === false,
        'QR okunmadan konum başlangıç alanı olarak bildiriliyor, tahmin diye işaretli');
     ok(await until(() => c.got.last.plc.mission.phase === 'accepted', 3000), 'görev alındı');

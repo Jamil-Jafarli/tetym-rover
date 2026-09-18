@@ -219,6 +219,15 @@ export class ScenarioRecorder {
  * what happened — yük alındı, kapıda, yük bırakıldı, başlangıçta — so the durum
  * byte the PLC sees follows the robot.
  *
+ * The two station legs do not end in their event. They end in the PALLET
+ * MANOEUVRE (approach_run.js): the camera finds the line, squares the robot up
+ * on it, drives it along, backs up, turns 180° and drives the forks in, and
+ * then the actuator runs for fifteen seconds. Only when that has finished is
+ * the load actually on the forks, so only then does the mission hear "yük
+ * alındı" and the durum byte become 4. A manoeuvre that fails stops the lap
+ * exactly as a failed leg does — the robot is at a station with no pallet on
+ * it, and driving on from there is a person's decision.
+ *
  * The door needs nothing special here. Arriving at it puts the mission in its
  * gate phase, the mission's hold pauses the runner, and the next leg — the door
  * itself — is started straight away and waits before its first command until
@@ -242,19 +251,24 @@ export class LapDriver {
    * @param {(text: string) => void} o.log  a line in the mission's log
    * @param {() => boolean} o.enabled
    * @param {() => (string|null)} [o.busy]  why a leg may not start right now
+   * @param {object} [o.approach]  an ApproachRunner — the pallet manoeuvre the
+   *        two station legs end in. Without one those legs just end.
    */
-  constructor({ runner, texts, mission, event, log, enabled, busy = () => null }) {
-    Object.assign(this, { runner, texts, mission, event, log, enabled, busy });
+  constructor({ runner, texts, mission, event, log, enabled, busy = () => null,
+                approach = null }) {
+    Object.assign(this, { runner, texts, mission, event, log, enabled, busy, approach });
     this.lap = null;
     this._seenStart = false;    // this task's to_pick has been looked at already
     this._ours = null;          // the leg id the runner is driving for the lap
+    this._manoeuvre = null;     // the leg whose approach is running
     runner.onEnd = (last) => this._ended(last);
+    if (approach) approach.onEnd = (last) => this._approachEnded(last);
   }
 
   tick() {
     const m = this.mission() || {};
     const lap = this.lap;
-    const active = lap && (lap.state === 'driving' || lap.state === 'failed');
+    const active = lap && (lap.state === 'driving' || lap.state === 'manoeuvre' || lap.state === 'failed');
 
     // The task is gone from under the lap: reset, e-stop reset, a new task.
     if (active && (!m.task || m.task.a !== lap.task.a || m.task.b !== lap.task.b
@@ -269,7 +283,8 @@ export class LapDriver {
 
     const plan = S.scenarioLap(m.task, this.texts());
     this.lap = { task: { ...m.task }, legs: plan.legs, home: plan.home, i: 0,
-                 state: 'driving', why: null, startedAt: Date.now(), endedAt: null };
+                 state: 'driving', why: null, manoeuvre: null,
+                 startedAt: Date.now(), endedAt: null };
     if (!plan.ok) {
       this._fail(`öğretilmemiş: ${plan.missing.join(', ')}`);
       return;
@@ -300,6 +315,43 @@ export class LapDriver {
       this._fail(`${leg.label}: ${last.why || last.result}`);
       return;
     }
+    // A station leg is not over when its G-code is: the pallet is still in
+    // front of the robot and the forks are still pointing the other way.
+    if (leg.approach && this.approach) { this._startApproach(leg); return; }
+    this._after(leg);
+  }
+
+  /** The pallet manoeuvre, between a station leg and the event it reports. */
+  _startApproach(leg) {
+    const lap = this.lap;
+    // The robot is at the station whether or not the camera read its code on
+    // the way in, and byte 1 / byte 2 of PAKET_TX say which station that is.
+    this.event(leg.approach === 'pick' ? 'at_pick' : 'at_drop');
+    const res = this.approach.start(leg.approach);
+    if (!res.ok) { this._fail(`${leg.label}: ${res.why}`); return; }
+    this._manoeuvre = leg.approach;
+    lap.state = 'manoeuvre';
+    lap.manoeuvre = leg.approach;
+    lap.why = null;
+  }
+
+  _approachEnded(last) {
+    const lap = this.lap;
+    if (!lap || lap.state !== 'manoeuvre' || this._manoeuvre !== last.kind) return;
+    this._manoeuvre = null;
+    lap.manoeuvre = null;
+    const leg = lap.legs[lap.i];
+    if (last.result !== 'bitti') {
+      this._fail(`${leg.label} manevrası: ${last.why || last.result}`);
+      return;
+    }
+    lap.state = 'driving';
+    this._after(leg);
+  }
+
+  /** The leg (and its manoeuvre) are done: report it, and start the next. */
+  _after(leg) {
+    const lap = this.lap;
     lap.i++;
     const done = lap.i >= lap.legs.length;
     if (done) {
@@ -323,6 +375,8 @@ export class LapDriver {
     this.lap.state = 'failed';
     this.lap.why = why;
     this._ours = null;
+    this._manoeuvre = null;
+    this.lap.manoeuvre = null;
     this.log(`otomatik sürüş durdu: ${why}`);
   }
 
@@ -331,7 +385,12 @@ export class LapDriver {
       this._ours = null;
       this.runner.stop(why);
     }
+    if (this._manoeuvre && this.approach && this.approach.running) {
+      this._manoeuvre = null;
+      this.approach.stop(why);
+    }
     this._ours = null;
+    this._manoeuvre = null;
     this.lap.state = 'stopped';
     this.lap.why = why;
     this.lap.endedAt = Date.now();
@@ -369,7 +428,9 @@ export class LapDriver {
     return {
       enabled: !!this.enabled(),
       lap: lap ? { ...lap, legs: lap.legs.map((l, i) => ({ ...l,
-        state: i < lap.i ? 'bitti' : i === lap.i && lap.state === 'driving' ? 'sürülüyor'
+        state: i < lap.i ? 'bitti'
+          : i === lap.i && lap.state === 'manoeuvre' ? 'manevra'
+          : i === lap.i && lap.state === 'driving' ? 'sürülüyor'
           : i === lap.i && lap.state === 'failed' ? 'durdu' : 'sırada' })) } : null,
     };
   }

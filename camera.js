@@ -50,9 +50,39 @@ export const CAMERA_DEFAULTS = {
   // locate-and-read on the QR worker thread; a look still running when the
   // next is due means that one is skipped, not queued.
   qrFps: 5,
+  // The line detector's frames: colour, small, and decoded only while
+  // something is actually reading them (road_eye.js). 480x360 is road.js's
+  // working resolution — the size both pages draw their canvas at — so the
+  // server sees exactly the picture /vision was tuned against. Eight a second
+  // is a steering loop; the pilot corrects on the band in front of the wheels,
+  // and a chunk of driving is 150 ms (rover.js).
+  roadFps: 8,
+  roadWidth: 480,
+  roadHeight: 360,
 };
 
 const DECODER = fileURLToPath(new URL('./jpeg_gray.py', import.meta.url));
+
+/**
+ * One decoder channel: a jpeg_gray.py of its own, the framing of what comes
+ * back, and the single reader it belongs to.
+ *
+ * Two of them, because the two readers want different pixels — the QR reader
+ * every one the sensor has, in grey; the line detector a small colour frame —
+ * and neither wants the other's. A channel nobody reads never spawns anything,
+ * so a server started with --no-qr and no line following costs no python at
+ * all.
+ *
+ * `px` is bytes per pixel: what the header's width × height has to be
+ * multiplied by to know when a frame is whole.
+ */
+function decodeChannel(name, args, px) {
+  return { name, args, px, cb: null, proc: null, spawn: null,
+           busy: false,             // one JPEG in flight at a time
+           at: 0,                   // when one was last handed over
+           retryAt: 0, err: null,
+           hdr: Buffer.alloc(8), hdrN: 0, frame: null, w: 0, h: 0, n: 0 };
+}
 
 // ffmpeg died: wait before trying again. A camera that was unplugged should not
 // turn into a spawn loop that pins a core while nobody is looking.
@@ -126,22 +156,16 @@ export class Camera {
 
     this._buf = Buffer.alloc(0);
     this._subs = new Set();     // MJPEG viewers
-    this._grayCb = null;
     this._retry = null;
     this._closed = false;
 
-    // The QR decoder (jpeg_gray.py) and the frame it is sending back.
-    this._dec = null;
-    this._decRetryAt = 0;
-    this._qrAt = 0;             // when a JPEG was last handed to it
-    this._qrBusy = false;       // one JPEG in flight at a time
-    this._gHdr = Buffer.alloc(8);
-    this._gHdrN = 0;
-    this._gFrame = null;        // reused while the size stays the same
-    this._gW = 0;
-    this._gH = 0;
-    this._gN = 0;
-    this.qrErr = null;
+    // The two decoders. `spawn` is a method rather than the channel's own
+    // function so a test can put a stand-in in its place.
+    const { roadWidth, roadHeight } = this.cfg;
+    this._gray = decodeChannel('gray', [], 1);
+    this._gray.spawn = (now) => this._decoder(now);
+    this._rgb = decodeChannel('rgb', ['--rgb', `${roadWidth}x${roadHeight}`], 3);
+    this._rgb.spawn = (now) => this._rgbDecoder(now);
 
     // Frames in the last second, measured rather than assumed: the number that
     // says whether the camera is delivering is the one nobody configured.
@@ -262,6 +286,7 @@ export class Camera {
                                                 // ffmpeg grumbled about is old
     for (const sub of this._subs) sub(this.frame);
     this._maybeQr(this.frame);
+    this._maybeRgb(this.frame);
   }
 
   /**
@@ -270,12 +295,21 @@ export class Camera {
    * one is still in flight is simply not sent: the next will be.
    */
   _maybeQr(jpeg, now = Date.now()) {
-    if (!this._grayCb || !(this.cfg.qrFps > 0) || this._qrBusy) return;
-    if (now - this._qrAt < 1000 / this.cfg.qrFps) return;
-    const dec = this._decoder(now);
+    this._offer(this._gray, this.cfg.qrFps, jpeg, now);
+  }
+
+  /** The same, at roadFps, for the colour frames the line detector reads. */
+  _maybeRgb(jpeg, now = Date.now()) {
+    this._offer(this._rgb, this.cfg.roadFps, jpeg, now);
+  }
+
+  _offer(ch, fps, jpeg, now) {
+    if (!ch.cb || !(fps > 0) || ch.busy) return;
+    if (now - ch.at < 1000 / fps) return;
+    const dec = ch.spawn(now);
     if (!dec) return;
-    this._qrAt = now;
-    this._qrBusy = true;
+    ch.at = now;
+    ch.busy = true;
     const hdr = Buffer.alloc(4);
     hdr.writeUInt32BE(jpeg.length);
     dec.stdin.write(hdr);
@@ -283,32 +317,37 @@ export class Camera {
   }
 
   /** jpeg_gray.py, started on first use and again if it dies. */
-  _decoder(now = Date.now()) {
-    if (this._dec) return this._dec;
-    if (this._closed || now < this._decRetryAt) return null;
+  _decoder(now = Date.now()) { return this._start(this._gray, now); }
+
+  /** The same program, asked for small colour frames. */
+  _rgbDecoder(now = Date.now()) { return this._start(this._rgb, now); }
+
+  _start(ch, now = Date.now()) {
+    if (ch.proc) return ch.proc;
+    if (this._closed || now < ch.retryAt) return null;
     let dec;
     try {
-      dec = spawn('python3', [DECODER], { stdio: ['pipe', 'pipe', 'pipe'] });
+      dec = spawn('python3', [DECODER, ...ch.args], { stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
-      this.qrErr = `jpeg_gray.py başlamadı: ${e.message}`;
-      this._decRetryAt = now + RESTART_MS;
+      ch.err = `jpeg_gray.py başlamadı: ${e.message}`;
+      ch.retryAt = now + RESTART_MS;
       return null;
     }
-    this._dec = dec;
-    this._gHdrN = 0;
-    this._gN = 0;
-    dec.stdout.on('data', (d) => this._onGrayData(d));
+    ch.proc = dec;
+    ch.hdrN = 0;
+    ch.n = 0;
+    dec.stdout.on('data', (d) => this._onDecoded(ch, d));
     dec.stderr.on('data', (d) => {
       const line = String(d).trim().split('\n').pop();
-      if (line) this.qrErr = line.slice(0, 160);
+      if (line) ch.err = line.slice(0, 160);
     });
     dec.stdin.on('error', () => { /* it died mid-write; 'exit' says so */ });
     const gone = (why) => {
-      if (this._dec !== dec) return;
-      this._dec = null;
-      this._qrBusy = false;
-      this._decRetryAt = Date.now() + RESTART_MS;
-      if (!this._closed) this.qrErr = this.qrErr || `jpeg_gray.py durdu (${why})`;
+      if (ch.proc !== dec) return;
+      ch.proc = null;
+      ch.busy = false;
+      ch.retryAt = Date.now() + RESTART_MS;
+      if (!this._closed) ch.err = ch.err || `jpeg_gray.py durdu (${why})`;
     };
     dec.on('error', (e) => gone(/ENOENT/.test(String(e)) ? 'python3 yoxdur' : e.message));
     dec.on('exit', (code, sig) => gone(sig || code));
@@ -316,52 +355,65 @@ export class Camera {
   }
 
   /**
-   * The decoder's answers, reassembled into whole frames.
+   * A decoder's answers, reassembled into whole frames.
    *
-   * Each is an 8-byte header (width, height) and then width × height bytes.
-   * A 1080p frame is 2 MB and arrives in 64 kB pieces, so it is copied into
-   * one buffer as it comes rather than concatenated piece by piece (that
-   * would be ~30 copies of a growing buffer per frame). The buffer is reused
-   * for the next frame of the same size — the QR reader copies what it keeps.
-   * 0x0 means "that JPEG did not decode": nothing is delivered, the decoder
-   * is free again.
+   * Each is an 8-byte header (width, height) and then width × height × px
+   * bytes. A 1080p grey frame is 2 MB and arrives in 64 kB pieces, so it is
+   * copied into one buffer as it comes rather than concatenated piece by piece
+   * (that would be ~30 copies of a growing buffer per frame). The buffer is
+   * reused for the next frame of the same size — the reader copies what it
+   * keeps. 0x0 means "that JPEG did not decode": nothing is delivered, the
+   * decoder is free again.
    */
-  _onGrayData(chunk) {
+  _onDecoded(ch, chunk) {
     let off = 0;
     while (off < chunk.length) {
-      if (this._gHdrN < 8) {
-        const n = Math.min(8 - this._gHdrN, chunk.length - off);
-        chunk.copy(this._gHdr, this._gHdrN, off, off + n);
-        this._gHdrN += n;
+      if (ch.hdrN < 8) {
+        const n = Math.min(8 - ch.hdrN, chunk.length - off);
+        chunk.copy(ch.hdr, ch.hdrN, off, off + n);
+        ch.hdrN += n;
         off += n;
-        if (this._gHdrN < 8) break;
-        this._gW = this._gHdr.readUInt32BE(0);
-        this._gH = this._gHdr.readUInt32BE(4);
-        this._gN = 0;
-        const need = this._gW * this._gH;
-        if (need === 0) { this._gHdrN = 0; this._qrBusy = false; continue; }
-        if (!this._gFrame || this._gFrame.length !== need) this._gFrame = Buffer.alloc(need);
+        if (ch.hdrN < 8) break;
+        ch.w = ch.hdr.readUInt32BE(0);
+        ch.h = ch.hdr.readUInt32BE(4);
+        ch.n = 0;
+        const need = ch.w * ch.h * ch.px;
+        if (need === 0) { ch.hdrN = 0; ch.busy = false; continue; }
+        if (!ch.frame || ch.frame.length !== need) ch.frame = Buffer.alloc(need);
         continue;
       }
-      const need = this._gW * this._gH;
-      const n = Math.min(need - this._gN, chunk.length - off);
-      chunk.copy(this._gFrame, this._gN, off, off + n);
-      this._gN += n;
+      const need = ch.w * ch.h * ch.px;
+      const n = Math.min(need - ch.n, chunk.length - off);
+      chunk.copy(ch.frame, ch.n, off, off + n);
+      ch.n += n;
       off += n;
-      if (this._gN === need) {
-        this._gHdrN = 0;
-        this._qrBusy = false;
-        if (this._grayCb) {
+      if (ch.n === need) {
+        ch.hdrN = 0;
+        ch.busy = false;
+        if (ch.cb) {
           try {
-            this._grayCb(this._gFrame, this._gW, this._gH);
+            ch.cb(ch.frame, ch.w, ch.h);
           } catch { /* a reader that throws must not take the camera with it */ }
         }
       }
     }
   }
 
+  /** The grey channel's framing, under the name the tests know it by. */
+  _onGrayData(chunk) { this._onDecoded(this._gray, chunk); }
+
   /** Ask for the grey frames. One consumer — the QR reader. */
-  onGray(cb) { this._grayCb = cb; }
+  onGray(cb) { this._gray.cb = cb; }
+
+  /** Ask for the small colour frames. One consumer — the line detector. */
+  onRgb(cb) { this._rgb.cb = cb; }
+
+  // What the tests and the status call the grey channel's two fields.
+  get _qrBusy() { return this._gray.busy; }
+  set _qrBusy(v) { this._gray.busy = !!v; }
+  get qrErr() { return this._gray.err; }
+  set qrErr(v) { this._gray.err = v; }
+  get roadErr() { return this._rgb.err; }
 
   /**
    * Watch the stream.
@@ -391,6 +443,9 @@ export class Camera {
       viewers: this._subs.size,
       err: this.err,
       qr_err: this.qrErr,
+      road_err: this.roadErr,
+      road: { fps: this.cfg.roadFps, w: this.cfg.roadWidth, h: this.cfg.roadHeight,
+              on: this._rgb.cb !== null },
       up_s: this.startedAt ? Math.round((Date.now() - this.startedAt) / 1000) : 0,
     };
   }
@@ -399,7 +454,11 @@ export class Camera {
     this._closed = true;
     if (this._retry) clearTimeout(this._retry);
     this._subs.clear();
-    if (this._dec) { try { this._dec.kill('SIGTERM'); } catch { /* gone */ } this._dec = null; }
+    for (const ch of [this._gray, this._rgb]) {
+      if (!ch.proc) continue;
+      try { ch.proc.kill('SIGTERM'); } catch { /* gone */ }
+      ch.proc = null;
+    }
     if (this.proc) {
       const p = this.proc;
       this.proc = null;
